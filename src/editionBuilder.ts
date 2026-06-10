@@ -26,7 +26,11 @@ import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
   editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE,
 } from './covenant.ts'
-import { PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, type FundingInput } from './collectionBuilder.ts'
+import {
+  PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, type FundingInput,
+} from './collectionBuilder.ts'
+import { encodeTokenRules, RESTRICTION_REPLICABLE } from './tokenCodec.ts'
+import type { WalletProvider, Utxo } from './walletProvider.ts'
 
 /** Common economic parameters of an edition collection (fixed forever at genesis). */
 export interface EditionTerms {
@@ -117,6 +121,7 @@ export function replicateUnlockTemplate(opts: {
     sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
       const input = tx.inputs[inputIndex]
       const sourceTXID = input.sourceTXID ?? input.sourceTransaction?.id('hex')
+      if (sourceTXID == null) throw new Error('replicate unlock: input is missing sourceTXID/sourceTransaction')
       const preimage = TransactionSignature.format({
         sourceTXID, sourceOutputIndex: input.sourceOutputIndex, sourceSatoshis: opts.sourceSatoshis,
         transactionVersion: tx.version, otherInputs: otherInputsOf(tx, inputIndex), inputIndex,
@@ -143,6 +148,7 @@ export function transferUnlockTemplate(opts: {
     sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
       const input = tx.inputs[inputIndex]
       const sourceTXID = input.sourceTXID ?? input.sourceTransaction?.id('hex')
+      if (sourceTXID == null) throw new Error('transfer unlock: input is missing sourceTXID/sourceTransaction')
       const fmt = (scope: number) => TransactionSignature.format({
         sourceTXID, sourceOutputIndex: input.sourceOutputIndex, sourceSatoshis: opts.sourceSatoshis,
         transactionVersion: tx.version, otherInputs: otherInputsOf(tx, inputIndex), inputIndex,
@@ -275,4 +281,171 @@ export async function buildEditionTransferTx(opts: {
 
   const changeSats = tx.outputs[changeVout]?.satoshis ?? 0
   return { tx, txId: tx.id('hex'), tokenVout: 0, changeVout: changeSats > 0 ? changeVout : null }
+}
+
+// ─── Network wrappers (funding selection + broadcast) ───────────────
+
+async function toFundingInputs(provider: WalletProvider, utxos: Utxo[]): Promise<FundingInput[]> {
+  return Promise.all(utxos.map(async u => ({ utxo: u, sourceTx: await provider.getSourceTransaction(u.txId) })))
+}
+
+export interface CreateEditionResult {
+  collectionId: string
+  tx1Id: string
+  tx2Id: string
+  editions: Array<{ txId: string; outputIndex: number; lockHex: string }>
+}
+
+/**
+ * Create an edition collection on-chain: TX1 template (commits name, replicable rules, and the covenant
+ * template with a zeroed tx1Ref/owner for later verification) + TX2 that mints the edition covenant
+ * outputs referencing TX1. Mirrors collectionBuilder.createCollection's funding/broadcast pattern.
+ */
+export async function createEdition(provider: WalletProvider, key: PrivateKey, params: {
+  tokenName: string
+  terms: EditionTerms
+  mintCount?: number
+  ownerPubKey?: number[]
+  stateData?: number[]
+  feePerKb?: number
+}): Promise<CreateEditionResult> {
+  const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
+  const mintCount = params.mintCount ?? 1
+  const ownerPub = params.ownerPubKey ?? pubKeyBytes(key)
+  const tokenSats = params.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
+  const stateData = params.stateData ?? []
+
+  // Covenant template committed in TX1: structurally identical to an edition but with identity zeroed.
+  const templateLock = buildEditionLock({
+    tx1Ref: new Array(32).fill(0), ownerPubKey: new Array(33).fill(0), stateData,
+    creatorPubKeyHash: params.terms.creatorPubKeyHash, creatorFeeSats: params.terms.creatorFeeSats,
+    holderFeeSats: params.terms.holderFeeSats, tokenSats,
+  })
+  const template = {
+    tokenName: params.tokenName,
+    tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE, 1), // supply 0 = unlimited / replicable
+    covenantScript: Utils.toHex(templateLock.toBinary()),
+  }
+
+  // Fund both txs. TX2 edition outputs are ~770 bytes each; keep a healthy margin.
+  const editionBytes = 800
+  const tx1Bytes = 500 + templateLock.toBinary().length
+  const tx2Bytes = 300 + mintCount * editionBytes
+  const estFee = Math.ceil(((tx1Bytes + tx2Bytes) * feePerKb) / 1000)
+  const target = (1 + mintCount) * tokenSats + estFee + Math.max(1000, Math.ceil(estFee * 0.2))
+  const selected = selectFunding(await getSafeUtxos(provider), target)
+  const funding = await toFundingInputs(provider, selected)
+
+  // Build both offline, broadcast only if both succeed (no orphaned template).
+  const t1 = await buildTemplateTx({ key, funding, template, outputSats: tokenSats, feePerKb })
+  if (t1.changeVout == null) throw new Error('Insufficient funding: template tx left no change to fund the edition mint.')
+  const t2Funding: FundingInput[] = [{
+    utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' },
+    sourceTx: t1.tx,
+  }]
+  const t2 = await buildEditionGenesisTx({
+    key, funding: t2Funding, tx1Ref: t1.tx1Id, terms: params.terms, ownerPubKey: ownerPub, stateData, mintCount, feePerKb,
+  })
+
+  await provider.broadcast(t1.tx.toHex())
+  provider.registerPendingTx(t1.tx1Id, selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
+    { outputIndex: t1.changeVout, satoshis: t1.changeSats })
+  await provider.broadcast(t2.tx.toHex())
+  provider.registerPendingTx(t2.txId, [{ txId: t1.tx1Id, outputIndex: t1.changeVout }],
+    t2.changeVout != null ? { outputIndex: t2.changeVout, satoshis: t2.changeSats } : undefined)
+
+  const editions = t2.editionVouts.map(v => ({
+    txId: t2.txId, outputIndex: v, lockHex: Utils.toHex(t2.tx.outputs[v].lockingScript.toBinary()),
+  }))
+  return { collectionId: t1.tx1Id, tx1Id: t1.tx1Id, tx2Id: t2.txId, editions }
+}
+
+/** Replicate (permissionlessly mint a copy of) an on-chain edition. The caller is the buyer. */
+export async function replicateEdition(provider: WalletProvider, buyerKey: PrivateKey, params: {
+  editionTxId: string
+  editionOutputIndex: number
+  editionLockHex: string
+  terms: EditionTerms
+  feePerKb?: number
+}): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string }> {
+  const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
+  const tokenSats = params.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
+  const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
+  const sourceTx = await provider.getSourceTransaction(params.editionTxId)
+  const edition: EditionUtxo = {
+    txId: params.editionTxId, outputIndex: params.editionOutputIndex,
+    satoshis: sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? tokenSats, lockBytes, sourceTx,
+  }
+  // Buyer funds: token + replica sats, both fees, miner fee, margin.
+  const estFee = Math.ceil((1500 * feePerKb) / 1000)
+  const target = 2 * tokenSats + params.terms.creatorFeeSats + params.terms.holderFeeSats + estFee + 1000
+  const selected = selectFunding(await getSafeUtxos(provider), target)
+  const funding = await toFundingInputs(provider, selected)
+
+  const rep = await buildReplicateTx({ edition, terms: params.terms, buyerKey, funding, feePerKb })
+  await provider.broadcast(rep.tx.toHex())
+  provider.registerPendingTx(rep.txId,
+    [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex },
+      ...selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex }))],
+    rep.changeVout != null ? { outputIndex: rep.changeVout, satoshis: rep.tx.outputs[rep.changeVout].satoshis ?? 0 } : undefined)
+  return {
+    txId: rep.txId, replicaOutpoint: { txId: rep.txId, outputIndex: rep.replicaVout },
+    lockHex: Utils.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary()),
+  }
+}
+
+/** Transfer (owner-signed) an on-chain edition to a new owner, re-creating the covenant. */
+export async function transferEdition(provider: WalletProvider, ownerKey: PrivateKey, params: {
+  editionTxId: string
+  editionOutputIndex: number
+  editionLockHex: string
+  newOwnerPubKey: number[]
+  tokenSats?: number
+  feePerKb?: number
+}): Promise<{ txId: string; tokenOutpoint: { txId: string; outputIndex: number }; lockHex: string }> {
+  const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
+  const tokenSats = params.tokenSats ?? PHARLAP_OUTPUT_SATS
+  const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
+  const sourceTx = await provider.getSourceTransaction(params.editionTxId)
+  const edition: EditionUtxo = {
+    txId: params.editionTxId, outputIndex: params.editionOutputIndex,
+    satoshis: sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? tokenSats, lockBytes, sourceTx,
+  }
+  const estFee = Math.ceil((1500 * feePerKb) / 1000)
+  const selected = selectFunding(await getSafeUtxos(provider), tokenSats + estFee + 1000)
+  const funding = await toFundingInputs(provider, selected)
+
+  const xfer = await buildEditionTransferTx({
+    edition, ownerKey, newOwnerPubKey: params.newOwnerPubKey, funding, tokenSats, feePerKb,
+  })
+  await provider.broadcast(xfer.tx.toHex())
+  provider.registerPendingTx(xfer.txId,
+    [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex },
+      ...selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex }))],
+    xfer.changeVout != null ? { outputIndex: xfer.changeVout, satoshis: xfer.tx.outputs[xfer.changeVout].satoshis ?? 0 } : undefined)
+  return {
+    txId: xfer.txId, tokenOutpoint: { txId: xfer.txId, outputIndex: xfer.tokenVout },
+    lockHex: Utils.toHex(xfer.tx.outputs[xfer.tokenVout].lockingScript.toBinary()),
+  }
+}
+
+/**
+ * Cheapest possible de-risk: broadcast a trivial VERSION-2 P2PKH self-send. If the network relays/mines
+ * it, version-2 (Chronicle) transactions are accepted — a prerequisite for any covenant spend. Returns txid.
+ */
+export async function broadcastV2Probe(provider: WalletProvider, key: PrivateKey, feePerKb?: number): Promise<string> {
+  const selected = selectFunding(await getSafeUtxos(provider), 1000)
+  const funding = await toFundingInputs(provider, selected)
+  const tx = new Transaction()
+  tx.version = 2
+  for (const f of funding) {
+    tx.addInput({ sourceTransaction: f.sourceTx, sourceOutputIndex: f.utxo.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  }
+  tx.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), change: true })
+  await tx.fee(new SatoshisPerKilobyte(feePerKb ?? DEFAULT_FEE_PER_KB))
+  await tx.sign()
+  await provider.broadcast(tx.toHex())
+  provider.registerPendingTx(tx.id('hex'), selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
+    tx.outputs[0]?.satoshis != null ? { outputIndex: 0, satoshis: tx.outputs[0].satoshis } : undefined)
+  return tx.id('hex')
 }
