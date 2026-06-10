@@ -29,6 +29,16 @@ export function u64le(n: number): number[] {
   return out
 }
 
+/** Minimal little-endian script-number encoding of a non-negative integer (for OP_SPLIT indices). */
+export function numLE(n: number): number[] {
+  if (n === 0) return []
+  const out: number[] = []
+  let v = n
+  while (v > 0) { out.push(v & 0xff); v = Math.floor(v / 256) }
+  if ((out[out.length - 1] & 0x80) !== 0) out.push(0x00)
+  return out
+}
+
 /** Bitcoin var-int (CompactSize). */
 export function varInt(n: number): number[] {
   if (n < 0xfd) return [n]
@@ -86,6 +96,37 @@ export function selfReplicateCovenantOps(tokenSats = 1, c: PushTxConstants = pus
     ...extractScriptCodeFieldOps(),   // [ spenderOutputs, hashOutputs, scriptCodeField ]
     pushData(u64le(tokenSats)), op(OP.OP_SWAP), op(OP.OP_CAT), // [ .., hashOutputs, out0 = value ‖ field ]
     op(OP.OP_ROT), op(OP.OP_CAT),     // [ hashOutputs, out0 ‖ spenderOutputs ]
+    op(OP.OP_HASH256), op(OP.OP_EQUAL),
+  ]
+}
+
+/**
+ * L3 pubkey-substitution covenant. Re-creates the covenant in output[0] but with the 33-byte owner
+ * pubkey replaced by one supplied in the unlocking script — the basis for a buyer's replica (owner =
+ * buyer) and for an enforced transfer (owner = recipient).
+ *
+ * `fieldPubkeyOffset` is the byte offset of the owner pubkey *within the scriptCode field*
+ * (= varIntSize(scriptLen) + offset-of-pubkey-within-the-script); the caller computes it from the
+ * token's layout. Swapping a 33-byte key for another leaves the script length — and thus the varint —
+ * unchanged, so we mutate the field in place.
+ *
+ * Stack on entry (top last): [ spenderOutputs, newOwnerPubKey, preimage ]. Leaves a boolean.
+ */
+export function swapPubkeyOut0CovenantOps(fieldPubkeyOffset: number, tokenSats = 1, c: PushTxConstants = pushTxConstants()): ScriptChunk[] {
+  return [
+    ...pushTxVerifyOps(c),                                  // [ rest, newPub, preimage ]
+    op(OP.OP_DUP),
+    ...extractHashOutputsOps(),                             // [ rest, newPub, preimage, hashOutputs ]
+    op(OP.OP_SWAP),                                         // [ rest, newPub, hashOutputs, preimage ]
+    ...extractScriptCodeFieldOps(),                         // [ rest, newPub, hashOutputs, scFld ]
+    pushData(numLE(fieldPubkeyOffset)), op(OP.OP_SPLIT),    // [ .., pre, oldPub‖suffix ]
+    pushData([33]), op(OP.OP_SPLIT), op(OP.OP_NIP),         // [ .., pre, suffix ]  (drop oldPub)
+    op(OP.OP_TOALTSTACK),                                   // alt:[suffix];  [ rest, newPub, hashOutputs, pre ]
+    op(OP.OP_2), op(OP.OP_ROLL),                            // [ rest, hashOutputs, pre, newPub ]
+    op(OP.OP_CAT),                                          // [ rest, hashOutputs, pre‖newPub ]
+    op(OP.OP_FROMALTSTACK), op(OP.OP_CAT),                  // [ rest, hashOutputs, modifiedField ]
+    pushData(u64le(tokenSats)), op(OP.OP_SWAP), op(OP.OP_CAT), // [ rest, hashOutputs, out0 ]
+    op(OP.OP_ROT), op(OP.OP_CAT),                           // [ hashOutputs, out0‖rest ]
     op(OP.OP_HASH256), op(OP.OP_EQUAL),
   ]
 }

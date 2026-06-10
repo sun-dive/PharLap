@@ -3,7 +3,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, LockingScript, UnlockingScript, Spend } from '@bsv/sdk'
 import { pushTxConstants, pushTxPreimage, pushData } from '../src/pushtx.ts'
-import { outputPrefixCovenantOps, selfReplicateCovenantOps, serializeOutput } from '../src/covenant.ts'
+import { OP } from '@bsv/sdk'
+import { outputPrefixCovenantOps, selfReplicateCovenantOps, swapPubkeyOut0CovenantOps, serializeOutput } from '../src/covenant.ts'
 
 const creator = PrivateKey.fromRandom()
 const buyer = PrivateKey.fromRandom()
@@ -110,4 +111,61 @@ test('L2: rejects spending into a different (non-covenant) script', () => {
 test('L2: rejects re-creating the covenant with the wrong value', () => {
   const lockBytes = new LockingScript(selfReplicateCovenantOps(1, pushTxConstants())).toBinary()
   assert.throws(() => runSelfReplicate(lockBytes, 2)) // covenant fixes 1 sat
+})
+
+// --- L3: pubkey-substitution (replica / enforced transfer to a new owner) ---
+const PUBKEY_OFFSET_IN_SCRIPT = 1 // test layout: leading `0x21 <pubkey>` push, so data starts at byte 1
+
+// Build a token-like lock carrying a 33-byte owner pubkey at byte offset 1, plus the L3 body.
+function buildL3Lock(F: number, oldPub: number[]) {
+  return new LockingScript([
+    { op: oldPub.length, data: oldPub }, { op: OP.OP_DROP },
+    ...swapPubkeyOut0CovenantOps(F, 1, pushTxConstants()),
+  ])
+}
+function l3FieldOffset(oldPub: number[]): number {
+  const probeLen = buildL3Lock(0, oldPub).toBinary().length
+  const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5
+  return varIntSize + PUBKEY_OFFSET_IN_SCRIPT
+}
+
+function runSwap(out0Override?: number[]): boolean {
+  const oldPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
+  const newPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
+  const lock = buildL3Lock(l3FieldOffset(oldPub), oldPub)
+  const lockBytes = lock.toBinary()
+  const swapped = [...lockBytes]
+  for (let i = 0; i < 33; i++) swapped[PUBKEY_OFFSET_IN_SCRIPT + i] = newPub[i]
+  const out0Script = out0Override ?? swapped
+  const src = new Transaction(); src.addOutput({ lockingScript: lock, satoshis: 1000 })
+  const sp = new Transaction(); sp.version = 2
+  sp.addInput({ sourceTransaction: src, sourceOutputIndex: 0, sequence: 0xffffffff })
+  const changeScript = new P2PKH().lock(buyer.toAddress()).toBinary()
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(out0Script), satoshis: 1 })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(changeScript), satoshis: 500 })
+  const preimage = pushTxPreimage({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, sourceSatoshis: 1000,
+    transactionVersion: 2, inputIndex: 0, subscript: lock, outputs: sp.outputs,
+    inputSequence: 0xffffffff, lockTime: sp.lockTime,
+  })
+  const interp = new Spend({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, lockingScript: lock, sourceSatoshis: 1000,
+    transactionVersion: 2, otherInputs: [], inputIndex: 0, outputs: sp.outputs,
+    inputSequence: 0xffffffff, lockTime: sp.lockTime,
+    unlockingScript: new UnlockingScript([
+      pushData(serializeOutput(500, changeScript)), pushData(newPub), pushData(preimage),
+    ]),
+  })
+  return interp.validate()
+}
+
+test('L3: re-creates the covenant with the unlock-supplied owner pubkey', () => {
+  assert.equal(runSwap(), true)
+})
+
+test('L3: rejects an output that keeps the old pubkey (no real swap)', () => {
+  // out0 = the original script (old pubkey) while the unlock claims a new one → mismatch.
+  const oldPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
+  const lock = buildL3Lock(l3FieldOffset(oldPub), oldPub)
+  assert.throws(() => runSwap(lock.toBinary()))
 })
