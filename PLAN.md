@@ -171,3 +171,64 @@ changes).
 post-Genesis opcodes + push-only unlocking first so local `Spend` tests stay valid; THEN evaluate bumping to
 `@bsv/sdk` 2.x for `OP_SUBSTR/LEFT/RIGHT` + relaxed-rule validation, paired with **testnet broadcast** as the
 real proof (Chronicle is live there). Defer the SDK-bump decision to Phase 7.
+
+---
+
+## Addendum C — Two-transaction collection model (TX1 template anchor) [design 2026-06-10]
+
+**Supersedes** the inline-field token model in the main plan and Addendum A's field vector. Confirmed with the
+user: applies UNIFORMLY to every collection.
+
+**Decision:** a collection is created with TWO transactions:
+- **TX1 (Collection Template):** a PushDrop output committing ALL immutable collection data — `tokenName`,
+  `tokenRules`, covenant template (`covenantScript`), and (optionally) an embedded file. Created once per
+  collection and kept UNSPENT (in the UTXO set ⇒ non-prunable). **TX1's txid = the Collection ID.**
+- **TX2 (Genesis) + every token/edition:** a minimal, constant-size PushDrop token output carrying only
+  `[ P, version, recordType=TOKEN, TX1-ref(32B), stateData ]` + ownership, plus covenant logic in the locking
+  script for covenant collections.
+
+**Identity = Collection ID = TX1 txid** (carried as `TX1-ref`). All members of a collection share it
+(interchangeable editions, fungible-like); individual UTXOs are tracked by outpoint (txid:index) + stateData.
+**No per-token Token ID, no carried `genesisTxId`** (confirmed with user — it adds bytes + a genesis/transfer
+field asymmetry without improving security; a forger can carry the real value, only descent-walking catches
+forgeries). Creator's pubkey = the **lock key of the TX1 template output** (recoverable via `pushDrop.decode`),
+so it needs no separate field.
+
+**Why this model:**
+- Solves immutable **file binding** (file lives in TX1; `TX1-ref` is the identity ⇒ altering the file changes
+  TX1's txid ⇒ changes the collection identity) with NO tokenAttributes field.
+- **Eliminates the empty-field / OP_0→[0] Token ID trap**: the only identity input is a fixed 32-byte txid,
+  never empty, never re-derived from variable-length encoded fields. No canonicalization patch needed.
+- TX1 txid = natural **Collection ID**, shared by all editions — ideal for unlimited mints.
+
+**No on-chain proof cargo.** MPT embedded a growing proof chain in the transfer OP_RETURN; PHAR LAP drops it
+entirely (it would make every transfer progressively more expensive). Lineage is implicit on-chain (each
+transfer spends its parent as Input 0); the verifier reconstructs it by following inputs and fetches ancestor
+txs + Merkle proofs **on-demand** from the network by txid (standard SPV, not an indexer). Off-chain **BEEF**
+bundles (BRC-62/64; `@bsv/sdk` `BEEF_V1/V2`/`MerklePath`) for offline verification are a later enhancement.
+⇒ transfers are **minimal and constant-size forever**.
+
+**Verification (lightweight default, per Addendum A):** read token's `TX1-ref` → fetch TX1 (non-prunable) →
+read name/rules/covenant/file + creator pubkey → check the token's covenant matches TX1's commitment → confirm
+the **immediate parent** (Input 0's source) is a confirmed, covenant-matching PHAR LAP token of the same
+collection. (A fresh forgery fails this because its Input 0 is a plain funding UTXO, not a covenant-C token.)
+Optional **deep verify** walks the descent and recognizes the creator-authorized genesis via the creator pubkey
+committed in TX1.
+
+**Covenant note:** the executable covenant still travels in each token's locking script (miners can't read TX1).
+TX1 holds the canonical covenant commitment; integrity = miner-enforced self-propagation + a wallet check that
+the token's covenant matches TX1. (Genuine "does it simplify the covenant" answer: simplifies the data/params it
+carries, not the enforcement logic.)
+
+**Cost:** one extra TX per COLLECTION (not per token — editions just reference the existing TX1). Verifiers
+fetch TX1 once (cached per collection).
+
+**Field layouts** (PushDrop data fields, in order; the PushDrop lock key carries ownership/authorship):
+- Token (lock=owner):     `[ P(0x50), version(0x03), recordType(0x02=TOKEN), TX1-ref(32B), stateData ]`
+- Template (lock=creator): `[ P, version, recordType(0x01=TEMPLATE), tokenName, tokenRules(8B), covenantScript, fileHash?(32B) ]`
+- File (lock=creator):     `[ P, version, recordType(0x03=FILE), mimeType, fileName, fileBytes ]`  (separate TX1 output, optional)
+
+`stateData` is mutable and NOT in the identity (empty normalizes to a 1-byte sentinel `"00"`). `tokenAttributes`
+is removed entirely. Phase 2 builds the field codec for these (no proof-chain/OP_RETURN-cargo codec needed);
+covenant enforcement and file-output construction land in later phases. NOTE: `PharLap/PLAN.md` (this file) is
+now the source-of-truth plan.

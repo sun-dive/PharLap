@@ -1,12 +1,14 @@
 /**
  * Pure SPV Token Protocol Layer.
  *
- * This module contains the entire MPT token verification logic using
+ * This module contains the entire PHAR LAP token verification logic using
  * ONLY Merkle proofs and block headers. It has ZERO network dependencies.
  *
  * A token is valid if:
- *   1. Token ID = SHA-256(genesisTxId || outputIndex LE || opReturnChunks[2..5] raw bytes)
- *      where chunks 2-5 = tokenName + tokenScript + tokenRules + tokenAttributes
+ *   1. Token ID = SHA-256(genesisTxId || outputIndex LE || immutableChunkBytes)
+ *      where immutableChunkBytes = tokenName + tokenScript + tokenRules
+ *      (the three immutable fields ONLY — stateData is mutable and NOT bound to the
+ *      Token ID; see tokenCodec.ts and docs/DEVIATIONS_FROM_MPT.md)
  *   2. Every entry in the proof chain has a valid Merkle proof
  *   3. Every Merkle root matches its block header at that height
  *   4. The oldest entry's txId matches the genesis txId
