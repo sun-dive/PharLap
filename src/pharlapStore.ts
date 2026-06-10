@@ -1,3 +1,4 @@
+// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
 /**
  * PHAR LAP local token store.
  *

@@ -1,52 +1,62 @@
 # PHAR LAP
 
-**P**eer-to-peer **H**ashing **A**lgorithm **R**eplication **L**edger **A**uthentication **P**rotocol
+**P**eer-to-peer · **H**ashing · **A**lgorithm · **R**eplication · **L**edger · **A**uthentication · **P**rotocol
 
-A PushDrop-based BSV token wallet, derived from the **MPT v05.24** prototype. PHAR LAP keeps token
-metadata inside a *spendable* PushDrop locking script (so it stays in the UTXO set and cannot be pruned,
-unlike OP_RETURN), and adds experimental miner-enforced covenant scripts — including the **"unlimited
-mints"** edition-replication mechanic.
+A PushDrop-based BSV token wallet — a standalone browser app for minting, sharing, and transferring
+tokenized content. Derived from the **MPT v05.24** prototype, rebuilt around PushDrop so token data lives
+in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
 
-> Status: early development. The base PushDrop migration is being built in phases on top of the copied
-> v05.24 wallet. See `PLAN.md` for the full design.
+> **Status:** experimental. Collection mint (single + multi-edition), embedded-file binding, transfer,
+> discovery, lightweight verification, and a file viewer are working and validated on BSV mainnet. The
+> permissionless "unlimited mints" edition covenant is in design/development. See `PLAN.md` for the full
+> design and `docs/DEVIATIONS_FROM_MPT.md` for how it differs from MPT.
 
-## Design at a glance
+## How it works
 
-- **Non-prunable data** — token metadata lives in a PushDrop output (`<fields> OP_DROP <pubkey> OP_CHECKSIG`),
-  not a prunable OP_RETURN. The bulky proof chain stays in a (regenerable) OP_RETURN on transfers.
-- **SPV-only verification** — a token is valid if its Token ID derives from genesis and a Merkle path
-  anchors it to a block header. No indexers, no trusted third parties.
+- **Collections, not lone tokens.** A collection is created with two transactions: **TX1** commits the
+  immutable template (name, rules, optional embedded file) and *is* the Collection ID; **TX2** mints the
+  token editions, each referencing TX1.
+- **Non-prunable data.** Token and file data live in PushDrop outputs (`<pubkey> OP_CHECKSIG <fields> OP_DROP`),
+  so they stay in the UTXO set. An embedded file is bound to the collection identity by hash (tamper-evident).
+- **SPV-only.** No indexers or trusted third parties — a token is a valid edition if it traces to a real
+  genesis; proofs are fetched on demand (BEEF-ready). Transfers are constant-size (no on-chain proof chain).
 - **1-byte protocol prefix** `"P"` (`0x50`), format version `0x03`.
-- **Experimental covenants** (off by default) — issuer co-sign, and "unlimited mints" edition replication
-  where any buyer can permissionlessly mint a copy that pays a fixed creator fee + holder fee.
 
 ## Toolchain
 
 - **Node ≥ 26** — runs the TypeScript sources directly (native type stripping); unit tests need no build step.
 - **esbuild** — bundles `src/app.ts` → `bundle.js` for the browser wallet.
-- **@bsv/sdk** v1.10.3 — Bitcoin primitives (raw `PrivateKey`, `Transaction`, `Script`, `Hash`, `PushDrop`).
+- **@bsv/sdk** — Bitcoin primitives (`PrivateKey`, `Transaction`, `Script`, `Hash`, `SymmetricKey`, `ECIES`).
 
 ## Commands
 
 ```bash
-npm install      # install deps (esbuild + @bsv/sdk)
+npm install      # install deps
 npm test         # run unit tests (node --test)
 npm run build    # bundle the browser wallet → bundle.js
 npm run serve    # dev server on http://localhost:3000 (proxies /woc/* to WhatsOnChain)
 ```
 
+Then open `http://localhost:3000`, fund the wallet's address, and mint a collection.
+
 ## Layout
 
 ```
 src/
-  tokenProtocol.ts   SPV core: Token ID, Merkle proof, proof-chain verification (zero network deps)
-  opReturnCodec.ts   (to be split into pushDrop.ts + tokenCodec.ts)
-  walletProvider.ts  WhatsOnChain API client
-  tokenStore.ts      localStorage persistence (key prefix "p:")
-  tokenBuilder.ts    mint / transfer / verify orchestration
-  app.ts             browser wallet UI
-  fileCache.ts       IndexedDB cache for embedded files
-test/                node --test suites
+  pushDrop.ts          raw-key PushDrop script template (lock / unlock / decode)
+  tokenCodec.ts        field codec for the token / template / file records
+  tokenProtocol.ts     SPV core: Merkle-proof + proof-chain verification (zero network deps)
+  collectionBuilder.ts collection genesis (TX1 template + TX2 mint)
+  transfer.ts          transfers, ownership detection, incoming scan
+  verify.ts            lightweight lineage verification
+  walletProvider.ts    WhatsOnChain client (UTXOs, raw tx, broadcast, headers)
+  pharlapStore.ts      local token store (localStorage)
+  app.ts               browser wallet UI
+  fileCache.ts         IndexedDB cache for embedded files
+test/                  node --test suites
 ```
 
-Derived from MPT v05.24 under the Open BSV License.
+## License
+
+Licensed under the **Open BSV License Version 5** — see [LICENSE](./LICENSE). Derived from MPT v05.24.
+© BSV Association. Use only on the BSV Blockchains.
