@@ -325,3 +325,51 @@ The messaging-phase UI must surface these choices to the buyer/holder explicitly
 
 Deferred: the announcement/pull channel, the message record format (plaintext + ECIES), and covenant-enforced
 tracking. Reserving the bits/record-type now keeps both models open without committing to either.
+
+---
+
+## Addendum F — Encrypted content (envelope encryption + permissionless editions w/ key-delivery) [design 2026-06-10]
+
+Goal: gate *viewing* of an embedded file (e.g. an eBook PDF) to token holders — "an inconvenience that makes
+direct-from-chain access hard," **NOT foolproof DRM**. Confirmed direction with the user.
+
+**Scheme — envelope encryption:**
+- Generate a random content key **K** (`Random(32)`). Encrypt the file with `SymmetricKey(K)` (AES-GCM) →
+  **ciphertext**. Store the *ciphertext* in the FILE output; bind `fileHash = SHA256(ciphertext)` (the encrypted
+  file is identity-bound + tamper-evident). A holder needs only K to view.
+- K is wrapped to a holder via **ECIES** (ephemeral — does NOT require the *sender's* private key); the holder
+  unwraps with their own private key. Mark the collection **encrypted** (a `tokenRules` bit / template flag) so
+  the viewer knows to decrypt.
+
+**Chosen delivery model: permissionless editions + off-chain, K-only key-delivery** (per the key-exposure
+analysis — smallest blast radius; a server is needed anyway for shareable sales links, so the availability
+dependency is non-blocking):
+- Buyers **self-mint** editions permissionlessly (covenant, Addendum A); they don't have K at mint time.
+- The creator runs a **delivery service that is keyless except for K**: it watches the chain (read-only) for paid
+  editions (via the creator-fee / notification, Addendum E), verifies on-chain that the requester holds a paid
+  edition, then delivers `wrappedK = ECIES(K, buyerPubKey)` **off-chain** (HTTP, or a message per Addendum E).
+  Because ECIES delivery is ephemeral and the buyer can *verify* K works (it must AES-decrypt the on-chain
+  ciphertext to a file matching `fileHash`), the service needs **no creator signing key** — the creator's
+  identity/spending key stays **offline/cold**.
+- The buyer's wallet verifies K, stores `wrappedK` locally (keyed by collection), and the **View** flow unwraps
+  K → AES-decrypts the on-chain ciphertext → displays.
+- For **wallet-mediated transfers** (seller → buyer), the seller re-wraps K into the recipient's token
+  **`stateData`** on-chain, so the key travels with the token. So `wrappedK` lives in `stateData` (on-chain, for
+  transfers / creator-held editions) and/or the buyer's local store (off-chain delivery for permissionless
+  purchases); View checks both.
+
+**Key exposure:**
+- *Shared, irreducible:* the delivery service holds K; a breach leaks K → the immutable on-chain ciphertext is
+  decryptable forever. Acceptable under the "inconvenience, not DRM" bar.
+- *Minimized:* the service holds **only K** (no creator signing key). Use **per-collection K** so one breach
+  doesn't expose other collections; a dedicated hot key for any signing; manual delivery for low volume.
+
+**Honest limits:** any holder can extract K + plaintext; no revocation of past holders; once K leaks the
+ciphertext is forever decryptable; viewing new permissionless purchases depends on the creator's delivery service
+(an *availability*, not *trust*, dependency — it's the creator's own service).
+
+**Building blocks (all confirmed in @bsv/sdk):** `SymmetricKey` (AES-GCM) for the file; `ECIES` (ephemeral) +
+`PrivateKey.deriveSharedSecret` for key-wrapping; `Random` for K. `stateData` carries `wrappedK` on the on-chain path.
+
+**Status:** design reserved; depends on the covenant (Addendum A, editions) + key-delivery (Addendum E messaging
+or a simple HTTP service). Server required — acknowledged and non-blocking (needed anyway for shareable links).
