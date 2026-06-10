@@ -231,9 +231,11 @@ export async function createCollection(
     ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: params.file.bytes }
     : undefined
 
-  // Select funding to cover both txs' outputs + a fee buffer.
+  // Select funding to cover both txs' outputs + a realistic fee headroom (tx.fee() computes the
+  // exact fee afterwards; this only needs to pick enough UTXOs). TX1 carries any embedded file.
   const numOutputs = 1 + (file ? 1 : 0) + mintCount
-  const target = numOutputs * sats + 2000
+  const estBytes = 700 + mintCount * 80 + (file ? file.bytes.length : 0)
+  const target = numOutputs * sats + Math.ceil((estBytes * feePerKb) / 1000) + 250
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding: FundingInput[] = await Promise.all(
     selected.map(async u => ({ utxo: u, sourceTx: await provider.getSourceTransaction(u.txId) })),

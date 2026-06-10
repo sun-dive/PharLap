@@ -151,7 +151,9 @@ export async function createTransfer(
   },
 ): Promise<TransferTxResult> {
   const tokenSourceTx = await provider.getSourceTransaction(opts.tokenTxId)
-  const selected = selectFunding(await getSafeUtxos(provider), 1000)
+  // Small fee headroom: a transfer is ~500 bytes; the 1-sat token input also contributes.
+  const feeHeadroom = Math.ceil((500 * (opts.feePerKb ?? DEFAULT_FEE_PER_KB)) / 1000) + 200
+  const selected = selectFunding(await getSafeUtxos(provider), feeHeadroom)
   const funding: FundingInput[] = await Promise.all(
     selected.map(async u => ({ utxo: u, sourceTx: await provider.getSourceTransaction(u.txId) })),
   )

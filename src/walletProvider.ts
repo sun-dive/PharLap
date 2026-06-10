@@ -115,32 +115,51 @@ export class WalletProvider {
    */
   async getUtxos(): Promise<Utxo[]> {
     const address = this.getAddress()
-    const resp = await fetchWithRetry(`${WOC_BASE}/address/${address}/unspent/all`)
-    if (!resp.ok) throw new Error(`WoC UTXO fetch failed: ${resp.status}`)
-    const data = await resp.json()
-    // /unspent/all returns { result: [...] }; tolerate a bare array too.
-    const rows: any[] = Array.isArray(data?.result) ? data.result : (Array.isArray(data) ? data : [])
 
-    // Include confirmed + unconfirmed, but never a UTXO already spent in the mempool.
-    const onchain: Utxo[] = rows
-      .filter((u: any) => u.isSpentInMempoolTx !== true)
-      .map((u: any) => ({
-        txId: u.tx_hash as string,
-        outputIndex: u.tx_pos as number,
-        satoshis: u.value as number,
-        script: '',
-      }))
+    const mapRows = (data: any): Utxo[] => {
+      const rows: any[] = Array.isArray(data?.result) ? data.result : (Array.isArray(data) ? data : [])
+      return rows
+        .filter((u: any) => u.isSpentInMempoolTx !== true) // never a UTXO already spent in the mempool
+        .map((u: any) => ({
+          txId: u.tx_hash as string,
+          outputIndex: u.tx_pos as number,
+          satoshis: u.value as number,
+          script: '',
+        }))
+    }
+
+    // Confirmed UTXOs (mempool-aware: flags + excludes mempool-spent outputs).
+    const allResp = await fetchWithRetry(`${WOC_BASE}/address/${address}/unspent/all`)
+    if (!allResp.ok) throw new Error(`WoC UTXO fetch failed: ${allResp.status}`)
+    const confirmedUtxos = mapRows(await allResp.json())
+
+    // Unconfirmed received UTXOs, so funding can be spent before it confirms (best-effort).
+    let unconfirmedUtxos: Utxo[] = []
+    try {
+      const ucResp = await fetchWithRetry(`${WOC_BASE}/address/${address}/unconfirmed/unspent`)
+      if (ucResp.ok) unconfirmedUtxos = mapRows(await ucResp.json())
+    } catch { /* unconfirmed is best-effort */ }
+
+    // Merge + dedupe by outpoint.
+    const seen = new Set<string>()
+    const onchain: Utxo[] = []
+    for (const u of [...confirmedUtxos, ...unconfirmedUtxos]) {
+      const k = `${u.txId}:${u.outputIndex}`
+      if (seen.has(k)) continue
+      seen.add(k)
+      onchain.push(u)
+    }
 
     const isSpent = (u: { txId: string; outputIndex: number }) =>
       this.spentOutpoints.has(`${u.txId}:${u.outputIndex}`)
 
     // Drop pending entries WoC now reports; exclude anything we've spent locally.
     for (const u of onchain) this.pendingUtxos.delete(`${u.txId}:${u.outputIndex}`)
-    const confirmed = onchain.filter(u => !isSpent(u))
+    const available = onchain.filter(u => !isSpent(u))
     const pending = Array.from(this.pendingUtxos.values()).filter(u => !isSpent(u))
 
-    console.debug(`getUtxos: ${onchain.length} on-chain (mempool-aware), ${this.spentOutpoints.size} spent locally, ${pending.length} pending = ${confirmed.length + pending.length} available`)
-    return [...confirmed, ...pending]
+    console.debug(`getUtxos: ${onchain.length} on-chain (mempool-aware), ${this.spentOutpoints.size} spent locally, ${pending.length} pending = ${available.length + pending.length} available`)
+    return [...available, ...pending]
   }
 
   /**
