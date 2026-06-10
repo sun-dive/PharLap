@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, LockingScript, UnlockingScript, Spend } from '@bsv/sdk'
 import { pushTxConstants, pushTxPreimage, pushData } from '../src/pushtx.ts'
-import { outputPrefixCovenantOps, serializeOutput } from '../src/covenant.ts'
+import { outputPrefixCovenantOps, selfReplicateCovenantOps, serializeOutput } from '../src/covenant.ts'
 
 const creator = PrivateKey.fromRandom()
 const buyer = PrivateKey.fromRandom()
@@ -71,4 +71,43 @@ test('L1: rejects when the enforced output script is altered', () => {
     actualOutputs: [{ script: attackerScript, sats: 1000 }, { script: attackerScript, sats: 500 }],
     spenderOutputsBytes: spenderOut,
   }))
+})
+
+// --- L2: self-replicating ("quine") covenant ---
+function runSelfReplicate(out0Script: number[], out0Sats: number): boolean {
+  const c = pushTxConstants()
+  const lock = new LockingScript(selfReplicateCovenantOps(1, c))
+  const src = new Transaction(); src.addOutput({ lockingScript: lock, satoshis: 1000 })
+  const sp = new Transaction(); sp.version = 2
+  sp.addInput({ sourceTransaction: src, sourceOutputIndex: 0, sequence: 0xffffffff })
+  const changeScript = new P2PKH().lock(buyer.toAddress()).toBinary()
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(out0Script), satoshis: out0Sats })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(changeScript), satoshis: 500 })
+  const preimage = pushTxPreimage({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, sourceSatoshis: 1000,
+    transactionVersion: 2, inputIndex: 0, subscript: lock, outputs: sp.outputs,
+    inputSequence: 0xffffffff, lockTime: sp.lockTime,
+  })
+  const interp = new Spend({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, lockingScript: lock, sourceSatoshis: 1000,
+    transactionVersion: 2, otherInputs: [], inputIndex: 0, outputs: sp.outputs,
+    inputSequence: 0xffffffff, lockTime: sp.lockTime,
+    unlockingScript: new UnlockingScript([pushData(serializeOutput(500, changeScript)), pushData(preimage)]),
+  })
+  return interp.validate()
+}
+
+test('L2: token can be spent into an exact copy of its own covenant', () => {
+  const lockBytes = new LockingScript(selfReplicateCovenantOps(1, pushTxConstants())).toBinary()
+  assert.equal(runSelfReplicate(lockBytes, 1), true)
+})
+
+test('L2: rejects spending into a different (non-covenant) script', () => {
+  const plain = new P2PKH().lock(buyer.toAddress()).toBinary()
+  assert.throws(() => runSelfReplicate(plain, 1))
+})
+
+test('L2: rejects re-creating the covenant with the wrong value', () => {
+  const lockBytes = new LockingScript(selfReplicateCovenantOps(1, pushTxConstants())).toBinary()
+  assert.throws(() => runSelfReplicate(lockBytes, 2)) // covenant fixes 1 sat
 })

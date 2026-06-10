@@ -55,6 +55,42 @@ export function extractHashOutputsOps(): ScriptChunk[] {
 }
 
 /**
+ * Op fragment: consumes the verified preimage and leaves the `scriptCode` FIELD (varint(len) ‖ script).
+ * That field is exactly the `varint(scriptLen) ‖ script` portion of an output serialization, so it can
+ * be concatenated straight after an 8-byte value to rebuild "an output paying this same script".
+ *
+ * Preimage layout: version(4) ‖ hashPrevouts(32) ‖ hashSequence(32) ‖ outpoint(36) ‖ scriptCodeField
+ * ‖ value(8) ‖ nSequence(4) ‖ hashOutputs(32) ‖ nLocktime(4) ‖ sighashType(4). So the field is bytes
+ * [104, len-52) — a fixed prefix (104) and a fixed suffix (52), independent of script length and of
+ * whether ANYONECANPAY zeroed the prevout/sequence hashes (still 32 bytes each).
+ */
+export function extractScriptCodeFieldOps(): ScriptChunk[] {
+  return [
+    pushData([104]), op(OP.OP_SPLIT), op(OP.OP_NIP),                                  // drop 104-byte prefix
+    op(OP.OP_SIZE), pushData([52]), op(OP.OP_SUB), op(OP.OP_SPLIT), op(OP.OP_DROP),   // drop 52-byte suffix
+  ]
+}
+
+/**
+ * L2 self-replicating ("quine") covenant. Stack on entry: [ spenderOutputs, preimage ].
+ * Forces output[0] to pay `tokenSats` to the SAME script that is currently executing (extracted from
+ * the preimage's scriptCode — no second copy embedded), then `spenderOutputs` for the rest. Leaves a
+ * boolean. A token under this covenant can only be spent into a copy of itself.
+ */
+export function selfReplicateCovenantOps(tokenSats = 1, c: PushTxConstants = pushTxConstants()): ScriptChunk[] {
+  return [
+    ...pushTxVerifyOps(c),            // [ spenderOutputs, preimage ]
+    op(OP.OP_DUP),                    // [ spenderOutputs, preimage, preimage ]
+    ...extractHashOutputsOps(),       // [ spenderOutputs, preimage, hashOutputs ]
+    op(OP.OP_SWAP),                   // [ spenderOutputs, hashOutputs, preimage ]
+    ...extractScriptCodeFieldOps(),   // [ spenderOutputs, hashOutputs, scriptCodeField ]
+    pushData(u64le(tokenSats)), op(OP.OP_SWAP), op(OP.OP_CAT), // [ .., hashOutputs, out0 = value ‖ field ]
+    op(OP.OP_ROT), op(OP.OP_CAT),     // [ hashOutputs, out0 ‖ spenderOutputs ]
+    op(OP.OP_HASH256), op(OP.OP_EQUAL),
+  ]
+}
+
+/**
  * L1 covenant body. Stack on entry (top last): [ spenderOutputs, preimage ].
  *   - `spenderOutputs` = serialized trailing outputs the spender is free to choose (their change).
  *   - `preimage`       = the sighash preimage of this input.
