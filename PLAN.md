@@ -141,3 +141,33 @@ copy ("edition") **without any interaction from the current holder's wallet**.
   deep-walk.
 - These tokens are **heavier** (the covenant script must travel in every output — no immutable-field
   omission saving from the transfer-size analysis).
+
+---
+
+## Addendum B — Chronicle release considerations (BSV opcode re-enablement) [2026-06-10]
+
+BSV's **Chronicle** update (mainnet activated 7 Apr 2026 @ height 943,816; testnet already active) restored
+original opcodes and relaxed several rules. Verdict for PHAR LAP: **convenience for the covenant phase, not a
+new capability, and NOT needed for the base build** — everything we need was already possible post-Genesis.
+
+Relevant items, ranked:
+- **HIGH (Phase 7):** malleability rules relaxed for **tx version > 1** (push-only-unlocking, clean-stack,
+  MINIMALIF, NULLFAIL, low-S all dropped) → makes OP_PUSH_TX covenants simpler/smaller. Author covenants for
+  **tx version 2**. Caveat: clean-stack removal can MASK covenant bugs → author defensively regardless.
+- **MEDIUM (Phase 7):** `OP_SUBSTR` (0xb3) / `OP_LEFT` (0xb4) / `OP_RIGHT` (0xb5) — cleaner byte-slicing when
+  parsing the FORKID preimage / reconstructing outputs (vs. chaining `OP_SPLIT`).
+- **LOW:** `OP_LSHIFTNUM` (0xb6) / `OP_RSHIFTNUM` (0xb7), `OP_2MUL`/`OP_2DIV` (arithmetic); `OP_VER` (push tx
+  version, lightweight guard).
+- **None for us:** `MAX_SCRIPT_NUM_LENGTH` 750KB→32MB (we do no in-script big-number crypto); OTDA via
+  `CHRONICLE` sighash flag 0x20 — but it CONFIRMS BIP143/FORKID is BSV's default digest (OTDA is opt-in only).
+
+**SDK catch:** the vendored **`@bsv/sdk` v1.10.3 is pre-Chronicle** — opcodes 0xb3–0xb7 are still
+`OP_NOP4`–`OP_NOP8`, and `Spend` hard-codes `requirePushOnlyUnlockingScripts`/`requireCleanStack`/
+`requireMinimalPush = true` with no version-gating. So local `Spend` validation does NOT reflect Chronicle.
+Latest SDK is **2.1.4** (major-version jump from 1.10.3 → likely breaking `PushDrop`/`TransactionSignature` API
+changes).
+
+**Decision:** Phases 0–6 stay on v1.10.3 (unaffected). For Phase 7, author the edition-mint covenant with
+post-Genesis opcodes + push-only unlocking first so local `Spend` tests stay valid; THEN evaluate bumping to
+`@bsv/sdk` 2.x for `OP_SUBSTR/LEFT/RIGHT` + relaxed-rule validation, paired with **testnet broadcast** as the
+real proof (Chronicle is live there). Defer the SDK-bump decision to Phase 7.

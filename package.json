@@ -13,6 +13,7 @@
     "@bsv/sdk": "^1.0.0"
   },
   "devDependencies": {
+    "@types/node": "^25.9.2",
     "esbuild": "^0.21.0"
   }
 }
