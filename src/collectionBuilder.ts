@@ -29,8 +29,8 @@ import type { TemplateFields, FileFields } from './tokenCodec.ts'
 
 /** Satoshi value of each PushDrop record output (token / template / file). */
 export const PHARLAP_OUTPUT_SATS = 1
-/** Default fee rate (satoshis per kilobyte). */
-export const DEFAULT_FEE_PER_KB = 50
+/** Default fee rate (satoshis per kilobyte) — current BSV standard is 100 sat/KB. */
+export const DEFAULT_FEE_PER_KB = 100
 
 export interface FundingInput {
   utxo: Utxo
