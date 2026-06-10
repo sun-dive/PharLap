@@ -7,13 +7,13 @@
  * verification via verifyTokenLineage. Tokens are tracked locally (PharLapStore) since PushDrop
  * outputs are not WoC-address-indexed.
  */
-import { PrivateKey, PublicKey, Utils } from '@bsv/sdk'
+import { PrivateKey, Utils, Hash } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { verifyTokenLineage } from './verify.ts'
-import { parseTemplateScript } from './tokenCodec.ts'
+import { parseTemplateScript, parseFileScript } from './tokenCodec.ts'
 
 const WIF_KEY = 'p:wallet:wif'
 
@@ -156,6 +156,74 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
   }
 }
 
+// ─── file viewer ────────────────────────────────────────────────────
+let viewerUrl: string | null = null
+
+async function onView(collectionId: string, collectionName: string): Promise<void> {
+  setStatus('Loading the embedded file from the collection…')
+  try {
+    const tx1 = await provider.getSourceTransaction(collectionId)
+    let file: { mimeType: string; fileName: string; fileBytes: number[] } | null = null
+    let templateHash: string | undefined
+    for (const o of tx1.outputs) {
+      const f = parseFileScript(o.lockingScript)
+      if (f) file = f.fields
+      const t = parseTemplateScript(o.lockingScript)
+      if (t) templateHash = t.fields.fileHash
+    }
+    if (!file) {
+      setStatus(`"${collectionName}" has no embedded file.`, 'info')
+      return
+    }
+    // Verify the file is the one bound to the collection identity.
+    const computed = Utils.toHex(Hash.sha256(file.fileBytes))
+    const verified = templateHash === computed
+    showFile(collectionName, file, verified)
+    setStatus(
+      verified
+        ? 'File loaded — SHA-256 matches the collection (bound to identity ✓).'
+        : '⚠ File loaded, but its hash does NOT match the collection commitment!',
+      verified ? 'ok' : 'error',
+    )
+  } catch (e) {
+    setStatus(`View failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+function showFile(title: string, file: { mimeType: string; fileName: string; fileBytes: number[] }, verified: boolean): void {
+  const content = $('viewerContent')
+  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
+  viewerUrl = URL.createObjectURL(new Blob([new Uint8Array(file.fileBytes)], { type: file.mimeType }))
+  $('viewerTitle').textContent =
+    `${title} — ${file.fileName} · ${file.mimeType} · ${file.fileBytes.length} bytes ${verified ? '✓' : '⚠ hash mismatch'}`
+  content.innerHTML = ''
+  if (file.mimeType.startsWith('image/')) {
+    const img = document.createElement('img')
+    img.src = viewerUrl
+    img.className = 'viewer-img'
+    content.append(img)
+  } else if (file.mimeType.startsWith('text/') || file.mimeType === 'application/json') {
+    const pre = document.createElement('pre')
+    pre.className = 'viewer-pre'
+    pre.textContent = new TextDecoder().decode(new Uint8Array(file.fileBytes))
+    content.append(pre)
+  } else {
+    const a = document.createElement('a')
+    a.href = viewerUrl
+    a.download = file.fileName
+    a.textContent = `Download ${file.fileName}`
+    a.className = 'viewer-dl'
+    content.append(a)
+  }
+  $('viewer').style.display = 'flex'
+}
+
+function closeViewer(): void {
+  $('viewer').style.display = 'none'
+  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
+  $('viewerContent').innerHTML = ''
+}
+
 // ─── token list ─────────────────────────────────────────────────────
 function renderTokens(): void {
   const host = $('tokens')
@@ -179,9 +247,13 @@ function renderTokens(): void {
     verify.textContent = 'Verify'
     verify.className = 'secondary'
     verify.onclick = () => void onVerify(t.txId, t.outputIndex)
+    const view = document.createElement('button')
+    view.textContent = 'View'
+    view.className = 'secondary'
+    view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Collection')
     const actions = document.createElement('div')
     actions.className = 'actions'
-    actions.append(send, verify)
+    actions.append(send, verify, view)
     card.append(actions)
     host.append(card)
   }
@@ -219,6 +291,8 @@ function init(): void {
     } catch { setStatus('Invalid WIF.', 'error') }
   }
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)
+  $('viewerClose').onclick = () => closeViewer()
+  $('viewer').onclick = (e) => { if (e.target === $('viewer')) closeViewer() } // click backdrop to close
 
   void refreshBalance()
 }
