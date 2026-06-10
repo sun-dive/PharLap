@@ -302,8 +302,20 @@ the creator track **current** holders, a transfer can add a **1-sat P2PKH notifi
 (creator pubkey = TX1 lock key); the creator scans their address → sees every transfer → reads the new owner's
 pubkey. This makes the collection **creator-tracked** (creator sees the ownership graph) — a deliberate privacy
 trade, so it is the **creator's explicit choice at mint** via the `RESTRICTION_TRACK_TRANSFERS` rules bit
-(visible to buyers before they buy). Private by default; for covenant collections it can later be *enforced* by
-the covenant's transfer branch, for plain ones it is a wallet convention.
+(visible to buyers before they buy). Private by default.
+
+**Holder opt-out is a hard requirement (consent-first).** The buyer/current holder must always be able to
+opt out, which constrains the design:
+- **Opt out of being tracked:** the creator-notify is a **default-on, holder-OMITTABLE** output — the holder's
+  wallet can simply not add it on transfer. Therefore transfer-tracking is a **wallet convention, NOT
+  covenant-enforced** (a covenant mandate would remove the opt-out). If a creator ever wants *enforced* tracking,
+  that must be **disclosed before purchase** (informed consent — the buyer sees it and can decline to buy); it is
+  never silent.
+- **Opt out of receiving/seeing messages:** always available at the receiver — the holder's wallet filters/ignores
+  creator messages regardless of what the creator sends.
+- **Boundary:** the *initial purchase* unavoidably reveals an original buyer to the creator (buying = paying the
+  royalty-fee output). Opt-out covers ongoing transfer-tracking + message display, not the purchase-time royalty.
+The messaging-phase UI must surface these choices to the buyer/holder explicitly.
 
 **Hooks reserved now (no full feature yet):**
 - `tokenCodec`: `RECORD_MESSAGE = 0x04`; `RESTRICTION_TRACK_TRANSFERS = 0x0004` (+ `decodeTokenRules().isTracked`).
