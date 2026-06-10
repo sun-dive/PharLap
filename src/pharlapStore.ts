@@ -17,6 +17,14 @@ export interface StoredToken {
   collectionName?: string
   status: 'active' | 'sent'
   addedAt: string
+  /** Covenant edition fields (present only for edition tokens). */
+  kind?: 'edition'
+  /** Edition locking script (hex) — needed to replicate/transfer the covenant. */
+  lockHex?: string
+  /** Edition terms (for rebuilding replicate/transfer txs). */
+  creatorPubKeyHashHex?: string
+  creatorFeeSats?: number
+  holderFeeSats?: number
 }
 
 export interface KVStore {
@@ -64,6 +72,11 @@ export class PharLapStore {
     stateData: string
     collectionName?: string
     addedAt?: string
+    kind?: 'edition'
+    lockHex?: string
+    creatorPubKeyHashHex?: string
+    creatorFeeSats?: number
+    holderFeeSats?: number
   }): boolean {
     const tokens = this.list()
     const k = outpointKey(token)
@@ -76,6 +89,11 @@ export class PharLapStore {
       collectionName: token.collectionName,
       status: 'active',
       addedAt: token.addedAt ?? new Date().toISOString(),
+      kind: token.kind,
+      lockHex: token.lockHex,
+      creatorPubKeyHashHex: token.creatorPubKeyHashHex,
+      creatorFeeSats: token.creatorFeeSats,
+      holderFeeSats: token.holderFeeSats,
     })
     this.write(tokens)
     return true

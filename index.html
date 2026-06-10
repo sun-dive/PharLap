@@ -39,6 +39,9 @@
     .viewer-img { max-width:100%; max-height:74vh; border-radius:6px; display:block; }
     .viewer-pre { white-space:pre-wrap; word-break:break-word; max-height:74vh; overflow:auto; background:#0d1117; padding:12px; border-radius:6px; font-size:12px; }
     .viewer-dl { color:var(--accent2); }
+    .badge { font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:var(--accent2); color:#04122a; padding:1px 6px; border-radius:10px; vertical-align:middle; }
+    .warn { border-color:#9e6a03; }
+    .warn h2 { color:#e3a008; }
   </style>
 </head>
 <body>
@@ -76,6 +79,28 @@
       <input id="mintFile" type="file" />
       <div class="row" style="margin-top:10px"><button id="btnMint">Mint collection</button></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Creates TX1 (template, the Collection ID) then TX2 (genesis editions). Requires funds on your address.</p>
+    </div>
+
+    <h2>Editions — unlimited mints (experimental covenant)</h2>
+    <div class="card warn">
+      <p class="muted" style="font-size:12px;margin:0 0 8px">
+        Miner-enforced covenant tokens (OP_PUSH_TX). <b>Experimental — small-value mainnet only.</b>
+        First confirm the network accepts version-2 (Chronicle) transactions:
+      </p>
+      <div class="row" style="margin-bottom:10px"><button id="btnV2Probe" class="secondary">Test v2 broadcast</button></div>
+      <label>Edition collection name</label>
+      <input id="edName" placeholder="e.g. My eBook (unlimited editions)" />
+      <div class="grid2" style="grid-template-columns:1fr 1fr">
+        <div><label>Creator fee (sat)</label><input id="edCreatorFee" type="number" min="0" value="5000" /></div>
+        <div><label>Holder fee (sat)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>
+      </div>
+      <label>Editions to mint now</label>
+      <input id="edCount" type="number" min="1" value="1" />
+      <div class="row" style="margin-top:10px"><button id="btnMintEdition">Mint edition collection</button></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">
+        Any buyer can later <b>Replicate</b> an edition (returns the token to the holder, mints their own copy,
+        pays both fees). <b>Transfer</b> moves it owner-signed, re-creating the covenant.
+      </p>
     </div>
 
     <h2>My tokens</h2>

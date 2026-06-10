@@ -12,7 +12,9 @@ import { PrivateKey, Utils, Hash } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, type EditionTerms } from './editionBuilder.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
+import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
 import { parseTemplateScript, parseFileScript } from './tokenCodec.ts'
 
@@ -98,6 +100,97 @@ async function onMint(): Promise<void> {
     setStatus(`Minted ${result.tokenOutpoints.length} token(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, 'ok')
   } catch (e) {
     setStatus(`Mint failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+// ─── editions (experimental covenant) ──────────────────────────────
+function ownTerms(): EditionTerms {
+  return {
+    creatorPubKeyHash: Hash.hash160(key.toPublicKey().encode(true) as number[]),
+    creatorFeeSats: Math.max(0, parseInt(val('edCreatorFee') || '0', 10)),
+    holderFeeSats: Math.max(0, parseInt(val('edHolderFee') || '0', 10)),
+    tokenSats: 1,
+  }
+}
+
+function termsFromToken(t: StoredToken): EditionTerms {
+  return {
+    creatorPubKeyHash: Utils.toArray(t.creatorPubKeyHashHex ?? '', 'hex'),
+    creatorFeeSats: t.creatorFeeSats ?? 0,
+    holderFeeSats: t.holderFeeSats ?? 0,
+    tokenSats: 1,
+  }
+}
+
+function storeEdition(o: { txId: string; outputIndex: number; lockHex: string }, collectionId: string, name: string, terms: EditionTerms): void {
+  store.add({
+    txId: o.txId, outputIndex: o.outputIndex, collectionId, stateData: '', collectionName: name,
+    kind: 'edition', lockHex: o.lockHex, creatorPubKeyHashHex: Utils.toHex(terms.creatorPubKeyHash),
+    creatorFeeSats: terms.creatorFeeSats, holderFeeSats: terms.holderFeeSats,
+  })
+}
+
+async function onV2Probe(): Promise<void> {
+  if (!confirm('Broadcast a tiny version-2 (Chronicle) self-send to confirm the network accepts v2 txs? Costs only the miner fee.')) return
+  setStatus('Broadcasting v2 probe…')
+  try {
+    const txId = await broadcastV2Probe(provider, key)
+    setStatus(`✅ v2 tx accepted by broadcast: ${short(txId)}. Confirm it on WhatsOnChain.`, 'ok')
+  } catch (e) {
+    setStatus(`v2 probe rejected: ${(e as Error).message}`, 'error')
+  }
+}
+
+async function onMintEdition(): Promise<void> {
+  const name = val('edName')
+  if (!name) { setStatus('Enter an edition collection name.', 'error'); return }
+  const count = Math.max(1, parseInt(val('edCount') || '1', 10))
+  const terms = ownTerms()
+  setStatus('Minting edition collection (TX1 template + TX2 covenant editions)…')
+  try {
+    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count })
+    for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
+    renderTokens()
+    setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
+  } catch (e) {
+    setStatus(`Edition mint failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+async function onReplicate(t: StoredToken): Promise<void> {
+  if (!t.lockHex) { setStatus('Missing edition script; cannot replicate.', 'error'); return }
+  setStatus('Replicating edition (permissionless mint)…')
+  try {
+    const r = await replicateEdition(provider, key, {
+      editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex, terms: termsFromToken(t),
+    })
+    // The buyer's new replica is now ours (self-test); record it.
+    storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex },
+      t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
+    renderTokens()
+    setStatus(`✅ Replicated. Tx ${short(r.txId)} — token returned to holder, replica minted, fees paid.`, 'ok')
+  } catch (e) {
+    setStatus(`Replicate failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+async function onTransferEdition(t: StoredToken): Promise<void> {
+  const recipient = val('sendPubKey')
+  if (recipient.length !== 66 && recipient.length !== 130) {
+    setStatus("Enter the recipient's public key (33- or 65-byte hex) above.", 'error'); return
+  }
+  if (!t.lockHex) { setStatus('Missing edition script; cannot transfer.', 'error'); return }
+  setStatus('Transferring edition (owner-signed, re-creating covenant)…')
+  try {
+    const r = await transferEdition(provider, key, {
+      editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex,
+      newOwnerPubKey: Utils.toArray(recipient, 'hex'),
+    })
+    store.markSent(t.txId, t.outputIndex)
+    renderTokens()
+    setStatus(`✅ Transferred. Tx ${short(r.txId)} — covenant re-created for the new owner.`, 'ok')
+  } catch (e) {
+    setStatus(`Transfer failed: ${(e as Error).message}`, 'error')
   }
 }
 
@@ -235,26 +328,39 @@ function renderTokens(): void {
     const card = document.createElement('div')
     card.className = 'token'
     const stateText = t.stateData && t.stateData !== '00' ? safeUtf8(t.stateData) : ''
+    const isEdition = t.kind === 'edition'
     card.innerHTML = `
-      <div class="token-name">${escapeHtml(t.collectionName ?? 'Collection')}</div>
+      <div class="token-name">${escapeHtml(t.collectionName ?? 'Collection')}${isEdition ? ' <span class="badge">edition</span>' : ''}</div>
       <div class="mono">collection ${short(t.collectionId)}</div>
       <div class="mono">utxo ${short(t.txId)}:${t.outputIndex}</div>
       ${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ''}
     `
-    const send = document.createElement('button')
-    send.textContent = 'Send'
-    send.onclick = () => void onSend(t.txId, t.outputIndex)
     const verify = document.createElement('button')
     verify.textContent = 'Verify'
     verify.className = 'secondary'
     verify.onclick = () => void onVerify(t.txId, t.outputIndex)
-    const view = document.createElement('button')
-    view.textContent = 'View'
-    view.className = 'secondary'
-    view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Collection')
     const actions = document.createElement('div')
     actions.className = 'actions'
-    actions.append(send, verify, view)
+
+    if (isEdition) {
+      const replicate = document.createElement('button')
+      replicate.textContent = 'Replicate'
+      replicate.onclick = () => void onReplicate(t)
+      const xfer = document.createElement('button')
+      xfer.textContent = 'Transfer'
+      xfer.className = 'secondary'
+      xfer.onclick = () => void onTransferEdition(t)
+      actions.append(replicate, xfer, verify)
+    } else {
+      const send = document.createElement('button')
+      send.textContent = 'Send'
+      send.onclick = () => void onSend(t.txId, t.outputIndex)
+      const view = document.createElement('button')
+      view.textContent = 'View'
+      view.className = 'secondary'
+      view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Collection')
+      actions.append(send, verify, view)
+    }
     card.append(actions)
     host.append(card)
   }
@@ -275,6 +381,8 @@ function init(): void {
 
   $('btnRefresh').onclick = () => void refreshBalance()
   $('btnMint').onclick = () => void onMint()
+  $('btnV2Probe').onclick = () => void onV2Probe()
+  $('btnMintEdition').onclick = () => void onMintEdition()
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnNewWallet').onclick = () => {
     if (!confirm('Replace the current wallet with a new random key? Your current key is in the WIF box — back it up first.')) return
