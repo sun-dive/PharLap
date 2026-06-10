@@ -232,3 +232,38 @@ fetch TX1 once (cached per collection).
 is removed entirely. Phase 2 builds the field codec for these (no proof-chain/OP_RETURN-cargo codec needed);
 covenant enforcement and file-output construction land in later phases. NOTE: `PharLap/PLAN.md` (this file) is
 now the source-of-truth plan.
+
+---
+
+## Addendum D — Data layer (hybrid) + detection model [design 2026-06-10]
+
+**Goal context (user):** PHAR LAP (like MPT/SVphone) ships as **standalone HTML/JS apps** usable in a plain
+browser, shareable as links on Web2 sites, zero-install, simplest-possible UX for mint/share/buy/sell. This
+rules out **Level 2** (BRC-100 `WalletClient` → external wallet dependency).
+
+**Decision — hybrid data layer:**
+- Keep `walletProvider` (WoC) for the provider-bound pieces: **address-UTXO listing (funding), raw-tx fetch,
+  broadcast**. (Address-UTXO listing is inherently provider-bound in the raw-key model; the SDK's SPV layer
+  doesn't do address scanning.)
+- Use **@bsv/sdk `MerklePath` (BRC-74 BUMP) + a `ChainTracker`** (`defaultChainTracker()` / `WhatsOnChain`) for
+  **verification** — standard, swappable provider, less bespoke code, and BEEF-ready. Verify functions take a
+  `ChainTracker` so the source is pluggable (WoC now, ARC/overlay/local-headers later). Trust is unchanged:
+  proofs are verified against headers; the provider is not trusted.
+
+**Detection model — 1-sat P2PKH notification output (scan) + local tracking:** PushDrop token outputs
+(`<pubkey> OP_CHECKSIG <data> OP_DROP`) are non-standard and **NOT indexed by WoC under the owner's P2PKH
+address**, so MPT's raw "scan for the token output" doesn't find them. PHAR LAP preserves scan-based discovery
+with one indirection:
+- A transfer adds a small **P2PKH notification output (1 sat)** to the recipient's address (which IS
+  address-indexed) next to the PushDrop token. The recipient scans their address history → finds the notifying
+  tx → parses it for the token locked to their pubkey (`findOwnedTokenOutputs`) → verifies → records. (1 sat,
+  not 0: a 0-sat spendable output is non-standard/dust-rejected; OP_RETURN is 0-sat but not address-indexed.)
+- The wallet also keeps a **local store of its own token outpoints** (mints it makes / tokens it receives).
+- Notification is **default-on for sends, optional** (omit for the buyer-built covenant flow, for privacy, or
+  when sharing the tx out-of-band via link/BEEF). Sending requires the recipient's **public key** (P2P-K-style
+  lock), not just an address; the notify address is derived from the pubkey.
+- Funding (P2PKH change) IS WoC-address-indexed, so fee funding via `getSafeUtxos` is unaffected.
+
+This is a deliberate deviation from MPT's `checkIncomingTokens` address scan (recorded in
+docs/DEVIATIONS_FROM_MPT.md). **Level 2 (full BRC-100 wallet)** remains the eventual path for Metanet-app
+integration, where the wallet supplies outputs + BEEF proofs and WoC disappears.

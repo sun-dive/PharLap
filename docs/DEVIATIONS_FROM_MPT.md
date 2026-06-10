@@ -52,6 +52,33 @@ planned enhancement. Result: transfers are **minimal and constant-size forever**
 ## 7. Storage namespace
 localStorage key prefix changed from `mpt:` to `p:` (clean break — PHAR LAP does not read MPT tokens).
 
+## 8. Incoming detection: a 1-sat P2PKH notification output + local tracking
+PHAR LAP tokens are PushDrop outputs (`<pubkey> OP_CHECKSIG <data> OP_DROP`) — non-standard scripts that WoC does
+**not** index under a P2PKH address — so MPT's raw "scan my address for the token output" does not find them
+directly. PHAR LAP keeps discovery via one indirection: a transfer adds a small **P2PKH "notification" output**
+(1 sat) to the recipient's address (which IS address-indexed) alongside the PushDrop token. The recipient scans
+their address history, finds the notifying tx, parses that tx for the PushDrop token locked to their pubkey
+(`findOwnedTokenOutputs`), verifies it, and records it. The notification is the discoverable breadcrumb; the token
+rides in the spendable PushDrop.
+
+The notification is **1 sat** (not 0): a 0-sat *spendable* output is non-standard/dust-rejected on BSV, and the
+only 0-sat construct allowed (OP_RETURN) is not address-indexed, so it can't act as the breadcrumb. 1 sat is the
+minimum that is both standard and discoverable; the recipient owns it and can later sweep these notifications.
+
+Notification is **default-on for sends, optional** (omit for the buyer-built covenant flow or for privacy;
+out-of-band link/BEEF also works). Note: sending requires the recipient's **public key** (the lock is P2P-K-style),
+not just an address; the notification address is derived from that pubkey. Funding UTXOs (P2PKH change) are
+address-indexed as usual. (See PLAN.md Addendum D.)
+
+## 9. Verification via SDK MerklePath + ChainTracker (no new infrastructure)
+MPT used a bespoke TSC proof parser (`walletProvider.getMerkleProof`) + custom Merkle code in `tokenProtocol`.
+PHAR LAP verifies with **@bsv/sdk `MerklePath` (BRC-74 BUMP) + a pluggable `ChainTracker`**; raw-tx/UTXO/broadcast
+still go through `walletProvider` (WoC). The **default `ChainTracker` is WhatsOnChain-backed** — the same WoC we
+already call (it fetches a block header by height to check the merkle root, which our old code already did), so
+this adds **no extra service/node/overlay**. Verify functions take a `ChainTracker` so the proof/header source is
+*optionally* swappable later (WoC → ARC → overlay → local headers) without touching verification logic. Trust
+model is unchanged from MPT (WoC as header source; proofs are verified, the provider is not trusted).
+
 ---
 
 *Recorded during the PHAR LAP design sessions, 2026-06-10.*
