@@ -231,30 +231,27 @@ export async function createCollection(
     ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: params.file.bytes }
     : undefined
 
-  // Select funding to cover both txs' outputs + a realistic fee headroom (tx.fee() computes the
-  // exact fee afterwards; this only needs to pick enough UTXOs). TX1 carries any embedded file.
+  // Select funding to cover BOTH txs' outputs + fees (tx.fee() computes exact fees afterwards;
+  // selection just needs to pick enough UTXOs, and TX1 must leave enough change to fund TX2).
+  // TX1 carries any embedded file, so its fee scales with file size — keep a healthy margin so a
+  // large file never eats all the funding and starves the genesis mint.
   const numOutputs = 1 + (file ? 1 : 0) + mintCount
-  const estBytes = 700 + mintCount * 80 + (file ? file.fileBytes.length : 0)
-  const target = numOutputs * sats + Math.ceil((estBytes * feePerKb) / 1000) + 250
+  const tx1Bytes = 400 + (file ? file.fileBytes.length : 0)
+  const tx2Bytes = 300 + mintCount * 80
+  const estFee = Math.ceil(((tx1Bytes + tx2Bytes) * feePerKb) / 1000)
+  // Margin: 10% of the estimate (absorbs file-encoding overhead on big files) or 1000 sat, whichever larger.
+  const target = numOutputs * sats + estFee + Math.max(1000, Math.ceil(estFee * 0.1))
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding: FundingInput[] = await Promise.all(
     selected.map(async u => ({ utxo: u, sourceTx: await provider.getSourceTransaction(u.txId) })),
   )
 
-  // TX1: template (+ file)
+  // Build BOTH transactions offline first. Only broadcast once both succeed, so a failure (e.g.
+  // insufficient change for the genesis mint) never leaves an orphaned template tx on-chain.
   const t1 = await buildTemplateTx({ key, funding, template, file, outputSats: sats, feePerKb })
-  await provider.broadcast(t1.tx.toHex())
-  provider.registerPendingTx(
-    t1.tx1Id,
-    selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
-    t1.changeVout != null ? { outputIndex: t1.changeVout, satoshis: t1.changeSats } : undefined,
-  )
-
   if (t1.changeVout == null) {
-    throw new Error('TX1 left no change to fund the genesis mint; provide more funding')
+    throw new Error('Insufficient funding: the template tx left no change to fund the genesis mint. Add more funds.')
   }
-
-  // TX2: genesis mint, funded by TX1's change output
   const t2Funding: FundingInput[] = [
     {
       utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' },
@@ -270,6 +267,14 @@ export async function createCollection(
     outputSats: sats,
     feePerKb,
   })
+
+  // Both built — broadcast TX1 then TX2.
+  await provider.broadcast(t1.tx.toHex())
+  provider.registerPendingTx(
+    t1.tx1Id,
+    selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
+    { outputIndex: t1.changeVout, satoshis: t1.changeSats },
+  )
   await provider.broadcast(t2.tx.toHex())
   provider.registerPendingTx(
     t2.tx2Id,

@@ -186,3 +186,35 @@ test('createCollection WITH a file mints and TX1 carries a FILE output (regressi
   const tx1 = Transaction.fromHex(broadcasts[0])
   assert.equal(tx1.outputs.some(o => parseFileScript(o.lockingScript) != null), true)
 })
+
+test('createCollection mints ALL editions (multi-edition: 21) and broadcasts TX1 then TX2', async () => {
+  const key = PrivateKey.fromRandom()
+  const prev = new Transaction()
+  prev.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), satoshis: 100_000 })
+  const fb = new Transaction()
+  fb.addInput({ sourceTransaction: prev, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  fb.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), satoshis: 50_000 })
+  fb.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), change: true })
+  await fb.fee(new SatoshisPerKilobyte(100))
+  await fb.sign()
+  const fundingTx = Transaction.fromHex(fb.toHex())
+  const fundingId = fundingTx.id('hex')
+
+  const broadcasts: string[] = []
+  const provider: any = {
+    getUtxos: async () => [{ txId: fundingId, outputIndex: 0, satoshis: 50_000, script: '' }],
+    getSourceTransaction: async (id: string) => {
+      if (id === fundingId) return fundingTx
+      throw new Error(`unexpected getSourceTransaction(${id})`)
+    },
+    broadcast: async (hex: string) => { broadcasts.push(hex); return 'id' },
+    registerPendingTx: () => {},
+  }
+
+  const r = await createCollection(provider, key, { tokenName: 'Editions21', supply: 21, mintCount: 21 })
+  assert.equal(r.tokenOutpoints.length, 21)
+  assert.equal(broadcasts.length, 2) // TX1 then TX2, in order
+  const tx2 = Transaction.fromHex(broadcasts[1])
+  const tokenOuts = tx2.outputs.filter(o => parseTokenScript(o.lockingScript) != null)
+  assert.equal(tokenOuts.length, 21) // all 21 editions present in the genesis tx
+})
