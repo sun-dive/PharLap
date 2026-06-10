@@ -9,10 +9,11 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PrivateKey, Transaction, P2PKH, Spend } from '@bsv/sdk'
+import { PrivateKey, Transaction, P2PKH, Spend, SatoshisPerKilobyte } from '@bsv/sdk'
 import {
   buildTemplateTx,
   buildGenesisTx,
+  createCollection,
   getSafeUtxos,
   selectFunding,
   sha256Hex,
@@ -151,4 +152,37 @@ test('selectFunding covers the target and throws when insufficient', () => {
   assert.equal(picked.reduce((s, u) => s + u.satoshis, 0) >= 9500, true)
   assert.equal(picked[0].satoshis, 9000) // largest first
   assert.throws(() => selectFunding(utxos, 100_000), /Insufficient funds/)
+})
+
+test('createCollection WITH a file mints and TX1 carries a FILE output (regression: file.fileBytes)', async () => {
+  const key = PrivateKey.fromRandom()
+  // Realistic funding parsed from hex (inputs lack sourceTransaction), like a WoC fetch.
+  const prev = new Transaction()
+  prev.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), satoshis: 50_000 })
+  const fb = new Transaction()
+  fb.addInput({ sourceTransaction: prev, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  fb.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), satoshis: 20_000 })
+  fb.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), change: true })
+  await fb.fee(new SatoshisPerKilobyte(100))
+  await fb.sign()
+  const fundingTx = Transaction.fromHex(fb.toHex())
+  const fundingId = fundingTx.id('hex')
+
+  const broadcasts: string[] = []
+  const provider: any = {
+    getUtxos: async () => [{ txId: fundingId, outputIndex: 0, satoshis: 20_000, script: '' }],
+    getSourceTransaction: async (id: string) => {
+      if (id === fundingId) return fundingTx
+      throw new Error(`unexpected getSourceTransaction(${id})`)
+    },
+    broadcast: async (hex: string) => { broadcasts.push(hex); return 'id' },
+    registerPendingTx: () => {},
+  }
+
+  const file = { mimeType: 'image/png', fileName: 'art.png', bytes: [0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4] }
+  const r = await createCollection(provider, key, { tokenName: 'WithFile', supply: 1, mintCount: 1, file })
+  assert.equal(r.tokenOutpoints.length, 1)
+  // TX1 is the first broadcast; it must contain a FILE output.
+  const tx1 = Transaction.fromHex(broadcasts[0])
+  assert.equal(tx1.outputs.some(o => parseFileScript(o.lockingScript) != null), true)
 })

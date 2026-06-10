@@ -234,7 +234,7 @@ export async function createCollection(
   // Select funding to cover both txs' outputs + a realistic fee headroom (tx.fee() computes the
   // exact fee afterwards; this only needs to pick enough UTXOs). TX1 carries any embedded file.
   const numOutputs = 1 + (file ? 1 : 0) + mintCount
-  const estBytes = 700 + mintCount * 80 + (file ? file.bytes.length : 0)
+  const estBytes = 700 + mintCount * 80 + (file ? file.fileBytes.length : 0)
   const target = numOutputs * sats + Math.ceil((estBytes * feePerKb) / 1000) + 250
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding: FundingInput[] = await Promise.all(
