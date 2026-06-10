@@ -332,6 +332,25 @@ export function buildEditionLock(p: Omit<EditionParams, 'fieldPubkeyOffset'>): L
   return new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: varIntSize + O }))
 }
 
+/**
+ * Byte offset of the 33-byte owner pubkey within the edition locking script, for the canonical field
+ * layout (prefix/version/record are 1-byte: P(2)+ver(2)+record(2)+tx1Ref(33)+pushOpcode(1) = 40).
+ */
+export const EDITION_OWNER_SCRIPT_OFFSET = 40
+
+/** Return a copy of an edition locking script with the owner pubkey replaced (JS mirror of the in-script swap). */
+export function swapEditionOwner(lockBytes: number[], newOwnerPub: number[]): number[] {
+  if (newOwnerPub.length !== 33) throw new Error('swapEditionOwner: owner pubkey must be 33 bytes')
+  const out = [...lockBytes]
+  for (let i = 0; i < 33; i++) out[EDITION_OWNER_SCRIPT_OFFSET + i] = newOwnerPub[i]
+  return out
+}
+
+/** Extract the 33-byte owner pubkey from an edition locking script. */
+export function editionOwnerPubKey(lockBytes: number[]): number[] {
+  return lockBytes.slice(EDITION_OWNER_SCRIPT_OFFSET, EDITION_OWNER_SCRIPT_OFFSET + 33)
+}
+
 /** Unlock for a permissionless replicate (no signature): [ buyerChange, buyerPub, OP_0, preimage ]. */
 export function editionReplicateUnlockChunks(p: {
   buyerPubKey: number[]; buyerChange: number[]; preimage: number[]
