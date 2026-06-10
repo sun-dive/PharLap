@@ -52,6 +52,11 @@ export function serializeOutput(satoshis: number, scriptBytes: number[]): number
   return [...u64le(satoshis), ...varInt(scriptBytes.length), ...scriptBytes]
 }
 
+/** Standard 25-byte P2PKH locking script for a 20-byte pubkey hash. */
+export function p2pkhScript(hash20: number[]): number[] {
+  return [0x76, 0xa9, 0x14, ...hash20, 0x88, 0xac] // OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG
+}
+
 /**
  * Op fragment: consumes the verified preimage on top of the stack and leaves `hashOutputs` (32 bytes).
  * hashOutputs sits at preimage bytes [len-40, len-8): the trailing 52 bytes are
@@ -128,6 +133,68 @@ export function swapPubkeyOut0CovenantOps(fieldPubkeyOffset: number, tokenSats =
     pushData(u64le(tokenSats)), op(OP.OP_SWAP), op(OP.OP_CAT), // [ rest, hashOutputs, out0 ]
     op(OP.OP_ROT), op(OP.OP_CAT),                           // [ hashOutputs, out0‖rest ]
     op(OP.OP_HASH256), op(OP.OP_EQUAL),
+  ]
+}
+
+export interface ReplicateParams {
+  /** Offset of the 33-byte owner pubkey within the scriptCode FIELD (varIntSize(scriptLen) + offset-in-script). */
+  fieldPubkeyOffset: number
+  /** Satoshis on the token (and replica) outputs. Default 1. */
+  tokenSats?: number
+  /** 20-byte hash160 of the immutable creator address (fee recipient). */
+  creatorPubKeyHash: number[]
+  /** Fixed fees (sats). */
+  creatorFeeSats: number
+  holderFeeSats: number
+  c?: PushTxConstants
+}
+
+/**
+ * L4 — Addendum A "unlimited mints" replicate branch. Permissionlessly enforces (no holder signature):
+ *   out[0] token returned to the holder  (covenant re-created verbatim — same owner)
+ *   out[1] replica to the buyer          (covenant re-created with owner = buyer pubkey)
+ *   out[2] creator fee                   (P2PKH to the immutable creator address, fixed sats)
+ *   out[3] holder fee                    (P2PKH to the current holder, derived in-script from the owner pubkey)
+ *   out[4+] buyer change                 (spender-supplied)
+ *
+ * Stack on entry (top last): [ buyerChange, buyerPubKey, preimage ]. Leaves a boolean.
+ *
+ * NOTE: pair this with a SIGHASH_ANYONECANPAY|ALL|FORKID preimage in production so any buyer can add
+ * funding inputs without invalidating the holder's outpoint commitment. The output enforcement here is
+ * identical regardless of ANYONECANPAY.
+ */
+export function replicateBranchOps(p: ReplicateParams): ScriptChunk[] {
+  const c = p.c ?? pushTxConstants()
+  const VALUE1 = u64le(p.tokenSats ?? 1)
+  const OUT2 = serializeOutput(p.creatorFeeSats, p2pkhScript(p.creatorPubKeyHash)) // constant
+  const C3pre = [...u64le(p.holderFeeSats), 0x19, 0x76, 0xa9, 0x14] // value ‖ varint(25) ‖ OP_DUP OP_HASH160 PUSH20
+  const C3suf = [0x88, 0xac]                                        // OP_EQUALVERIFY OP_CHECKSIG
+  return [
+    ...pushTxVerifyOps(c),                                       // [ change, buyerPub, preimage ]
+    op(OP.OP_DUP),
+    ...extractHashOutputsOps(), op(OP.OP_TOALTSTACK),            // alt:[hashOutputs]; [ change, buyerPub, preimage ]
+    ...extractScriptCodeFieldOps(),                             // [ change, buyerPub, scFld ]
+    pushData(numLE(p.fieldPubkeyOffset)), op(OP.OP_SPLIT),      // [ change, buyerPub, pre, holderPub‖suffix ]
+    pushData([33]), op(OP.OP_SPLIT),                            // [ change, buyerPub, pre, holderPub, suffix ]
+    // out0 = VALUE1 ‖ pre ‖ holderPub ‖ suffix (token back to holder, verbatim)
+    pushData(VALUE1),
+    pushData([3]), op(OP.OP_PICK), op(OP.OP_CAT),               // ‖ pre
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_CAT),               // ‖ holderPub
+    pushData([1]), op(OP.OP_PICK), op(OP.OP_CAT),               // ‖ suffix → out0
+    // out1 = VALUE1 ‖ pre ‖ buyerPub ‖ suffix (replica to buyer)
+    pushData(VALUE1),
+    pushData([4]), op(OP.OP_PICK), op(OP.OP_CAT),               // ‖ pre
+    pushData([5]), op(OP.OP_PICK), op(OP.OP_CAT),               // ‖ buyerPub
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_CAT),               // ‖ suffix → out1
+    op(OP.OP_CAT),                                              // out0 ‖ out1
+    pushData(OUT2), op(OP.OP_CAT),                              // ‖ out2 (creator fee, constant)
+    pushData(C3pre), op(OP.OP_CAT),                            // ‖ holder-fee value+script-prefix
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_HASH160), op(OP.OP_CAT), // ‖ HASH160(holderPub)
+    pushData(C3suf), op(OP.OP_CAT),                            // ‖ holder-fee script-suffix → out3
+    pushData([5]), op(OP.OP_ROLL), op(OP.OP_CAT),             // ‖ buyerChange → expected
+    op(OP.OP_TOALTSTACK), op(OP.OP_2DROP), op(OP.OP_2DROP),   // stash expected; drop the 4 leftover pieces
+    op(OP.OP_FROMALTSTACK), op(OP.OP_HASH256),                // HASH256(expected)
+    op(OP.OP_FROMALTSTACK), op(OP.OP_EQUAL),                  // == hashOutputs
   ]
 }
 

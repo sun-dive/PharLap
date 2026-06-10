@@ -3,8 +3,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, LockingScript, UnlockingScript, Spend } from '@bsv/sdk'
 import { pushTxConstants, pushTxPreimage, pushData } from '../src/pushtx.ts'
-import { OP } from '@bsv/sdk'
-import { outputPrefixCovenantOps, selfReplicateCovenantOps, swapPubkeyOut0CovenantOps, serializeOutput } from '../src/covenant.ts'
+import { OP, Hash } from '@bsv/sdk'
+import {
+  outputPrefixCovenantOps, selfReplicateCovenantOps, swapPubkeyOut0CovenantOps,
+  replicateBranchOps, serializeOutput, p2pkhScript,
+} from '../src/covenant.ts'
 
 const creator = PrivateKey.fromRandom()
 const buyer = PrivateKey.fromRandom()
@@ -168,4 +171,88 @@ test('L3: rejects an output that keeps the old pubkey (no real swap)', () => {
   const oldPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
   const lock = buildL3Lock(l3FieldOffset(oldPub), oldPub)
   assert.throws(() => runSwap(lock.toBinary()))
+})
+
+// --- L4: full Addendum-A replicate branch (token + replica + creator fee + holder fee + change) ---
+const L4_PUBKEY_OFFSET = 1 // test layout: leading `0x21 <holderPub>` push, data at byte 1
+const CREATOR_FEE = 5000
+const HOLDER_FEE = 1000
+
+function buildL4Lock(F: number, holderPub: number[], creatorHash: number[]) {
+  return new LockingScript([
+    { op: holderPub.length, data: holderPub }, { op: OP.OP_DROP },
+    ...replicateBranchOps({
+      fieldPubkeyOffset: F, tokenSats: 1, creatorPubKeyHash: creatorHash,
+      creatorFeeSats: CREATOR_FEE, holderFeeSats: HOLDER_FEE, c: pushTxConstants(),
+    }),
+  ])
+}
+function l4FieldOffset(holderPub: number[], creatorHash: number[]): number {
+  const len = buildL4Lock(0, holderPub, creatorHash).toBinary().length
+  return (len < 253 ? 1 : len < 65536 ? 3 : 5) + L4_PUBKEY_OFFSET
+}
+
+interface L4Override { creatorFee?: number; holderFee?: number; out1Pub?: number[]; creatorHash?: number[] }
+function runReplicate(ov: L4Override = {}): boolean {
+  const holderPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
+  const buyerPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
+  const creatorHash = Hash.hash160(PrivateKey.fromRandom().toPublicKey().encode(true) as number[])
+  const lock = buildL4Lock(l4FieldOffset(holderPub, creatorHash), holderPub, creatorHash)
+  const lockBytes = lock.toBinary()
+
+  // Build the four enforced outputs (+ change) the covenant expects, applying any attacker overrides.
+  const out0 = lockBytes                                   // token back to holder (verbatim)
+  const out1 = [...lockBytes]                              // replica to buyer (pubkey swapped)
+  const rep = ov.out1Pub ?? buyerPub
+  for (let i = 0; i < 33; i++) out1[L4_PUBKEY_OFFSET + i] = rep[i]
+  const creatorScript = p2pkhScript(ov.creatorHash ?? creatorHash)
+  const holderScript = p2pkhScript(Hash.hash160(holderPub))
+  const changeScript = new P2PKH().lock(buyer.toAddress()).toBinary()
+
+  const src = new Transaction(); src.addOutput({ lockingScript: lock, satoshis: 1000 })
+  const sp = new Transaction(); sp.version = 2
+  sp.addInput({ sourceTransaction: src, sourceOutputIndex: 0, sequence: 0xffffffff })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(out0), satoshis: 1 })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(out1), satoshis: 1 })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(creatorScript), satoshis: ov.creatorFee ?? CREATOR_FEE })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(holderScript), satoshis: ov.holderFee ?? HOLDER_FEE })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(changeScript), satoshis: 500 })
+
+  const preimage = pushTxPreimage({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, sourceSatoshis: 1000,
+    transactionVersion: 2, inputIndex: 0, subscript: lock, outputs: sp.outputs,
+    inputSequence: 0xffffffff, lockTime: sp.lockTime,
+  })
+  const interp = new Spend({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, lockingScript: lock, sourceSatoshis: 1000,
+    transactionVersion: 2, otherInputs: [], inputIndex: 0, outputs: sp.outputs,
+    inputSequence: 0xffffffff, lockTime: sp.lockTime,
+    unlockingScript: new UnlockingScript([
+      pushData(serializeOutput(500, changeScript)), pushData(buyerPub), pushData(preimage),
+    ]),
+  })
+  return interp.validate()
+}
+
+test('L4: valid replicate — token, replica, creator fee, holder fee, change', () => {
+  assert.equal(runReplicate(), true)
+})
+
+test('L4: rejects short-paying the creator fee', () => {
+  assert.throws(() => runReplicate({ creatorFee: CREATOR_FEE - 1 }))
+})
+
+test('L4: rejects short-paying the holder fee', () => {
+  assert.throws(() => runReplicate({ holderFee: HOLDER_FEE - 1 }))
+})
+
+test('L4: rejects redirecting the creator fee to another address', () => {
+  const attacker = Hash.hash160(PrivateKey.fromRandom().toPublicKey().encode(true) as number[])
+  assert.throws(() => runReplicate({ creatorHash: attacker }))
+})
+
+test('L4: rejects a replica that does not carry the covenant forward', () => {
+  // Replica output uses a plain pubkey region that does not match the buyer key in the unlock.
+  const bogus = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
+  assert.throws(() => runReplicate({ out1Pub: bogus }))
 })
