@@ -86,6 +86,34 @@ test('buildTransferTx: notify=false omits the notification output; newStateData 
   assert.equal(parseTokenScript(xfer.tx.outputs[0].lockingScript)?.fields.stateData, 'cafe')
 })
 
+test('notifyCreator adds a 1-sat P2PKH to the creator (transfer tracking, opt-in)', async () => {
+  const minted = await mintToken()
+  const CREATOR_PUB = PrivateKey.fromRandom().toPublicKey().toString()
+  const xfer = await buildTransferTx({
+    key: SENDER,
+    tokenOutputIndex: 0,
+    tokenSourceTx: minted.tx,
+    recipientPubKeyHex: RECIP_PUB,
+    funding: [makeFunding(SENDER, 100_000)],
+    notifyCreator: true,
+    creatorPubKeyHex: CREATOR_PUB,
+  })
+  assert.ok(xfer.creatorNotifyVout != null)
+  assert.equal(xfer.tx.outputs[xfer.creatorNotifyVout].satoshis, 1)
+  const expected = new P2PKH().lock(PublicKey.fromString(CREATOR_PUB).toAddress()).toHex()
+  assert.equal(xfer.tx.outputs[xfer.creatorNotifyVout].lockingScript.toHex(), expected)
+
+  // Off by default (privacy).
+  const plain = await buildTransferTx({
+    key: SENDER,
+    tokenOutputIndex: 0,
+    tokenSourceTx: minted.tx,
+    recipientPubKeyHex: RECIP_PUB,
+    funding: [makeFunding(SENDER, 100_000)],
+  })
+  assert.equal(plain.creatorNotifyVout, null)
+})
+
 test('findOwnedTokenOutputs detects the recipient token in a transfer', async () => {
   const minted = await mintToken()
   const xfer = await buildTransferTx({

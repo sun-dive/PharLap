@@ -37,6 +37,8 @@ export interface TransferTxResult {
   txId: string
   recipientVout: number
   notifyVout: number | null
+  /** Index of the optional 1-sat creator-notification output (collection-tracking), or null. */
+  creatorNotifyVout: number | null
   changeVout: number | null
   changeSats: number
   tokenFields: TokenFields
@@ -52,6 +54,14 @@ export async function buildTransferTx(opts: {
   newStateData?: string
   /** Add a 1-sat P2PKH notification output to the recipient's address. Default true. */
   notify?: boolean
+  /**
+   * Add a 1-sat P2PKH notification to the creator's address so the creator can track the
+   * current holder (RESTRICTION_TRACK_TRANSFERS / Addendum E). Requires creatorPubKeyHex.
+   * Off by default — private unless the collection opts into tracking.
+   */
+  notifyCreator?: boolean
+  /** Creator's public key (the TX1 template lock key); required when notifyCreator is set. */
+  creatorPubKeyHex?: string
   outputSats?: number
   feePerKb?: number
 }): Promise<TransferTxResult> {
@@ -95,6 +105,17 @@ export async function buildTransferTx(opts: {
     tx.addOutput({ lockingScript: new P2PKH().lock(recipientAddress), satoshis: 1 })
   }
 
+  // Optional: 1-sat P2PKH notification to the creator (collection transfer-tracking).
+  let creatorNotifyVout: number | null = null
+  if (opts.notifyCreator) {
+    if (opts.creatorPubKeyHex == null) {
+      throw new Error('buildTransferTx: notifyCreator requires creatorPubKeyHex')
+    }
+    const creatorAddress = PublicKey.fromString(opts.creatorPubKeyHex).toAddress()
+    creatorNotifyVout = tx.outputs.length
+    tx.addOutput({ lockingScript: new P2PKH().lock(creatorAddress), satoshis: 1 })
+  }
+
   const changeVout = tx.outputs.length
   tx.addOutput({ lockingScript: new P2PKH().lock(address), change: true })
 
@@ -107,6 +128,7 @@ export async function buildTransferTx(opts: {
     txId: tx.id('hex'),
     recipientVout,
     notifyVout,
+    creatorNotifyVout,
     changeVout: changeSats > 0 ? changeVout : null,
     changeSats,
     tokenFields,
@@ -122,6 +144,8 @@ export async function createTransfer(
     recipientPubKeyHex: string
     newStateData?: string
     notify?: boolean
+    notifyCreator?: boolean
+    creatorPubKeyHex?: string
     outputSats?: number
     feePerKb?: number
   },
@@ -140,6 +164,8 @@ export async function createTransfer(
     funding,
     newStateData: opts.newStateData,
     notify: opts.notify,
+    notifyCreator: opts.notifyCreator,
+    creatorPubKeyHex: opts.creatorPubKeyHex,
     outputSats: opts.outputSats,
     feePerKb: opts.feePerKb,
   })

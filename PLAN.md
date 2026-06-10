@@ -141,6 +141,16 @@ copy ("edition") **without any interaction from the current holder's wallet**.
   deep-walk.
 - These tokens are **heavier** (the covenant script must travel in every output — no immutable-field
   omission saving from the transfer-size analysis).
+- **Fee outputs are P2PKH and double as discovery breadcrumbs.** The replication tx pays the creator fee and
+  the holder fee as **P2PKH** outputs (to `hash160(pubkey)`, address-indexed) — NOT P2P-K. The covenant reads the
+  holder's pubkey from its own `scriptCode` and `OP_HASH160`es it to build the holder-fee P2PKH; the creator
+  address comes from TX1's committed creator pubkey. Because these are address-indexed payments, the **seller**
+  discovers their returned token (and the **creator** discovers royalties) via the normal `scanIncoming` flow —
+  the holder fee tx appears in the seller's address history, then `findOwnedTokenOutputs` finds the returned
+  token. So the permissionless-replication flow needs **no extra notification output** (the buyer built the tx
+  and already knows the replica's outpoint). Edge case: this relies on a non-zero holder fee (always true in this
+  design — "every holder is a paid cloning source"); if a collection ever set `holderFee = 0`, add a 1-sat
+  notification to the holder to preserve discoverability.
 
 ---
 
@@ -267,3 +277,39 @@ with one indirection:
 This is a deliberate deviation from MPT's `checkIncomingTokens` address scan (recorded in
 docs/DEVIATIONS_FROM_MPT.md). **Level 2 (full BRC-100 wallet)** remains the eventual path for Metanet-app
 integration, where the wallet supplies outputs + BEEF proofs and WoC disappears.
+
+---
+
+## Addendum E — Creator↔holder messaging + transfer tracking (later feature; hooks reserved) [design 2026-06-10]
+
+Use case: a creator mints tokenized content, sells editions (permissionless replication), and later wants to
+reach holders (announcements, airdrops, loyalty, direct messages). Two complementary models:
+
+- **Broadcast (pull / private):** the creator publishes a message ONCE, anchored to the collection's creator
+  pubkey (the TX1 lock key). Any **current** holder polls the creator's address for `RECORD_MESSAGE` records
+  referencing their collection. Reaches current owners regardless of free transfers, flat cost, and the creator
+  need not know who the holders are.
+- **Targeted / per-holder (push):** the creator sends a (1-sat P2PKH + payload) to specific holders. Requires
+  knowing each holder's **pubkey** — which the creator learns from (a) royalty payments revealing original
+  buyers' replica outputs, and (b) **transfer notifications** for current holders (below). Enables encrypted DMs.
+
+**Encryption:** because tokens lock to **pubkeys**, the creator learns each holder's pubkey and can **ECIES-encrypt**
+a message to it (only the holder's privkey decrypts). `@bsv/sdk` has ECIES. Messages may be public or encrypted.
+
+**Transfer tracking (creator-notify) — per-collection, opt-in, private by default.** Ordinary transfers are
+fee-free and invisible to the creator, so the royalty list reflects original buyers, not current owners. To let
+the creator track **current** holders, a transfer can add a **1-sat P2PKH notification to the creator's address**
+(creator pubkey = TX1 lock key); the creator scans their address → sees every transfer → reads the new owner's
+pubkey. This makes the collection **creator-tracked** (creator sees the ownership graph) — a deliberate privacy
+trade, so it is the **creator's explicit choice at mint** via the `RESTRICTION_TRACK_TRANSFERS` rules bit
+(visible to buyers before they buy). Private by default; for covenant collections it can later be *enforced* by
+the covenant's transfer branch, for plain ones it is a wallet convention.
+
+**Hooks reserved now (no full feature yet):**
+- `tokenCodec`: `RECORD_MESSAGE = 0x04`; `RESTRICTION_TRACK_TRANSFERS = 0x0004` (+ `decodeTokenRules().isTracked`).
+- `transfer.buildTransferTx`/`createTransfer`: optional `notifyCreator` + `creatorPubKeyHex` → adds the 1-sat
+  creator notification (`creatorNotifyVout`). Off by default.
+- ECIES for encrypted messages: deferred to the messaging phase (SDK provides it).
+
+Deferred: the announcement/pull channel, the message record format (plaintext + ECIES), and covenant-enforced
+tracking. Reserving the bits/record-type now keeps both models open without committing to either.

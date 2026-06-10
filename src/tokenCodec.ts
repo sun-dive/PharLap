@@ -29,10 +29,15 @@ export const P_VERSION = 0x03
 export const RECORD_TEMPLATE = 0x01
 export const RECORD_TOKEN = 0x02
 export const RECORD_FILE = 0x03
+/** Reserved for creator↔holder messages / announcements (encrypted or public). See PLAN.md Addendum E. */
+export const RECORD_MESSAGE = 0x04
 
 /** tokenRules restrictions bitfield. */
 export const RESTRICTION_FUNGIBLE = 0x0001 // interchangeable amounts (satoshis = units)
 export const RESTRICTION_REPLICABLE = 0x0002 // "unlimited mints" edition-replication covenant active
+/** Reserved: transfers report to the creator (1-sat creator notification) so the creator can track
+ *  current holders. Creator's explicit, visible choice at mint; private by default. See PLAN.md Addendum E. */
+export const RESTRICTION_TRACK_TRANSFERS = 0x0004
 
 // ─── Byte / hex / utf8 helpers ──────────────────────────────────────
 
@@ -258,6 +263,8 @@ export interface DecodedTokenRules {
   isFungible: boolean
   isReplicable: boolean
   isUnlimited: boolean
+  /** Transfers report to the creator (RESTRICTION_TRACK_TRANSFERS) — reserved, see Addendum E. */
+  isTracked: boolean
 }
 
 export function decodeTokenRules(rulesHex: string): DecodedTokenRules {
@@ -273,6 +280,7 @@ export function decodeTokenRules(rulesHex: string): DecodedTokenRules {
     isFungible: (restrictions & RESTRICTION_FUNGIBLE) !== 0,
     isReplicable: (restrictions & RESTRICTION_REPLICABLE) !== 0,
     isUnlimited: supply === 0,
+    isTracked: (restrictions & RESTRICTION_TRACK_TRANSFERS) !== 0,
   }
 }
 
