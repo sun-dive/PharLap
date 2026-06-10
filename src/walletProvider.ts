@@ -103,48 +103,44 @@ export class WalletProvider {
   // ── Wallet Operations (UTXO model) ─────────────────────────────
 
   /**
-   * Get UTXOs combining confirmed (from WoC) with local pending UTXOs.
+   * Get spendable UTXOs from WoC's mempool-aware `/unspent/all` endpoint.
    *
-   * v05.22: Enables consecutive transfers by including unconfirmed change
-   * outputs and excluding locally-spent outpoints.
+   * This endpoint returns BOTH confirmed and unconfirmed UTXOs (so funding can be spent
+   * before it confirms), and flags outputs already spent by a mempool tx
+   * (`isSpentInMempoolTx`) — which we exclude so we never build a `txn-mempool-conflict`
+   * double-spend, even across page reloads (WoC is the source of truth for mempool spends).
+   *
+   * Local `pendingUtxos`/`spentOutpoints` remain as a short-window supplement covering the
+   * lag between our own broadcast and WoC reflecting it.
    */
   async getUtxos(): Promise<Utxo[]> {
     const address = this.getAddress()
-    const resp = await fetchWithRetry(`${WOC_BASE}/address/${address}/unspent`)
+    const resp = await fetchWithRetry(`${WOC_BASE}/address/${address}/unspent/all`)
     if (!resp.ok) throw new Error(`WoC UTXO fetch failed: ${resp.status}`)
     const data = await resp.json()
+    // /unspent/all returns { result: [...] }; tolerate a bare array too.
+    const rows: any[] = Array.isArray(data?.result) ? data.result : (Array.isArray(data) ? data : [])
 
-    // Start with confirmed UTXOs from WoC
-    const confirmed: Utxo[] = Array.isArray(data)
-      ? data.map((u: any) => ({
-          txId: u.tx_hash as string,
-          outputIndex: u.tx_pos as number,
-          satoshis: u.value as number,
-          script: '',
-        }))
-      : []
+    // Include confirmed + unconfirmed, but never a UTXO already spent in the mempool.
+    const onchain: Utxo[] = rows
+      .filter((u: any) => u.isSpentInMempoolTx !== true)
+      .map((u: any) => ({
+        txId: u.tx_hash as string,
+        outputIndex: u.tx_pos as number,
+        satoshis: u.value as number,
+        script: '',
+      }))
 
-    // Filter out confirmed UTXOs that we've already spent locally
-    const filtered = confirmed.filter(u => {
-      const key = `${u.txId}:${u.outputIndex}`
-      return !this.spentOutpoints.has(key)
-    })
+    const isSpent = (u: { txId: string; outputIndex: number }) =>
+      this.spentOutpoints.has(`${u.txId}:${u.outputIndex}`)
 
-    // Remove pending UTXOs that are now confirmed (they'll be in the filtered list)
-    for (const u of confirmed) {
-      const key = `${u.txId}:${u.outputIndex}`
-      if (this.pendingUtxos.has(key)) {
-        this.pendingUtxos.delete(key)
-        console.debug(`getUtxos: Pending UTXO ${key.slice(0, 16)}... now confirmed`)
-      }
-    }
+    // Drop pending entries WoC now reports; exclude anything we've spent locally.
+    for (const u of onchain) this.pendingUtxos.delete(`${u.txId}:${u.outputIndex}`)
+    const confirmed = onchain.filter(u => !isSpent(u))
+    const pending = Array.from(this.pendingUtxos.values()).filter(u => !isSpent(u))
 
-    // Add remaining pending UTXOs (not yet confirmed)
-    const pending = Array.from(this.pendingUtxos.values())
-
-    const combined = [...filtered, ...pending]
-    console.debug(`getUtxos: ${confirmed.length} confirmed, ${this.spentOutpoints.size} spent locally, ${pending.length} pending = ${combined.length} available`)
-    return combined
+    console.debug(`getUtxos: ${onchain.length} on-chain (mempool-aware), ${this.spentOutpoints.size} spent locally, ${pending.length} pending = ${confirmed.length + pending.length} available`)
+    return [...confirmed, ...pending]
   }
 
   /**
