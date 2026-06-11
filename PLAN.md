@@ -394,3 +394,58 @@ ciphertext is forever decryptable; viewing new permissionless purchases depends 
 
 **Status:** design reserved; depends on the covenant (Addendum A, editions) + key-delivery (Addendum E messaging
 or a simple HTTP service). Server required — acknowledged and non-blocking (needed anyway for shareable links).
+
+### Addendum F — REFINED: the three delivery tiers, watermarking, and the honest security model [2026-06-11]
+
+The "chosen model" above is essentially Tier 2/3 below. After mapping the full spectrum with the user, the
+**root constraint** is the anchor for everything: **BSV Script cannot decrypt**, so you can never enforce "holds
+the token ⟹ the chain hands over K" on-chain. Gating K *always* requires a live party (a server or a person's
+wallet). Remove the live party and K must be sitting somewhere readable. Corollary (the chicken-and-egg of
+passive flows): in a *fully passive permissionless replicate* the key **cannot be per-recipient encrypted** —
+buyer B replicating from holder A can't read a key ECIES-locked to A, so the wrap must be unwrappable by *every*
+holder via a shared method the wallet carries… and the wallet is open-source, so that method is **public**.
+Therefore "wrapped" in a passive design = **shared obfuscation**, never real per-recipient crypto.
+
+**Tier 1 — passive, no server, shared-K + obfuscated wrap (lightest; K exposed-in-principle).** One per-collection
+`K`; AES-GCM ciphertext stored on-chain (its own tx). `wrappedK` = `K` *encoded/obfuscated* (never raw bytes; a
+shared unwrap method) delivered to each owner via the **1-sat RECORD_MESSAGE key-part** (Addendum E) — kept in a
+**separate tx from the content ciphertext**. Propagates through permissionless replicate by copying the wrapped
+blob forward (no live party). Defeats casual block-explorer copy-paste, but a coder reads the open-source unwrap
+and extracts `K` in minutes → the *real* security is **economic, not cryptographic**: (a) content priced below
+the bother-cost of extracting, and (b) the **resale incentive** (Addendum A royalties make legit replication
+profitable, so leaking sabotages a market the holder benefits from). Tx-separation + non-raw encoding = casual
+friction only. The user's chosen v1 shape, and it needs no new infra (messaging is built).
+
+**Tier 2 — live sender, no *dedicated* server, real per-recipient ECIES (private, needs availability).** The
+creator's or a holder's online wallet delivers `wrappedK = ECIES(K, buyerPub)` per buyer (RECORD_MESSAGE key-part,
+or `stateData` on a wallet-mediated transfer). `K` is *not* exposed on-chain (ciphertext to one recipient). Cost:
+someone must be online to respond; not instant/permissionless. A strict upgrade over Tier 1, reachable today.
+
+**Tier 3 — server, per-buyer WATERMARK + encryption, content OFF-chain (the polished product).** Content leaves
+the chain; the chain becomes the **trustless purchase receipt** (the edition mint / replicate + creator-fee). A
+**"keyless-except-content"** server watches the chain read-only, verifies the buyer paid, **watermarks the
+plaintext per-buyer**, encrypts (to the buyer's pubkey), and serves for immediate download. Creator *signing* key
+stays cold; the server now holds the **master content** (the asset to protect). **Critical distinction:** per-buyer
+*encryption* ≠ per-buyer *watermark*. Encryption protects transit/at-rest + binds to identity, but the *decrypted*
+plaintext is byte-identical → untraceable once shared. A *watermark* makes each buyer's plaintext unique → a
+leaked plaintext fingerprints the leaker. **Rule: watermark the plaintext, then encrypt.** Watermark = the
+deterrent; encryption = transport. (Visible "Licensed to X" stamp = simple + survives re-encode; forensic/steg =
+stronger, more work. Fast for docs/images, heavy for video.)
+
+**The honest ceiling (all tiers — trusted-client / analog-hole):** on general-purpose hardware, *any legitimate
+recipient* can extract `K` and the plaintext (a modified or instrumented wallet reads `K` the instant it
+decrypts). So the tiers do **not** differ in "is it copyable" (it always is, by whoever legitimately receives K).
+They differ in **who can get K casually** (Tier 1: anyone reading the chain, no purchase; Tier 2/3: only paying
+buyers) and **whether leaks are traceable** (Tier 3 watermark). The only ways to *not* hand the user K are
+server-side-render-only (still screen-capturable) or hardware DRM (TEE/Widevine — out of scope, still beatable).
+Realistic goal stays: **tie access to a purchase, kill casual chain-scraping, make leaks traceable and
+economically irrational** — "an inconvenience, not DRM."
+
+**Cross-tier moat (the genuinely novel bit):** trustless on-chain purchase proof + (Tier 3) traceable watermark +
+the **resale incentive** = leaking is *cheap to avoid* (just buy), *traceable to me*, and *self-sabotaging* (kills
+my own royalty stream). That flips DRM from punish-only to reward-the-honest-path — most schemes lack the carrot.
+
+**Phasing:** Tier 1 buildable now (no new infra; AES-GCM the file + a key-part message + a shared encode). Tier 2
+reachable now (creator-active messaging). Tier 3 = the eventual product (needs the server that shareable links /
+large files need anyway). Pair any tier with **per-buyer watermarking** for traceability. Primitives: `SymmetricKey`
+(AES-GCM), `ECIES`, `Random`; RECORD_MESSAGE key-part (Addendum E) for Tier 1/2 delivery; off-chain HTTP for Tier 3.
