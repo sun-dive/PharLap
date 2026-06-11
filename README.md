@@ -11,7 +11,8 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
 > The permissionless **"unlimited mints" edition covenant** is now built and **validated on mainnet** —
 > mint, permissionless replicate (confirmed in a block), and owner-signed transfer all work, hand-rolled
 > on `@bsv/sdk` with no external smart-contract toolchain. **Encrypted, authenticated on-chain
-> messaging** (text / files / content keys) is also working.
+> messaging** (text / files / content keys) and optional **Tier-1 encrypted content** (gate an embedded
+> file to token holders — an inconvenience, not DRM) are also working.
 >
 > **New here? Read [`docs/OVERVIEW.md`](./docs/OVERVIEW.md)** — a plain-language functional tour. See
 > `PLAN.md` for the full design and `docs/DEVIATIONS_FROM_MPT.md` for how it differs from MPT.
@@ -32,6 +33,11 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
 - **Messaging.** Send encrypted, authenticated (ECIES) on-chain messages to any pubkey — a typed payload
   carrying text, a file (bonus content), and/or a content key. The same record shape as a token
   (`[P, version, RECORD_MESSAGE, ref, envelope]`); the delivery layer the encrypted-content feature builds on.
+- **Encrypted content (Tier 1, optional).** An embedded file can be AES-GCM encrypted under a per-collection
+  key; the ciphertext lives on-chain (hash-bound) and the key travels obfuscated in the TX1 template, so any
+  holder — including a permissionless replica's buyer — decrypts it with no server. The wrap is a casual
+  speed-bump, not security; the real protection is economic (price + the resale incentive). "An inconvenience,
+  not DRM." See `docs/OVERVIEW.md`.
 - **1-byte protocol prefix** `"P"` (`0x50`), format version `0x03`.
 
 ## Toolchain
@@ -64,6 +70,7 @@ src/
   pushtx.ts            hand-rolled optimal OP_PUSH_TX primitive (tx introspection in script)
   covenant.ts          unlimited-mints edition covenant (build + parse the locking script)
   editionBuilder.ts    edition genesis / replicate / transfer + discovery, over the covenant
+  contentCrypto.ts     Tier-1 encrypted content (AES-GCM file + obfuscated per-collection key wrap)
   messageCodec.ts      message envelope: typed TLV payload (text/key/file) + authenticated ECIES
   messageBuilder.ts    send / scan on-chain messages (delivered like a transfer)
   walletProvider.ts    WhatsOnChain client (UTXOs, raw tx, broadcast, headers)
