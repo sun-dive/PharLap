@@ -149,7 +149,8 @@ async function onMintEdition(): Promise<void> {
   const terms = ownTerms()
   setStatus('Minting edition collection (TX1 template + TX2 covenant editions)…')
   try {
-    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count })
+    const file = await readFile($('edFile') as HTMLInputElement)
+    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
     renderTokens()
     setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
@@ -371,7 +372,11 @@ function renderTokens(): void {
       xfer.textContent = 'Transfer'
       xfer.className = 'secondary'
       xfer.onclick = () => void onTransferEdition(t)
-      actions.append(replicate, xfer, verify)
+      const view = document.createElement('button')
+      view.textContent = 'View'
+      view.className = 'secondary'
+      view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Edition')
+      actions.append(replicate, xfer, view, verify)
     } else {
       const send = document.createElement('button')
       send.textContent = 'Send'

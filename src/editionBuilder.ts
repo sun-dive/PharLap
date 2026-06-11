@@ -27,7 +27,7 @@ import {
   editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE, parseEditionScript,
 } from './covenant.ts'
 import {
-  PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, type FundingInput,
+  PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
 } from './collectionBuilder.ts'
 import { encodeTokenRules, RESTRICTION_REPLICABLE } from './tokenCodec.ts'
 import type { WalletProvider, Utxo } from './walletProvider.ts'
@@ -311,6 +311,8 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   mintCount?: number
   ownerPubKey?: number[]
   stateData?: number[]
+  /** Optional file embedded (hash-bound) in TX1, viewable by token holders. */
+  file?: { mimeType: string; fileName: string; bytes: number[] }
   feePerKb?: number
 }): Promise<CreateEditionResult> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
@@ -329,11 +331,15 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     tokenName: params.tokenName,
     tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE, 1), // supply 0 = unlimited / replicable
     covenantScript: Utils.toHex(templateLock.toBinary()),
+    fileHash: params.file ? sha256Hex(params.file.bytes) : undefined,
   }
+  const file = params.file
+    ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: params.file.bytes }
+    : undefined
 
-  // Fund both txs. TX2 edition outputs are ~770 bytes each; keep a healthy margin.
+  // Fund both txs. TX1 carries any embedded file, so its fee scales with file size; keep a healthy margin.
   const editionBytes = 800
-  const tx1Bytes = 500 + templateLock.toBinary().length
+  const tx1Bytes = 500 + templateLock.toBinary().length + (file ? file.fileBytes.length : 0)
   const tx2Bytes = 300 + mintCount * editionBytes
   const estFee = Math.ceil(((tx1Bytes + tx2Bytes) * feePerKb) / 1000)
   const target = (1 + mintCount) * tokenSats + estFee + Math.max(1000, Math.ceil(estFee * 0.2))
@@ -341,7 +347,7 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   const funding = await toFundingInputs(provider, selected)
 
   // Build both offline, broadcast only if both succeed (no orphaned template).
-  const t1 = await buildTemplateTx({ key, funding, template, outputSats: tokenSats, feePerKb })
+  const t1 = await buildTemplateTx({ key, funding, template, file, outputSats: tokenSats, feePerKb })
   if (t1.changeVout == null) throw new Error('Insufficient funding: template tx left no change to fund the edition mint.')
   const t2Funding: FundingInput[] = [{
     utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' },
