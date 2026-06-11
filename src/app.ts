@@ -15,6 +15,8 @@ import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
 import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionScript } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
+import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
+import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
 import { parseTemplateScript, parseFileScript } from './tokenCodec.ts'
@@ -214,6 +216,69 @@ async function onSend(txId: string, outputIndex: number): Promise<void> {
     setStatus(`Sent. Transfer tx ${short(result.txId)} (recipient notified at output ${result.notifyVout}).`, 'ok')
   } catch (e) {
     setStatus(`Send failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+// ─── messaging ──────────────────────────────────────────────────────
+async function onSendMessage(): Promise<void> {
+  const to = val('msgTo')
+  if (to.length !== 66 && to.length !== 130) {
+    setStatus("Enter the recipient's public key (33- or 65-byte hex).", 'error'); return
+  }
+  const text = ($('msgText') as HTMLTextAreaElement).value
+  const encrypt = ($('msgEncrypt') as HTMLInputElement).checked
+  const file = await readFile($('msgFile') as HTMLInputElement)
+  const parts: Part[] = []
+  if (text.trim()) parts.push({ kind: 'text', text })
+  if (file) parts.push({ kind: 'file', mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes })
+  if (parts.length === 0) { setStatus('Write a message or attach a file first.', 'error'); return }
+  setStatus(`Sending ${encrypt ? 'encrypted' : 'public'} message…`)
+  try {
+    const r = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt })
+    ;($('msgText') as HTMLTextAreaElement).value = ''
+    setStatus(`Message sent. Tx ${short(r.txId)}.`, 'ok')
+  } catch (e) {
+    setStatus(`Send message failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+async function onCheckMessages(): Promise<void> {
+  setStatus('Checking for messages…')
+  try {
+    const msgs = await scanIncomingMessages(provider, key)
+    renderInbox(msgs)
+    setStatus(`Inbox: ${msgs.length} message(s).`, 'ok')
+  } catch (e) {
+    setStatus(`Check messages failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+function renderInbox(msgs: IncomingMessage[]): void {
+  const host = $('inbox')
+  if (msgs.length === 0) { host.innerHTML = '<p class="muted">No messages found.</p>'; return }
+  host.innerHTML = ''
+  for (const m of msgs) {
+    const card = document.createElement('div')
+    card.className = 'token'
+    const textPart = m.parts.find(p => p.kind === 'text')
+    const hasKey = m.parts.some(p => p.kind === 'key')
+    const filePart = m.parts.find(p => p.kind === 'file')
+    card.innerHTML = `
+      <div class="mono">from ${short(m.senderPubKeyHex)} ${m.encrypted ? '🔒 encrypted' : '🌐 public'}</div>
+      ${textPart && textPart.kind === 'text' ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ''}
+      ${hasKey ? '<div class="muted" style="font-size:12px">🔑 carries a content key</div>' : ''}
+    `
+    if (filePart && filePart.kind === 'file') {
+      const btn = document.createElement('button')
+      btn.textContent = `View ${filePart.fileName}`
+      btn.className = 'secondary'
+      btn.onclick = () => showFile('Message attachment', { mimeType: filePart.mimeType, fileName: filePart.fileName, fileBytes: filePart.bytes }, true)
+      const actions = document.createElement('div')
+      actions.className = 'actions'
+      actions.append(btn)
+      card.append(actions)
+    }
+    host.append(card)
   }
 }
 
@@ -419,6 +484,8 @@ function init(): void {
   $('btnV2Probe').onclick = () => void onV2Probe()
   $('btnMintEdition').onclick = () => void onMintEdition()
   $('btnIncoming').onclick = () => void onCheckIncoming()
+  $('btnSendMessage').onclick = () => void onSendMessage()
+  $('btnCheckMessages').onclick = () => void onCheckMessages()
   $('btnNewWallet').onclick = () => {
     if (!confirm('Replace the current wallet with a new random key? Your current key is in the WIF box — back it up first.')) return
     const k = PrivateKey.fromRandom()

@@ -17,6 +17,9 @@
     label { display:block; font-size:12px; color:var(--muted); margin: 8px 0 3px; }
     input { background:#0d1117; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:8px 10px; font:inherit; width:100%; }
     input[type=file] { padding:6px; }
+    textarea { background:#0d1117; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:8px 10px; font:inherit; width:100%; min-height:64px; resize:vertical; }
+    .check { display:flex; align-items:center; gap:8px; margin:8px 0 3px; font-size:13px; color:var(--fg); }
+    .check input { width:auto; }
     button { background:var(--accent); color:#04140a; border:0; border-radius:6px; padding:8px 14px; font:inherit; font-weight:600; cursor:pointer; }
     button.secondary { background:#21262d; color:var(--fg); border:1px solid var(--line); }
     button:hover { filter:brightness(1.08); }
@@ -112,6 +115,23 @@
       <div class="row" style="margin:10px 0"><button id="btnIncoming" class="secondary">Check incoming</button></div>
       <div id="tokens"></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Enter a recipient public key above, then click <b>Send</b> on the token you want to transfer.</p>
+    </div>
+
+    <h2>Messages</h2>
+    <div class="card">
+      <label>Recipient public key</label>
+      <input id="msgTo" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
+      <label>Message</label>
+      <textarea id="msgText" placeholder="Write a note… (e.g. a thank-you, an announcement, an unlock)"></textarea>
+      <label>Attach a file (optional bonus content)</label>
+      <input id="msgFile" type="file" />
+      <label class="check"><input id="msgEncrypt" type="checkbox" checked /> Encrypt to the recipient (authenticated)</label>
+      <div class="row" style="margin-top:10px">
+        <button id="btnSendMessage">Send message</button>
+        <button id="btnCheckMessages" class="secondary">Check messages</button>
+      </div>
+      <div id="inbox" style="margin-top:12px"></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Messages are delivered on-chain to the recipient's pubkey (encrypted by default). A message can carry text, a file, or a content key — the basis for paid encrypted content.</p>
     </div>
   </div>
 
