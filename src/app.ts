@@ -219,20 +219,26 @@ async function onSend(txId: string, outputIndex: number): Promise<void> {
 
 // ─── check incoming ─────────────────────────────────────────────────
 async function onCheckIncoming(): Promise<void> {
-  setStatus('Scanning address history for incoming tokens…')
+  setStatus('Scanning for incoming tokens and editions…')
+  let added = 0
+  let edAdded = 0
+  const errors: string[] = []
+
+  // Plain PushDrop tokens.
   try {
     const incoming = await scanIncoming(provider, pubKeyHex)
-    let added = 0
     for (const t of incoming) {
-      // Verify lineage (structure + anchor) before recording.
       const tx = await provider.getSourceTransaction(t.txId)
       const v = await verifyTokenLineage(tx, t.outputIndex, { getRawTransaction: id => provider.getSourceTransaction(id) })
       if (!v.valid) continue
       if (store.add({ txId: t.txId, outputIndex: t.outputIndex, collectionId: t.fields.tx1Ref, stateData: t.fields.stateData })) added++
     }
-    // Editions are covenant outputs (not address-indexed); find them via the transfer notification breadcrumb.
+  } catch (e) { errors.push(`tokens: ${(e as Error).message}`) }
+
+  // Edition covenant outputs (not address-indexed) — found via the transfer notification breadcrumb.
+  // Run independently so a plain-scan failure can't block it.
+  try {
     const editions = await scanIncomingEditions(provider, pubKeyHex)
-    let edAdded = 0
     for (const e of editions) {
       if (store.add({
         txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: 'Edition',
@@ -240,10 +246,13 @@ async function onCheckIncoming(): Promise<void> {
         creatorFeeSats: e.terms.creatorFeeSats, holderFeeSats: e.terms.holderFeeSats,
       })) edAdded++
     }
-    renderTokens()
-    setStatus(`Scan complete: ${added} token(s) + ${edAdded} edition(s) new.`, 'ok')
-  } catch (e) {
-    setStatus(`Scan failed: ${(e as Error).message}`, 'error')
+  } catch (e) { errors.push(`editions: ${(e as Error).message}`) }
+
+  renderTokens()
+  if (errors.length > 0 && added === 0 && edAdded === 0) {
+    setStatus(`Scan failed — ${errors.join('; ')}`, 'error')
+  } else {
+    setStatus(`Scan complete: ${added} token(s) + ${edAdded} edition(s) new.${errors.length ? ' (' + errors.join('; ') + ')' : ''}`, 'ok')
   }
 }
 

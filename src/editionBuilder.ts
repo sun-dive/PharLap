@@ -476,11 +476,14 @@ export interface IncomingEdition {
 export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: string): Promise<IncomingEdition[]> {
   const mine = pubKeyHex.toLowerCase()
   const found: IncomingEdition[] = []
-  const seenTx = new Set<string>()
   const seenOutpoint = new Set<string>()
-  for (const { txId } of await provider.getAddressHistory()) {
-    if (seenTx.has(txId)) continue
-    seenTx.add(txId)
+  // Candidate txs: confirmed address history PLUS the txids of current address UTXOs. The latter is
+  // mempool-aware (getUtxos includes unconfirmed), so the 1-sat transfer notification surfaces the
+  // carrying tx immediately, before it confirms — matching the plain-token scanIncoming.
+  const candidateTxIds = new Set<string>()
+  try { for (const { txId } of await provider.getAddressHistory()) candidateTxIds.add(txId) } catch { /* best-effort */ }
+  try { for (const u of await provider.getUtxos()) candidateTxIds.add(u.txId) } catch { /* best-effort */ }
+  for (const txId of candidateTxIds) {
     let tx: Transaction
     try { tx = await provider.getSourceTransaction(txId) } catch { continue }
     tx.outputs.forEach((o, i) => {
