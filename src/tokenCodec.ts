@@ -127,6 +127,57 @@ export function parseTokenScript(
   return { ownerPubKeyHex: d.pubKeyHex, fields }
 }
 
+// ─── MESSAGE record (Messaging v1) ──────────────────────────────────
+// A message is a PushDrop output locked to the RECIPIENT's pubkey, structurally a twin of a token:
+// [P, version, RECORD_MESSAGE, ref(32), envelope]. The `ref` mirrors `tx1Ref` (context: collection id
+// or thread-root txid, or 32 zero bytes for a standalone DM); the `envelope` mirrors `stateData` and
+// carries the typed payload (see messageCodec).
+
+export interface MessageFields {
+  /** Context reference (32-byte hex): collection id / thread-root txid, or 64 zeros for a standalone DM. */
+  ref: string
+  /** The message envelope bytes (header + body; built/opened by messageCodec). */
+  envelope: number[]
+}
+
+export function encodeMessageFields(data: MessageFields): number[][] {
+  return [
+    P_PREFIX,
+    [P_VERSION],
+    [RECORD_MESSAGE],
+    hexToBytes(data.ref),
+    data.envelope,
+  ]
+}
+
+export function decodeMessageFields(fields: number[][]): MessageFields | null {
+  if (fields.length < 5) return null
+  if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null
+  if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
+  if (fields[2].length !== 1 || fields[2][0] !== RECORD_MESSAGE) return null
+  if (fields[3].length !== 32) return null // ref must be a 32-byte value
+  return {
+    ref: bytesToHex(fields[3]),
+    envelope: fields[4],
+  }
+}
+
+/** Build a message PushDrop locking script, locked to the RECIPIENT's public key. */
+export function buildMessageScript(recipientPubKeyHex: string, data: MessageFields): LockingScript {
+  return pushDropLock(recipientPubKeyHex, encodeMessageFields(data))
+}
+
+/** Parse a message PushDrop output → recipient pubkey + message fields, or null. */
+export function parseMessageScript(
+  script: LockingScript,
+): { recipientPubKeyHex: string; fields: MessageFields } | null {
+  const d = pushDropDecode(script)
+  if (d == null) return null
+  const fields = decodeMessageFields(d.fields)
+  if (fields == null) return null
+  return { recipientPubKeyHex: d.pubKeyHex, fields }
+}
+
 // ─── TEMPLATE record (TX1) ──────────────────────────────────────────
 
 export interface TemplateFields {
