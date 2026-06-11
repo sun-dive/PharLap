@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PHAR LAP — wallet</title>
+  <style>
+    :root { --bg:#0e1116; --card:#171c24; --line:#2a3340; --fg:#e6edf3; --muted:#8b98a8; --accent:#3fb950; --accent2:#388bfd; --err:#f85149; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 24px 16px 64px; }
+    h1 { margin: 0 0 2px; font-size: 24px; letter-spacing: .5px; }
+    h1 small { color: var(--muted); font-weight: 400; font-size: 13px; display:block; letter-spacing: 0; }
+    h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 24px 0 8px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    label { display:block; font-size:12px; color:var(--muted); margin: 8px 0 3px; }
+    input { background:#0d1117; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:8px 10px; font:inherit; width:100%; }
+    input[type=file] { padding:6px; }
+    button { background:var(--accent); color:#04140a; border:0; border-radius:6px; padding:8px 14px; font:inherit; font-weight:600; cursor:pointer; }
+    button.secondary { background:#21262d; color:var(--fg); border:1px solid var(--line); }
+    button:hover { filter:brightness(1.08); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; word-break:break-all; color:var(--muted); }
+    .kv { margin:6px 0; }
+    .kv b { color:var(--muted); font-weight:500; font-size:12px; display:block; }
+    .muted { color:var(--muted); }
+    .status { position:sticky; top:0; background:#0d1117; border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:13px; min-height:20px; }
+    .status.ok { border-color:var(--accent); }
+    .status.error { border-color:var(--err); color:#ffb4ae; }
+    .grid2 { display:grid; grid-template-columns:1fr 120px; gap:8px; }
+    .token { border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:8px; background:#0d1117; }
+    .token-name { font-weight:600; margin-bottom:4px; }
+    .token .state { color:var(--accent); font-size:12px; margin-top:4px; }
+    .token .actions { margin-top:8px; display:flex; gap:6px; }
+    .token .actions button { padding:5px 12px; font-size:13px; }
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:flex; align-items:center; justify-content:center; padding:24px; z-index:10; }
+    .modal-box { background:var(--card); border:1px solid var(--line); border-radius:10px; max-width:92vw; max-height:92vh; overflow:auto; padding:16px; }
+    .modal-head { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:12px; font-size:12px; color:var(--muted); }
+    .viewer-img { max-width:100%; max-height:74vh; border-radius:6px; display:block; }
+    .viewer-pre { white-space:pre-wrap; word-break:break-word; max-height:74vh; overflow:auto; background:#0d1117; padding:12px; border-radius:6px; font-size:12px; }
+    .viewer-dl { color:var(--accent2); }
+    .badge { font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:var(--accent2); color:#04122a; padding:1px 6px; border-radius:10px; vertical-align:middle; }
+    .warn { border-color:#9e6a03; }
+    .warn h2 { color:#e3a008; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>PHAR LAP <small>Peer-to-peer · Hashing · Algorithm · Replication · Ledger · Authentication · Protocol</small></h1>
+
+    <div id="status" class="status">Loading…</div>
+
+    <h2>Wallet</h2>
+    <div class="card">
+      <div class="kv"><b>Address</b><span id="address" class="mono"></span></div>
+      <div class="kv"><b>Public key (give this to senders)</b><span id="pubkey" class="mono"></span></div>
+      <div class="kv"><b>Balance</b><span id="balance" class="mono">—</span></div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnRefresh" class="secondary">Refresh balance</button>
+        <button id="btnCopyPub" class="secondary">Copy public key</button>
+        <button id="btnNewWallet" class="secondary">New wallet</button>
+      </div>
+      <label>WIF (private key — back this up)</label>
+      <input id="wif" readonly />
+      <label>Restore from WIF</label>
+      <div class="grid2">
+        <input id="restoreWif" placeholder="L… / K… WIF" />
+        <button id="btnRestore" class="secondary">Restore</button>
+      </div>
+    </div>
+
+    <h2>Mint a collection</h2>
+    <div class="card">
+      <label>Collection name</label>
+      <input id="mintName" placeholder="e.g. My Tokenized Content" />
+      <label>Editions to mint</label>
+      <input id="mintCount" type="number" min="1" value="1" />
+      <label>Embed a file (optional)</label>
+      <input id="mintFile" type="file" />
+      <div class="row" style="margin-top:10px"><button id="btnMint">Mint collection</button></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Creates TX1 (template, the Collection ID) then TX2 (genesis editions). Requires funds on your address.</p>
+    </div>
+
+    <h2>Editions — unlimited mints (experimental covenant)</h2>
+    <div class="card warn">
+      <p class="muted" style="font-size:12px;margin:0 0 8px">
+        Miner-enforced covenant tokens (OP_PUSH_TX). <b>Experimental — small-value mainnet only.</b>
+        First confirm the network accepts version-2 (Chronicle) transactions:
+      </p>
+      <div class="row" style="margin-bottom:10px"><button id="btnV2Probe" class="secondary">Test v2 broadcast</button></div>
+      <label>Edition collection name</label>
+      <input id="edName" placeholder="e.g. My eBook (unlimited editions)" />
+      <div class="grid2" style="grid-template-columns:1fr 1fr">
+        <div><label>Creator fee (sat)</label><input id="edCreatorFee" type="number" min="0" value="5000" /></div>
+        <div><label>Holder fee (sat)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>
+      </div>
+      <label>Editions to mint now</label>
+      <input id="edCount" type="number" min="1" value="1" />
+      <label>Embed a file (optional — viewable by holders)</label>
+      <input id="edFile" type="file" />
+      <div class="row" style="margin-top:10px"><button id="btnMintEdition">Mint edition collection</button></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">
+        Any buyer can later <b>Replicate</b> an edition (returns the token to the holder, mints their own copy,
+        pays both fees). <b>Transfer</b> moves it owner-signed, re-creating the covenant.
+      </p>
+    </div>
+
+    <h2>My tokens</h2>
+    <div class="card">
+      <label>Recipient public key (for Send)</label>
+      <input id="sendPubKey" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
+      <div class="row" style="margin:10px 0"><button id="btnIncoming" class="secondary">Check incoming</button></div>
+      <div id="tokens"></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Enter a recipient public key above, then click <b>Send</b> on the token you want to transfer.</p>
+    </div>
+  </div>
+
+  <div id="viewer" class="modal" style="display:none">
+    <div class="modal-box">
+      <div class="modal-head"><span id="viewerTitle" class="mono"></span><button id="viewerClose" class="secondary">✕ Close</button></div>
+      <div id="viewerContent"></div>
+    </div>
+  </div>
+
+  <script src="./bundle.js"></script>
+</body>
+</html>

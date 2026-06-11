@@ -1,0 +1,19 @@
+{
+  "name": "pharlap",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "PHAR LAP — Peer-to-peer Hashing Algorithm Replication Ledger Authentication Protocol. A PushDrop-based BSV token wallet (derived from MPT v05.24).",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node serve.mjs",
+    "dev": "node serve.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@bsv/sdk": "^2.1.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "esbuild": "^0.21.0"
+  }
+}

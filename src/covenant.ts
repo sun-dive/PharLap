@@ -1,0 +1,443 @@
+// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+/**
+ * PHAR LAP — miner-enforced covenant scripts, built on the OP_PUSH_TX primitive (`./pushtx`).
+ *
+ * The covenant verifies the spending transaction's sighash preimage in-script (so it is provably
+ * genuine), then reads `hashOutputs` from the preimage and forces the spending tx to contain a
+ * specific set of outputs — by reconstructing those outputs and asserting
+ * `HASH256(reconstructed) == hashOutputs`. The spender may append arbitrary trailing outputs
+ * (their own change), which they supply in the unlocking script; they cannot alter the enforced
+ * prefix.
+ *
+ * Layers (built incrementally, each validated against the @bsv/sdk 2.x `Spend` interpreter):
+ *   L1 — enforce a fixed-bytes output prefix + spender-supplied trailing outputs.  ← this file
+ *   L2 — reconstruct the "token returned to holder" output from the script's own bytes (quine).
+ *   L3 — reconstruct the buyer's replica output (same covenant, buyer's pubkey substituted).
+ *   L4 — creator-fee + holder-fee P2PKH outputs (Addendum A edition-mint layout).
+ *   L5 — transfer/replicate branching + wiring into tokenCodec/collectionBuilder.
+ */
+import { OP, LockingScript, Utils, type ScriptChunk } from '@bsv/sdk'
+import { pushTxVerifyOps, pushData, type PushTxConstants, pushTxConstants } from './pushtx.ts'
+
+const op = (code: number): ScriptChunk => ({ op: code })
+
+/** Little-endian 8-byte satoshi amount. */
+export function u64le(n: number): number[] {
+  const out: number[] = []
+  let v = n
+  for (let i = 0; i < 8; i++) { out.push(v & 0xff); v = Math.floor(v / 256) }
+  return out
+}
+
+/** Minimal little-endian script-number encoding of a non-negative integer (for OP_SPLIT indices). */
+export function numLE(n: number): number[] {
+  if (n === 0) return []
+  const out: number[] = []
+  let v = n
+  while (v > 0) { out.push(v & 0xff); v = Math.floor(v / 256) }
+  if ((out[out.length - 1] & 0x80) !== 0) out.push(0x00)
+  return out
+}
+
+/** Bitcoin var-int (CompactSize). */
+export function varInt(n: number): number[] {
+  if (n < 0xfd) return [n]
+  if (n <= 0xffff) return [0xfd, n & 0xff, (n >> 8) & 0xff]
+  if (n <= 0xffffffff) return [0xfe, n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >> 24) & 0xff]
+  throw new Error('varInt: value too large')
+}
+
+/** Serialize a tx output exactly as it appears inside hashOutputs: value(8 LE) ‖ varint(len) ‖ script. */
+export function serializeOutput(satoshis: number, scriptBytes: number[]): number[] {
+  return [...u64le(satoshis), ...varInt(scriptBytes.length), ...scriptBytes]
+}
+
+/** Standard 25-byte P2PKH locking script for a 20-byte pubkey hash. */
+export function p2pkhScript(hash20: number[]): number[] {
+  return [0x76, 0xa9, 0x14, ...hash20, 0x88, 0xac] // OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG
+}
+
+/**
+ * Op fragment: consumes the verified preimage on top of the stack and leaves `hashOutputs` (32 bytes).
+ * hashOutputs sits at preimage bytes [len-40, len-8): the trailing 52 bytes are
+ * value(8) ‖ nSequence(4) ‖ hashOutputs(32) ‖ nLocktime(4) ‖ sighashType(4).
+ */
+export function extractHashOutputsOps(): ScriptChunk[] {
+  return [
+    op(OP.OP_SIZE), pushData([40]), op(OP.OP_SUB), op(OP.OP_SPLIT), op(OP.OP_NIP), // tail 40 bytes
+    pushData([32]), op(OP.OP_SPLIT), op(OP.OP_DROP),                               // first 32 = hashOutputs
+  ]
+}
+
+/**
+ * Op fragment: consumes the verified preimage and leaves the `scriptCode` FIELD (varint(len) ‖ script).
+ * That field is exactly the `varint(scriptLen) ‖ script` portion of an output serialization, so it can
+ * be concatenated straight after an 8-byte value to rebuild "an output paying this same script".
+ *
+ * Preimage layout: version(4) ‖ hashPrevouts(32) ‖ hashSequence(32) ‖ outpoint(36) ‖ scriptCodeField
+ * ‖ value(8) ‖ nSequence(4) ‖ hashOutputs(32) ‖ nLocktime(4) ‖ sighashType(4). So the field is bytes
+ * [104, len-52) — a fixed prefix (104) and a fixed suffix (52), independent of script length and of
+ * whether ANYONECANPAY zeroed the prevout/sequence hashes (still 32 bytes each).
+ */
+export function extractScriptCodeFieldOps(): ScriptChunk[] {
+  return [
+    pushData([104]), op(OP.OP_SPLIT), op(OP.OP_NIP),                                  // drop 104-byte prefix
+    op(OP.OP_SIZE), pushData([52]), op(OP.OP_SUB), op(OP.OP_SPLIT), op(OP.OP_DROP),   // drop 52-byte suffix
+  ]
+}
+
+/**
+ * L2 self-replicating ("quine") covenant. Stack on entry: [ spenderOutputs, preimage ].
+ * Forces output[0] to pay `tokenSats` to the SAME script that is currently executing (extracted from
+ * the preimage's scriptCode — no second copy embedded), then `spenderOutputs` for the rest. Leaves a
+ * boolean. A token under this covenant can only be spent into a copy of itself.
+ */
+export function selfReplicateCovenantOps(tokenSats = 1, c: PushTxConstants = pushTxConstants()): ScriptChunk[] {
+  return [
+    ...pushTxVerifyOps(c),            // [ spenderOutputs, preimage ]
+    op(OP.OP_DUP),                    // [ spenderOutputs, preimage, preimage ]
+    ...extractHashOutputsOps(),       // [ spenderOutputs, preimage, hashOutputs ]
+    op(OP.OP_SWAP),                   // [ spenderOutputs, hashOutputs, preimage ]
+    ...extractScriptCodeFieldOps(),   // [ spenderOutputs, hashOutputs, scriptCodeField ]
+    pushData(u64le(tokenSats)), op(OP.OP_SWAP), op(OP.OP_CAT), // [ .., hashOutputs, out0 = value ‖ field ]
+    op(OP.OP_ROT), op(OP.OP_CAT),     // [ hashOutputs, out0 ‖ spenderOutputs ]
+    op(OP.OP_HASH256), op(OP.OP_EQUAL),
+  ]
+}
+
+/**
+ * L3 pubkey-substitution covenant. Re-creates the covenant in output[0] but with the 33-byte owner
+ * pubkey replaced by one supplied in the unlocking script — the basis for a buyer's replica (owner =
+ * buyer) and for an enforced transfer (owner = recipient).
+ *
+ * `fieldPubkeyOffset` is the byte offset of the owner pubkey *within the scriptCode field*
+ * (= varIntSize(scriptLen) + offset-of-pubkey-within-the-script); the caller computes it from the
+ * token's layout. Swapping a 33-byte key for another leaves the script length — and thus the varint —
+ * unchanged, so we mutate the field in place.
+ *
+ * Stack on entry (top last): [ spenderOutputs, newOwnerPubKey, preimage ]. Leaves a boolean.
+ */
+export function swapPubkeyOut0CovenantOps(fieldPubkeyOffset: number, tokenSats = 1, c: PushTxConstants = pushTxConstants()): ScriptChunk[] {
+  return [
+    ...pushTxVerifyOps(c),                                  // [ rest, newPub, preimage ]
+    op(OP.OP_DUP),
+    ...extractHashOutputsOps(),                             // [ rest, newPub, preimage, hashOutputs ]
+    op(OP.OP_SWAP),                                         // [ rest, newPub, hashOutputs, preimage ]
+    ...extractScriptCodeFieldOps(),                         // [ rest, newPub, hashOutputs, scFld ]
+    pushData(numLE(fieldPubkeyOffset)), op(OP.OP_SPLIT),    // [ .., pre, oldPub‖suffix ]
+    pushData([33]), op(OP.OP_SPLIT), op(OP.OP_NIP),         // [ .., pre, suffix ]  (drop oldPub)
+    op(OP.OP_TOALTSTACK),                                   // alt:[suffix];  [ rest, newPub, hashOutputs, pre ]
+    op(OP.OP_2), op(OP.OP_ROLL),                            // [ rest, hashOutputs, pre, newPub ]
+    op(OP.OP_CAT),                                          // [ rest, hashOutputs, pre‖newPub ]
+    op(OP.OP_FROMALTSTACK), op(OP.OP_CAT),                  // [ rest, hashOutputs, modifiedField ]
+    pushData(u64le(tokenSats)), op(OP.OP_SWAP), op(OP.OP_CAT), // [ rest, hashOutputs, out0 ]
+    op(OP.OP_ROT), op(OP.OP_CAT),                           // [ hashOutputs, out0‖rest ]
+    op(OP.OP_HASH256), op(OP.OP_EQUAL),
+  ]
+}
+
+export interface ReplicateParams {
+  /** Offset of the 33-byte owner pubkey within the scriptCode FIELD (varIntSize(scriptLen) + offset-in-script). */
+  fieldPubkeyOffset: number
+  /** Satoshis on the token (and replica) outputs. Default 1. */
+  tokenSats?: number
+  /** 20-byte hash160 of the immutable creator address (fee recipient). */
+  creatorPubKeyHash: number[]
+  /** Fixed fees (sats). */
+  creatorFeeSats: number
+  holderFeeSats: number
+  c?: PushTxConstants
+}
+
+/**
+ * L4 — Addendum A "unlimited mints" replicate branch. Permissionlessly enforces (no holder signature):
+ *   out[0] token returned to the holder  (covenant re-created verbatim — same owner)
+ *   out[1] replica to the buyer          (covenant re-created with owner = buyer pubkey)
+ *   out[2] creator fee                   (P2PKH to the immutable creator address, fixed sats)
+ *   out[3] holder fee                    (P2PKH to the current holder, derived in-script from the owner pubkey)
+ *   out[4+] buyer change                 (spender-supplied)
+ *
+ * Stack on entry (top last): [ buyerChange, buyerPubKey, preimage ]. Leaves a boolean.
+ *
+ * NOTE: pair this with a SIGHASH_ANYONECANPAY|ALL|FORKID preimage in production so any buyer can add
+ * funding inputs without invalidating the holder's outpoint commitment. The output enforcement here is
+ * identical regardless of ANYONECANPAY.
+ */
+/**
+ * Shared covenant prefix (runs once, before any branch). Verifies the preimage, stashes hashOutputs
+ * on the alt stack, extracts the scriptCode field, and splits it at the owner-pubkey offset into the
+ * three reusable pieces. Stack on entry: [ ..., preimage ]. On exit: [ ..., pre, ownerPub, suffix ]
+ * with alt = [ hashOutputs ]. `pre` = scriptCode field up to the owner pubkey; `suffix` = the rest.
+ */
+export function covenantPrefixOps(fieldPubkeyOffset: number, c: PushTxConstants = pushTxConstants()): ScriptChunk[] {
+  return [
+    ...pushTxVerifyOps(c),
+    op(OP.OP_DUP),
+    ...extractHashOutputsOps(), op(OP.OP_TOALTSTACK),       // alt:[hashOutputs]
+    ...extractScriptCodeFieldOps(),                         // [ ..., scFld ]
+    pushData(numLE(fieldPubkeyOffset)), op(OP.OP_SPLIT),    // [ ..., pre, ownerPub‖suffix ]
+    pushData([33]), op(OP.OP_SPLIT),                        // [ ..., pre, ownerPub, suffix ]
+  ]
+}
+
+/**
+ * Replicate tail (Addendum A). Stack on entry: [ buyerChange, buyerPub, pre, ownerPub, suffix ],
+ * alt = [ hashOutputs ]. Enforces out[0] token→holder (verbatim), out[1] replica→buyer (owner swapped),
+ * out[2] creator fee, out[3] holder fee, out[4+] buyerChange. Leaves a boolean.
+ */
+export function replicateTailOps(p: {
+  tokenSats?: number; creatorPubKeyHash: number[]; creatorFeeSats: number; holderFeeSats: number
+}): ScriptChunk[] {
+  const VALUE1 = u64le(p.tokenSats ?? 1)
+  const OUT2 = serializeOutput(p.creatorFeeSats, p2pkhScript(p.creatorPubKeyHash)) // constant
+  const C3pre = [...u64le(p.holderFeeSats), 0x19, 0x76, 0xa9, 0x14] // value ‖ varint(25) ‖ OP_DUP OP_HASH160 PUSH20
+  const C3suf = [0x88, 0xac]                                        // OP_EQUALVERIFY OP_CHECKSIG
+  return [
+    // out0 = VALUE1 ‖ pre ‖ ownerPub ‖ suffix (token back to holder, verbatim)
+    pushData(VALUE1),
+    pushData([3]), op(OP.OP_PICK), op(OP.OP_CAT),
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_CAT),
+    pushData([1]), op(OP.OP_PICK), op(OP.OP_CAT),
+    // out1 = VALUE1 ‖ pre ‖ buyerPub ‖ suffix (replica to buyer)
+    pushData(VALUE1),
+    pushData([4]), op(OP.OP_PICK), op(OP.OP_CAT),
+    pushData([5]), op(OP.OP_PICK), op(OP.OP_CAT),
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_CAT),
+    op(OP.OP_CAT),                                              // out0 ‖ out1
+    pushData(OUT2), op(OP.OP_CAT),                              // ‖ out2 (creator fee, constant)
+    pushData(C3pre), op(OP.OP_CAT),
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_HASH160), op(OP.OP_CAT), // ‖ HASH160(ownerPub)
+    pushData(C3suf), op(OP.OP_CAT),                            // → out3 (holder fee)
+    pushData([5]), op(OP.OP_ROLL), op(OP.OP_CAT),             // ‖ buyerChange → expected
+    op(OP.OP_TOALTSTACK), op(OP.OP_2DROP), op(OP.OP_2DROP),   // stash expected; drop 4 leftover pieces
+    op(OP.OP_FROMALTSTACK), op(OP.OP_HASH256),
+    op(OP.OP_FROMALTSTACK), op(OP.OP_EQUAL),
+  ]
+}
+
+/**
+ * Transfer tail (owner-signed, enforced). Stack on entry:
+ * [ change, newOwnerPub, ownerSig, pre, ownerPub, suffix ], alt = [ hashOutputs ].
+ * Verifies the current owner authorized the move (OP_CHECKSIGVERIFY against the extracted ownerPub),
+ * then forces out[0] to re-create the covenant with owner = newOwnerPub (value preserved), out[1+] change.
+ */
+export function transferTailOps(p: { tokenSats?: number }): ScriptChunk[] {
+  const VALUE1 = u64le(p.tokenSats ?? 1)
+  return [
+    // authenticate current owner: <ownerSig> <ownerPub> OP_CHECKSIGVERIFY
+    pushData([1]), op(OP.OP_PICK),                 // copy ownerPub
+    pushData([4]), op(OP.OP_PICK),                 // copy ownerSig
+    op(OP.OP_SWAP), op(OP.OP_CHECKSIGVERIFY),
+    // out0 = VALUE1 ‖ pre ‖ newOwnerPub ‖ suffix
+    pushData(VALUE1),
+    pushData([3]), op(OP.OP_PICK), op(OP.OP_CAT),  // ‖ pre
+    pushData([5]), op(OP.OP_PICK), op(OP.OP_CAT),  // ‖ newOwnerPub
+    pushData([1]), op(OP.OP_PICK), op(OP.OP_CAT),  // ‖ suffix → out0
+    pushData([6]), op(OP.OP_ROLL), op(OP.OP_CAT),  // ‖ change → expected
+    op(OP.OP_TOALTSTACK), op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_DROP), // drop 5 leftover pieces
+    op(OP.OP_FROMALTSTACK), op(OP.OP_HASH256),
+    op(OP.OP_FROMALTSTACK), op(OP.OP_EQUAL),
+  ]
+}
+
+/** Standalone replicate covenant (L4 test/reference): prefix + replicate tail. Entry [change, buyerPub, preimage]. */
+export function replicateBranchOps(p: ReplicateParams): ScriptChunk[] {
+  return [...covenantPrefixOps(p.fieldPubkeyOffset, p.c ?? pushTxConstants()), ...replicateTailOps(p)]
+}
+
+// --- L5: the real edition token (data fields + transfer/replicate branches) ---
+
+/** SIGHASH used for the covenant's OP_PUSH_TX introspection: ANYONECANPAY|ALL|FORKID (0xc1). */
+export const EDITION_SCOPE = 0xc1
+/** Record type byte for a covenant edition token (0x01-0x04 are TEMPLATE/TOKEN/FILE/MESSAGE). */
+export const RECORD_EDITION = 0x05
+
+/** Serialized byte length of a minimal-length-prefixed data push (matches `pushData`). */
+function serializedPushLen(data: number[]): number {
+  if (data.length < 76) return 1 + data.length
+  if (data.length < 256) return 2 + data.length
+  if (data.length < 65536) return 3 + data.length
+  return 5 + data.length
+}
+
+export interface EditionFields {
+  /** Protocol prefix, default [0x50] ("P"). */
+  prefix?: number[]
+  /** Format version, default [0x03]. */
+  version?: number[]
+  /** Collection id = TX1 txid (32 bytes). */
+  tx1Ref: number[]
+  /** 33-byte compressed owner pubkey. */
+  ownerPubKey: number[]
+  /** Mutable per-token state (cloned verbatim into replicas). */
+  stateData: number[]
+}
+
+export interface EditionParams extends EditionFields {
+  tokenSats?: number
+  /** 20-byte hash160 of the immutable creator fee address. */
+  creatorPubKeyHash: number[]
+  creatorFeeSats: number
+  holderFeeSats: number
+  /** Offset of the owner pubkey within the scriptCode field (use buildEditionLock to compute it). */
+  fieldPubkeyOffset: number
+  c?: PushTxConstants
+}
+
+/** Edition data-field chunks in canonical order: [P, version, RECORD_EDITION, tx1Ref, ownerPubKey, stateData]. */
+function editionFieldChunks(f: EditionFields): ScriptChunk[] {
+  return [
+    pushData(f.prefix ?? [0x50]),
+    pushData(f.version ?? [0x03]),
+    pushData([RECORD_EDITION]),
+    pushData(f.tx1Ref),
+    pushData(f.ownerPubKey),
+    pushData(f.stateData),
+  ]
+}
+
+/**
+ * Full edition-token locking script ops:
+ *   <6 data fields> OP_2DROP OP_2DROP OP_2DROP   (carry token metadata on-chain, then clear the stack)
+ *   <shared covenant prefix>                     (verify preimage; extract hashOutputs + scriptCode pieces)
+ *   <selector> OP_IF <transfer tail> OP_ELSE <replicate tail> OP_ENDIF
+ * Use `buildEditionLock` instead of calling this directly — it computes `fieldPubkeyOffset` for you.
+ */
+export function editionLockOps(p: EditionParams): ScriptChunk[] {
+  const c = p.c ?? pushTxConstants(EDITION_SCOPE)
+  return [
+    ...editionFieldChunks(p),
+    op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_2DROP),
+    ...covenantPrefixOps(p.fieldPubkeyOffset, c),
+    pushData([3]), op(OP.OP_ROLL),                          // bring the branch selector to the top
+    op(OP.OP_IF),
+    ...transferTailOps({ tokenSats: p.tokenSats }),
+    op(OP.OP_ELSE),
+    ...replicateTailOps(p),
+    op(OP.OP_ENDIF),
+  ]
+}
+
+/**
+ * Build the edition-token locking script, computing the owner-pubkey offset from the field layout.
+ * The owner pubkey sits before the variable-length stateData, so its offset is constant for a
+ * collection. (Two-pass: the offset push is the same byte-width whether the script is being probed
+ * or finalised, so the length used to size the scriptCode varint is stable.)
+ */
+export function buildEditionLock(p: Omit<EditionParams, 'fieldPubkeyOffset'>): LockingScript {
+  const before = [p.prefix ?? [0x50], p.version ?? [0x03], [RECORD_EDITION], p.tx1Ref]
+  const O = before.reduce((s, f) => s + serializedPushLen(f), 0) + 1 // +1 for the ownerPubKey push opcode
+  const probeLen = new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: 1 })).toBinary().length
+  const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5
+  return new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: varIntSize + O }))
+}
+
+/**
+ * Byte offset of the 33-byte owner pubkey within the edition locking script, for the canonical field
+ * layout (prefix/version/record are 1-byte: P(2)+ver(2)+record(2)+tx1Ref(33)+pushOpcode(1) = 40).
+ */
+export const EDITION_OWNER_SCRIPT_OFFSET = 40
+
+/** Return a copy of an edition locking script with the owner pubkey replaced (JS mirror of the in-script swap). */
+export function swapEditionOwner(lockBytes: number[], newOwnerPub: number[]): number[] {
+  if (newOwnerPub.length !== 33) throw new Error('swapEditionOwner: owner pubkey must be 33 bytes')
+  const out = [...lockBytes]
+  for (let i = 0; i < 33; i++) out[EDITION_OWNER_SCRIPT_OFFSET + i] = newOwnerPub[i]
+  return out
+}
+
+/** Extract the 33-byte owner pubkey from an edition locking script. */
+export function editionOwnerPubKey(lockBytes: number[]): number[] {
+  return lockBytes.slice(EDITION_OWNER_SCRIPT_OFFSET, EDITION_OWNER_SCRIPT_OFFSET + 33)
+}
+
+export interface ParsedEdition {
+  /** Collection id = TX1 txid (hex). */
+  tx1RefHex: string
+  /** 33-byte owner pubkey (hex). */
+  ownerPubKeyHex: string
+  stateDataHex: string
+  /** Economic terms recovered from the covenant body (no out-of-band data needed). */
+  terms: { creatorPubKeyHash: number[]; creatorFeeSats: number; holderFeeSats: number }
+}
+
+function chunkBytes(c: ScriptChunk): number[] | null {
+  if (c.data != null && c.data.length > 0) return c.data
+  if (c.op === OP.OP_0) return []
+  if (c.op >= 0x51 && c.op <= 0x60) return [c.op - 0x50] // OP_1..OP_16
+  if (c.op === OP.OP_1NEGATE) return [0x81]
+  return null
+}
+function leToNum(b: number[]): number {
+  let n = 0
+  for (let i = b.length - 1; i >= 0; i--) n = n * 256 + b[i]
+  return n
+}
+
+/**
+ * Parse an edition covenant locking script into its data fields + economic terms, or null if the
+ * script is not a PHAR LAP edition. The terms are recovered from the covenant body itself (the
+ * creator-fee and holder-fee output constants), so a recipient can replicate/transfer with no
+ * out-of-band metadata. Structural parse only — lineage/authenticity is a separate verify step.
+ */
+export function parseEditionScript(script: LockingScript): ParsedEdition | null {
+  const ch = script.chunks
+  if (ch == null || ch.length < 9) return null
+  const P = chunkBytes(ch[0]); const ver = chunkBytes(ch[1]); const rec = chunkBytes(ch[2])
+  const tx1Ref = chunkBytes(ch[3]); const ownerPub = chunkBytes(ch[4]); const stateData = chunkBytes(ch[5]) ?? []
+  if (P == null || P.length !== 1 || P[0] !== 0x50) return null
+  if (ver == null || ver[0] !== 0x03) return null
+  if (rec == null || rec[0] !== RECORD_EDITION) return null
+  if (tx1Ref == null || tx1Ref.length !== 32) return null
+  if (ownerPub == null || ownerPub.length !== 33) return null
+  if (ch[6].op !== OP.OP_2DROP || ch[7].op !== OP.OP_2DROP || ch[8].op !== OP.OP_2DROP) return null
+  // Recover fees/creator from the OUT2 (34B) and C3pre (12B) constants — both carry the P2PKH
+  // signature 0x19 0x76 0xa9 0x14 (varint(25) ‖ OP_DUP OP_HASH160 PUSH20) at offset 8.
+  let creatorFeeSats = 0, holderFeeSats = 0
+  let creatorPubKeyHash: number[] | null = null
+  const isP2pkhValue = (d: number[]) => d[8] === 0x19 && d[9] === 0x76 && d[10] === 0xa9 && d[11] === 0x14
+  for (const c of ch) {
+    const d = chunkBytes(c)
+    if (d == null) continue
+    if (d.length === 34 && isP2pkhValue(d)) { creatorFeeSats = leToNum(d.slice(0, 8)); creatorPubKeyHash = d.slice(12, 32) }
+    else if (d.length === 12 && isP2pkhValue(d)) { holderFeeSats = leToNum(d.slice(0, 8)) }
+  }
+  if (creatorPubKeyHash == null) return null
+  return {
+    tx1RefHex: Utils.toHex(tx1Ref), ownerPubKeyHex: Utils.toHex(ownerPub), stateDataHex: Utils.toHex(stateData),
+    terms: { creatorPubKeyHash, creatorFeeSats, holderFeeSats },
+  }
+}
+
+/** Unlock for a permissionless replicate (no signature): [ buyerChange, buyerPub, OP_0, preimage ]. */
+export function editionReplicateUnlockChunks(p: {
+  buyerPubKey: number[]; buyerChange: number[]; preimage: number[]
+}): ScriptChunk[] {
+  return [pushData(p.buyerChange), pushData(p.buyerPubKey), op(OP.OP_0), pushData(p.preimage)]
+}
+
+/** Unlock for an owner-signed transfer: [ change, newOwnerPub, ownerSig, OP_1, preimage ]. */
+export function editionTransferUnlockChunks(p: {
+  newOwnerPubKey: number[]; ownerSig: number[]; change: number[]; preimage: number[]
+}): ScriptChunk[] {
+  return [pushData(p.change), pushData(p.newOwnerPubKey), pushData(p.ownerSig), op(OP.OP_1), pushData(p.preimage)]
+}
+
+/**
+ * L1 covenant body. Stack on entry (top last): [ spenderOutputs, preimage ].
+ *   - `spenderOutputs` = serialized trailing outputs the spender is free to choose (their change).
+ *   - `preimage`       = the sighash preimage of this input.
+ * Leaves a boolean: true iff the spending tx's outputs are exactly
+ *   `enforcedPrefixBytes ‖ spenderOutputs`.
+ */
+export function outputPrefixCovenantOps(enforcedPrefixBytes: number[], c: PushTxConstants = pushTxConstants()): ScriptChunk[] {
+  return [
+    ...pushTxVerifyOps(c),        // [ spenderOutputs, preimage ]  (preimage verified genuine)
+    ...extractHashOutputsOps(),   // [ spenderOutputs, hashOutputs ]
+    op(OP.OP_SWAP),               // [ hashOutputs, spenderOutputs ]
+    pushData(enforcedPrefixBytes),// [ hashOutputs, spenderOutputs, prefix ]
+    op(OP.OP_SWAP), op(OP.OP_CAT),// [ hashOutputs, prefix ‖ spenderOutputs ]
+    op(OP.OP_HASH256),            // [ hashOutputs, HASH256(expected) ]
+    op(OP.OP_EQUAL),              // [ bool ]
+  ]
+}
