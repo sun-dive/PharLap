@@ -165,7 +165,11 @@ async function onReplicate(t: StoredToken): Promise<void> {
     const r = await replicateEdition(provider, key, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex, terms: termsFromToken(t),
     })
-    // The buyer's new replica is now ours (self-test); record it.
+    // The original UTXO is now spent; it was re-created at out[0] (token back to the holder = us, verbatim).
+    store.markSent(t.txId, t.outputIndex)
+    storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex },
+      t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
+    // The buyer's new replica (out[1]) is also ours in a self-test.
     storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex },
       t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
     renderTokens()
