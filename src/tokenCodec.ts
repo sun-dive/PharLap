@@ -39,6 +39,9 @@ export const RESTRICTION_REPLICABLE = 0x0002 // "unlimited mints" edition-replic
 /** Reserved: transfers report to the creator (1-sat creator notification) so the creator can track
  *  current holders. Creator's explicit, visible choice at mint; private by default. See PLAN.md Addendum E. */
 export const RESTRICTION_TRACK_TRANSFERS = 0x0004
+/** The embedded file is Tier-1 encrypted: the FILE output holds ciphertext; the template carries the
+ *  wrapped content key + keySalt (see contentCrypto / PLAN.md Addendum F). */
+export const RESTRICTION_ENCRYPTED = 0x0008
 
 // ─── Byte / hex / utf8 helpers ──────────────────────────────────────
 
@@ -186,8 +189,13 @@ export interface TemplateFields {
   tokenRules: string
   /** Covenant script bytes (hex). Empty = no covenant (plain PushDrop tokens). */
   covenantScript: string
-  /** Optional 32-byte hex SHA-256 of an embedded file (file bytes live in a FILE output). */
+  /** Optional 32-byte hex SHA-256 of an embedded file (file bytes live in a FILE output). For encrypted
+   *  collections this is SHA-256 of the *ciphertext*. */
   fileHash?: string
+  /** Tier-1 encrypted content (Addendum F): wrapped content key + its keySalt. Present together, and only
+   *  when fileHash is too. Raw bytes (see contentCrypto). */
+  wrappedKey?: number[]
+  keySalt?: number[]
 }
 
 export function encodeTemplateFields(data: TemplateFields): number[][] {
@@ -201,6 +209,10 @@ export function encodeTemplateFields(data: TemplateFields): number[][] {
   ]
   if (data.fileHash != null && data.fileHash.length > 0) {
     fields.push(hexToBytes(data.fileHash))
+    // wrappedKey + keySalt ride after fileHash (encrypted content always has all three).
+    if (data.wrappedKey != null && data.keySalt != null) {
+      fields.push(data.wrappedKey, data.keySalt)
+    }
   }
   return fields
 }
@@ -218,6 +230,10 @@ export function decodeTemplateFields(fields: number[][]): TemplateFields | null 
   }
   if (fields.length >= 7 && fields[6].length === 32) {
     result.fileHash = bytesToHex(fields[6])
+  }
+  if (fields.length >= 9) {
+    result.wrappedKey = fields[7]
+    result.keySalt = fields[8]
   }
   return result
 }
@@ -317,6 +333,8 @@ export interface DecodedTokenRules {
   isUnlimited: boolean
   /** Transfers report to the creator (RESTRICTION_TRACK_TRANSFERS) — reserved, see Addendum E. */
   isTracked: boolean
+  /** The embedded file is Tier-1 encrypted (RESTRICTION_ENCRYPTED) — see Addendum F. */
+  isEncrypted: boolean
 }
 
 export function decodeTokenRules(rulesHex: string): DecodedTokenRules {
@@ -333,6 +351,7 @@ export function decodeTokenRules(rulesHex: string): DecodedTokenRules {
     isReplicable: (restrictions & RESTRICTION_REPLICABLE) !== 0,
     isUnlimited: supply === 0,
     isTracked: (restrictions & RESTRICTION_TRACK_TRANSFERS) !== 0,
+    isEncrypted: (restrictions & RESTRICTION_ENCRYPTED) !== 0,
   }
 }
 

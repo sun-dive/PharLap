@@ -29,7 +29,8 @@ import {
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
 } from './collectionBuilder.ts'
-import { encodeTokenRules, RESTRICTION_REPLICABLE } from './tokenCodec.ts'
+import { encodeTokenRules, RESTRICTION_REPLICABLE, RESTRICTION_ENCRYPTED } from './tokenCodec.ts'
+import { newContentKey, newKeySalt, encryptContent, wrapContentKey } from './contentCrypto.ts'
 import type { WalletProvider, Utxo } from './walletProvider.ts'
 
 /** Common economic parameters of an edition collection (fixed forever at genesis). */
@@ -313,6 +314,8 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   stateData?: number[]
   /** Optional file embedded (hash-bound) in TX1, viewable by token holders. */
   file?: { mimeType: string; fileName: string; bytes: number[] }
+  /** Tier-1 encrypt the embedded file (Addendum F). Requires `file`. */
+  encrypt?: boolean
   feePerKb?: number
 }): Promise<CreateEditionResult> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
@@ -327,14 +330,29 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     creatorPubKeyHash: params.terms.creatorPubKeyHash, creatorFeeSats: params.terms.creatorFeeSats,
     holderFeeSats: params.terms.holderFeeSats, tokenSats,
   })
+
+  // Tier-1 encrypt the file: store ciphertext, carry the wrapped content key + keySalt in the template.
+  const encrypt = params.encrypt === true && params.file != null
+  let storedBytes = params.file?.bytes
+  let wrappedKey: number[] | undefined
+  let keySalt: number[] | undefined
+  if (encrypt && params.file != null) {
+    const K = newContentKey()
+    keySalt = newKeySalt()
+    storedBytes = encryptContent(params.file.bytes, K)
+    wrappedKey = wrapContentKey(K, keySalt)
+  }
+  const restrictions = RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0)
   const template = {
     tokenName: params.tokenName,
-    tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE, 1), // supply 0 = unlimited / replicable
+    tokenRules: encodeTokenRules(0, 0, restrictions, 1), // supply 0 = unlimited / replicable
     covenantScript: Utils.toHex(templateLock.toBinary()),
-    fileHash: params.file ? sha256Hex(params.file.bytes) : undefined,
+    fileHash: storedBytes != null ? sha256Hex(storedBytes) : undefined, // binds the stored (cipher)text
+    wrappedKey,
+    keySalt,
   }
-  const file = params.file
-    ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: params.file.bytes }
+  const file = params.file != null
+    ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes! }
     : undefined
 
   // Fund both txs. TX1 carries any embedded file, so its fee scales with file size; keep a healthy margin.
