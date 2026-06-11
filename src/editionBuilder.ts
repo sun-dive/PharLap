@@ -19,12 +19,12 @@
  * the network, exactly like collectionBuilder. Network wrappers select funding + broadcast.
  */
 import {
-  Transaction, P2PKH, SatoshisPerKilobyte, Hash, Utils, LockingScript, UnlockingScript, TransactionSignature,
+  Transaction, P2PKH, SatoshisPerKilobyte, Hash, Utils, LockingScript, UnlockingScript, TransactionSignature, PublicKey,
 } from '@bsv/sdk'
 import type { PrivateKey } from '@bsv/sdk'
 import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
-  editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE,
+  editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE, parseEditionScript,
 } from './covenant.ts'
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, type FundingInput,
@@ -273,6 +273,10 @@ export async function buildEditionTransferTx(opts: {
   }
 
   tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, opts.newOwnerPubKey)), satoshis: tokenSats }) // [0] token → new owner
+  // [1] 1-sat P2PKH notification to the new owner's address — the discovery breadcrumb (the edition
+  // covenant output itself is not WoC-address-indexed). Part of the covenant's free "change" region.
+  const notifyAddress = PublicKey.fromString(Utils.toHex(opts.newOwnerPubKey)).toAddress()
+  tx.addOutput({ lockingScript: new P2PKH().lock(notifyAddress), satoshis: 1 })
   const changeVout = tx.outputs.length
   tx.addOutput({ lockingScript: new P2PKH().lock(opts.ownerKey.toAddress()), change: true })
 
@@ -448,4 +452,42 @@ export async function broadcastV2Probe(provider: WalletProvider, key: PrivateKey
   provider.registerPendingTx(tx.id('hex'), selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
     tx.outputs[0]?.satoshis != null ? { outputIndex: 0, satoshis: tx.outputs[0].satoshis } : undefined)
   return tx.id('hex')
+}
+
+export interface IncomingEdition {
+  txId: string
+  outputIndex: number
+  lockHex: string
+  tx1RefHex: string
+  terms: EditionTerms
+}
+
+/**
+ * Find edition covenant outputs locked to `pubKeyHex` by scanning the wallet address history (the
+ * transfer notification breadcrumbs land there) and parsing each tx's outputs. Terms are recovered
+ * from the covenant script itself, so received editions are fully replicable/transferable.
+ */
+export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: string): Promise<IncomingEdition[]> {
+  const mine = pubKeyHex.toLowerCase()
+  const found: IncomingEdition[] = []
+  const seenTx = new Set<string>()
+  const seenOutpoint = new Set<string>()
+  for (const { txId } of await provider.getAddressHistory()) {
+    if (seenTx.has(txId)) continue
+    seenTx.add(txId)
+    let tx: Transaction
+    try { tx = await provider.getSourceTransaction(txId) } catch { continue }
+    tx.outputs.forEach((o, i) => {
+      const ed = parseEditionScript(o.lockingScript)
+      if (ed == null || ed.ownerPubKeyHex.toLowerCase() !== mine) return
+      const key = `${txId}:${i}`
+      if (seenOutpoint.has(key)) return
+      seenOutpoint.add(key)
+      found.push({
+        txId, outputIndex: i, lockHex: Utils.toHex(o.lockingScript.toBinary()), tx1RefHex: ed.tx1RefHex,
+        terms: { ...ed.terms, tokenSats: o.satoshis ?? PHARLAP_OUTPUT_SATS },
+      })
+    })
+  }
+  return found
 }

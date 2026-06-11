@@ -16,7 +16,7 @@
  *   L4 — creator-fee + holder-fee P2PKH outputs (Addendum A edition-mint layout).
  *   L5 — transfer/replicate branching + wiring into tokenCodec/collectionBuilder.
  */
-import { OP, LockingScript, type ScriptChunk } from '@bsv/sdk'
+import { OP, LockingScript, Utils, type ScriptChunk } from '@bsv/sdk'
 import { pushTxVerifyOps, pushData, type PushTxConstants, pushTxConstants } from './pushtx.ts'
 
 const op = (code: number): ScriptChunk => ({ op: code })
@@ -349,6 +349,64 @@ export function swapEditionOwner(lockBytes: number[], newOwnerPub: number[]): nu
 /** Extract the 33-byte owner pubkey from an edition locking script. */
 export function editionOwnerPubKey(lockBytes: number[]): number[] {
   return lockBytes.slice(EDITION_OWNER_SCRIPT_OFFSET, EDITION_OWNER_SCRIPT_OFFSET + 33)
+}
+
+export interface ParsedEdition {
+  /** Collection id = TX1 txid (hex). */
+  tx1RefHex: string
+  /** 33-byte owner pubkey (hex). */
+  ownerPubKeyHex: string
+  stateDataHex: string
+  /** Economic terms recovered from the covenant body (no out-of-band data needed). */
+  terms: { creatorPubKeyHash: number[]; creatorFeeSats: number; holderFeeSats: number }
+}
+
+function chunkBytes(c: ScriptChunk): number[] | null {
+  if (c.data != null && c.data.length > 0) return c.data
+  if (c.op === OP.OP_0) return []
+  if (c.op >= 0x51 && c.op <= 0x60) return [c.op - 0x50] // OP_1..OP_16
+  if (c.op === OP.OP_1NEGATE) return [0x81]
+  return null
+}
+function leToNum(b: number[]): number {
+  let n = 0
+  for (let i = b.length - 1; i >= 0; i--) n = n * 256 + b[i]
+  return n
+}
+
+/**
+ * Parse an edition covenant locking script into its data fields + economic terms, or null if the
+ * script is not a PHAR LAP edition. The terms are recovered from the covenant body itself (the
+ * creator-fee and holder-fee output constants), so a recipient can replicate/transfer with no
+ * out-of-band metadata. Structural parse only — lineage/authenticity is a separate verify step.
+ */
+export function parseEditionScript(script: LockingScript): ParsedEdition | null {
+  const ch = script.chunks
+  if (ch == null || ch.length < 9) return null
+  const P = chunkBytes(ch[0]); const ver = chunkBytes(ch[1]); const rec = chunkBytes(ch[2])
+  const tx1Ref = chunkBytes(ch[3]); const ownerPub = chunkBytes(ch[4]); const stateData = chunkBytes(ch[5]) ?? []
+  if (P == null || P.length !== 1 || P[0] !== 0x50) return null
+  if (ver == null || ver[0] !== 0x03) return null
+  if (rec == null || rec[0] !== RECORD_EDITION) return null
+  if (tx1Ref == null || tx1Ref.length !== 32) return null
+  if (ownerPub == null || ownerPub.length !== 33) return null
+  if (ch[6].op !== OP.OP_2DROP || ch[7].op !== OP.OP_2DROP || ch[8].op !== OP.OP_2DROP) return null
+  // Recover fees/creator from the OUT2 (34B) and C3pre (12B) constants — both carry the P2PKH
+  // signature 0x19 0x76 0xa9 0x14 (varint(25) ‖ OP_DUP OP_HASH160 PUSH20) at offset 8.
+  let creatorFeeSats = 0, holderFeeSats = 0
+  let creatorPubKeyHash: number[] | null = null
+  const isP2pkhValue = (d: number[]) => d[8] === 0x19 && d[9] === 0x76 && d[10] === 0xa9 && d[11] === 0x14
+  for (const c of ch) {
+    const d = chunkBytes(c)
+    if (d == null) continue
+    if (d.length === 34 && isP2pkhValue(d)) { creatorFeeSats = leToNum(d.slice(0, 8)); creatorPubKeyHash = d.slice(12, 32) }
+    else if (d.length === 12 && isP2pkhValue(d)) { holderFeeSats = leToNum(d.slice(0, 8)) }
+  }
+  if (creatorPubKeyHash == null) return null
+  return {
+    tx1RefHex: Utils.toHex(tx1Ref), ownerPubKeyHex: Utils.toHex(ownerPub), stateDataHex: Utils.toHex(stateData),
+    terms: { creatorPubKeyHash, creatorFeeSats, holderFeeSats },
+  }
 }
 
 /** Unlock for a permissionless replicate (no signature): [ buyerChange, buyerPub, OP_0, preimage ]. */

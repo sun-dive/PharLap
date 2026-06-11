@@ -7,7 +7,7 @@ import {
 import { pushTxPreimage } from '../src/pushtx.ts'
 import {
   buildEditionLock, editionReplicateUnlockChunks, editionTransferUnlockChunks,
-  EDITION_SCOPE, serializeOutput, p2pkhScript,
+  EDITION_SCOPE, serializeOutput, p2pkhScript, parseEditionScript,
 } from '../src/covenant.ts'
 
 const OWNER_OFFSET = 40 // P(2)+ver(2)+record(2)+tx1Ref(33)+pushOpcode(1) — owner pubkey data offset in the script
@@ -40,6 +40,18 @@ function withOwner(lockBytes: number[], newPub: number[]): number[] {
 test('edition: owner pubkey sits at the expected script offset', () => {
   const { lockBytes, holder } = makeEdition()
   assert.deepEqual(lockBytes.slice(OWNER_OFFSET, OWNER_OFFSET + 33), pub(holder))
+})
+
+test('edition: parseEditionScript recovers fields + terms from the covenant', () => {
+  const { lock, holder, creatorHash } = makeEdition()
+  const parsed = parseEditionScript(lock)
+  assert.ok(parsed)
+  assert.equal(parsed!.ownerPubKeyHex, Buffer.from(pub(holder)).toString('hex'))
+  assert.deepEqual(parsed!.terms.creatorPubKeyHash, creatorHash)
+  assert.equal(parsed!.terms.creatorFeeSats, CREATOR_FEE)
+  assert.equal(parsed!.terms.holderFeeSats, HOLDER_FEE)
+  // A plain P2PKH script is not an edition.
+  assert.equal(parseEditionScript(new P2PKH().lock(holder.toAddress())), null)
 })
 
 test('edition REPLICATE: buyer mints a replica, returns the token, pays both fees', () => {

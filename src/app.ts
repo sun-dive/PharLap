@@ -12,7 +12,8 @@ import { PrivateKey, Utils, Hash } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, type EditionTerms } from './editionBuilder.ts'
+import { parseEditionScript } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
@@ -224,8 +225,18 @@ async function onCheckIncoming(): Promise<void> {
       if (!v.valid) continue
       if (store.add({ txId: t.txId, outputIndex: t.outputIndex, collectionId: t.fields.tx1Ref, stateData: t.fields.stateData })) added++
     }
+    // Editions are covenant outputs (not address-indexed); find them via the transfer notification breadcrumb.
+    const editions = await scanIncomingEditions(provider, pubKeyHex)
+    let edAdded = 0
+    for (const e of editions) {
+      if (store.add({
+        txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: 'Edition',
+        kind: 'edition', lockHex: e.lockHex, creatorPubKeyHashHex: Utils.toHex(e.terms.creatorPubKeyHash),
+        creatorFeeSats: e.terms.creatorFeeSats, holderFeeSats: e.terms.holderFeeSats,
+      })) edAdded++
+    }
     renderTokens()
-    setStatus(`Scan complete: ${incoming.length} found, ${added} new and verified.`, 'ok')
+    setStatus(`Scan complete: ${added} token(s) + ${edAdded} edition(s) new.`, 'ok')
   } catch (e) {
     setStatus(`Scan failed: ${(e as Error).message}`, 'error')
   }
@@ -236,6 +247,12 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
   setStatus('Verifying token lineage…')
   try {
     const tx = await provider.getSourceTransaction(txId)
+    // Edition covenant outputs are a custom script — verify them structurally (lineage walk is future work).
+    const ed = parseEditionScript(tx.outputs[outputIndex]?.lockingScript)
+    if (ed) {
+      setStatus(`✅ Valid edition covenant — collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, fees ${ed.terms.creatorFeeSats}/${ed.terms.holderFeeSats} sat (structure verified).`, 'ok')
+      return
+    }
     const deps = { getRawTransaction: (id: string) => provider.getSourceTransaction(id) }
     const v = await verifyTokenLineage(tx, outputIndex, deps)
     // Read collection name from TX1 for display.
