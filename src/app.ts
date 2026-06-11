@@ -433,9 +433,10 @@ function closeViewer(): void {
 // ─── token list ─────────────────────────────────────────────────────
 function renderTokens(): void {
   const host = $('tokens')
-  const active = store.active()
+  // Newest first, so a freshly minted / just-received token appears at the TOP (not buried at the bottom).
+  const active = [...store.active()].reverse()
   if (active.length === 0) { host.innerHTML = '<p class="muted">No tokens yet. Mint a collection or Check Incoming.</p>'; return }
-  host.innerHTML = ''
+  host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held — newest first</p>`
   for (const t of active) {
     const card = document.createElement('div')
     card.className = 'token'
