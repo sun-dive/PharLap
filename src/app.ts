@@ -19,7 +19,8 @@ import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messa
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
-import { parseTemplateScript, parseFileScript } from './tokenCodec.ts'
+import { parseTemplateScript, parseFileScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
+import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
 
 const WIF_KEY = 'p:wallet:wif'
 
@@ -148,11 +149,13 @@ async function onMintEdition(): Promise<void> {
   const name = val('edName')
   if (!name) { setStatus('Enter an edition collection name.', 'error'); return }
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
+  const encrypt = ($('edEncrypt') as HTMLInputElement).checked
   const terms = ownTerms()
-  setStatus('Minting edition collection (TX1 template + TX2 covenant editions)…')
   try {
     const file = await readFile($('edFile') as HTMLInputElement)
-    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file })
+    if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
+    setStatus(`Minting ${encrypt ? 'encrypted ' : ''}edition collection (TX1 template + TX2 covenant editions)…`)
+    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
     renderTokens()
     setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
@@ -283,6 +286,24 @@ function renderInbox(msgs: IncomingMessage[]): void {
 }
 
 // ─── check incoming ─────────────────────────────────────────────────
+// A received edition's token doesn't carry the collection title (that lives in TX1's template), so the
+// incoming scan defaults it to "Edition". Resolve the real name from TX1 (cached per collection).
+const nameCache = new Map<string, string>()
+async function resolveCollectionName(tx1RefHex: string): Promise<string> {
+  const cached = nameCache.get(tx1RefHex)
+  if (cached != null) return cached
+  let name = 'Edition'
+  try {
+    const tx1 = await provider.getSourceTransaction(tx1RefHex)
+    for (const o of tx1.outputs) {
+      const t = parseTemplateScript(o.lockingScript)
+      if (t && t.fields.tokenName) { name = t.fields.tokenName; break }
+    }
+  } catch { /* keep fallback */ }
+  nameCache.set(tx1RefHex, name)
+  return name
+}
+
 async function onCheckIncoming(): Promise<void> {
   setStatus('Scanning for incoming tokens and editions…')
   let added = 0
@@ -305,11 +326,13 @@ async function onCheckIncoming(): Promise<void> {
   try {
     const editions = await scanIncomingEditions(provider, pubKeyHex)
     for (const e of editions) {
+      const name = await resolveCollectionName(e.tx1RefHex)
       if (store.add({
-        txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: 'Edition',
+        txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: name,
         kind: 'edition', lockHex: e.lockHex, creatorPubKeyHashHex: Utils.toHex(e.terms.creatorPubKeyHash),
         creatorFeeSats: e.terms.creatorFeeSats, holderFeeSats: e.terms.holderFeeSats,
       })) edAdded++
+      else store.setCollectionName(e.txId, e.outputIndex, name) // backfill the real title on older "Edition" entries
     }
   } catch (e) { errors.push(`editions: ${(e as Error).message}`) }
 
@@ -354,27 +377,40 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
   try {
     const tx1 = await provider.getSourceTransaction(collectionId)
     let file: { mimeType: string; fileName: string; fileBytes: number[] } | null = null
-    let templateHash: string | undefined
+    let template: TemplateFields | undefined
     for (const o of tx1.outputs) {
       const f = parseFileScript(o.lockingScript)
       if (f) file = f.fields
       const t = parseTemplateScript(o.lockingScript)
-      if (t) templateHash = t.fields.fileHash
+      if (t) template = t.fields
     }
     if (!file) {
       setStatus(`"${collectionName}" has no embedded file.`, 'info')
       return
     }
-    // Verify the file is the one bound to the collection identity.
-    const computed = Utils.toHex(Hash.sha256(file.fileBytes))
-    const verified = templateHash === computed
-    showFile(collectionName, file, verified)
-    setStatus(
-      verified
-        ? 'File loaded — SHA-256 matches the collection (bound to identity ✓).'
-        : '⚠ File loaded, but its hash does NOT match the collection commitment!',
-      verified ? 'ok' : 'error',
-    )
+    // The stored bytes (cipher- or plain-text) are what fileHash binds.
+    const verified = template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
+    const encrypted = template != null && decodeTokenRules(template.tokenRules).isEncrypted
+
+    if (encrypted) {
+      if (template?.wrappedKey == null || template?.keySalt == null) {
+        setStatus('Encrypted collection is missing its wrapped key — cannot decrypt.', 'error'); return
+      }
+      const K = unwrapContentKey(template.wrappedKey, template.keySalt)
+      if (K == null) { setStatus('Could not unwrap the content key.', 'error'); return }
+      let plain: number[]
+      try { plain = decryptContent(file.fileBytes, K) } catch { setStatus('Decryption failed (wrong key or corrupt ciphertext).', 'error'); return }
+      showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: plain }, verified)
+      setStatus(verified ? '🔓 Decrypted — ciphertext matches the collection commitment ✓.' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!', verified ? 'ok' : 'error')
+    } else {
+      showFile(collectionName, file, verified)
+      setStatus(
+        verified
+          ? 'File loaded — SHA-256 matches the collection (bound to identity ✓).'
+          : '⚠ File loaded, but its hash does NOT match the collection commitment!',
+        verified ? 'ok' : 'error',
+      )
+    }
   } catch (e) {
     setStatus(`View failed: ${(e as Error).message}`, 'error')
   }
@@ -417,9 +453,10 @@ function closeViewer(): void {
 // ─── token list ─────────────────────────────────────────────────────
 function renderTokens(): void {
   const host = $('tokens')
-  const active = store.active()
+  // Newest first, so a freshly minted / just-received token appears at the TOP (not buried at the bottom).
+  const active = [...store.active()].reverse()
   if (active.length === 0) { host.innerHTML = '<p class="muted">No tokens yet. Mint a collection or Check Incoming.</p>'; return }
-  host.innerHTML = ''
+  host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held — newest first</p>`
   for (const t of active) {
     const card = document.createElement('div')
     card.className = 'token'

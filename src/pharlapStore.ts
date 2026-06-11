@@ -99,6 +99,13 @@ export class PharLapStore {
     return true
   }
 
+  /** Update the cached collection name of a stored token (e.g. once resolved from TX1). */
+  setCollectionName(txId: string, outputIndex: number, collectionName: string): void {
+    const k = outpointKey({ txId, outputIndex })
+    const tokens = this.list().map(t => (outpointKey(t) === k ? { ...t, collectionName } : t))
+    this.write(tokens)
+  }
+
   /** Mark a token as sent (spent in a transfer); kept for history. */
   markSent(txId: string, outputIndex: number): void {
     const k = outpointKey({ txId, outputIndex })

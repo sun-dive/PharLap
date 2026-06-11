@@ -101,12 +101,13 @@ external smart-contract toolchain — and runs under BSV's post-Chronicle (versi
 | Action | What it does |
 |---|---|
 | **Mint collection** | Create a fixed-supply collection (+ optional file). |
-| **Mint edition collection** | Create an unlimited-mints collection with fixed creator/holder fees (+ optional file). |
+| **Mint edition collection** | Create an unlimited-mints collection with fixed creator/holder fees (+ optional file, which can be **encrypted** for holders). |
 | **Replicate** | Permissionlessly mint your own copy of an edition (pays the fees). |
 | **Send / Transfer** | Move a token to another wallet (owner-signed, free). |
-| **Check incoming** | Discover tokens/editions sent to you (via a 1-sat notification breadcrumb). |
+| **Message** | Send an **encrypted, authenticated** on-chain message — text, a file, and/or a content key — to any pubkey. |
+| **Check incoming** | Discover tokens / editions / messages sent to you (via a 1-sat notification breadcrumb). |
 | **Verify** | Confirm a token/edition is structurally valid and which collection it belongs to. |
-| **View** | Open the embedded file, checking its hash against the collection commitment. |
+| **View** | Open the embedded file — **decrypting it** if the collection is encrypted — and check its hash against the collection commitment. |
 | **Test v2 broadcast** | Sanity-check that the network accepts version-2 (Chronicle) transactions. |
 
 Receiving wallets find tokens through a small **1-sat P2PKH notification** to the recipient's address
@@ -114,6 +115,31 @@ Receiving wallets find tokens through a small **1-sat P2PKH notification** to th
 token out of that transaction.
 
 ---
+
+## Messaging
+
+Send an **encrypted, authenticated** message to any pubkey — a single typed payload that can carry text,
+a file (bonus content), and/or a content key all at once. Encryption is real per-recipient ECIES (only
+the recipient decrypts, and they can verify *who* sent it); delivery is on-chain like a token transfer
+and discovered through the same 1-sat notification breadcrumb. It is the same record shape as a token,
+and it is the delivery layer the encrypted-content feature builds on.
+
+## Encrypted content (Tier 1)
+
+A collection's embedded file can be encrypted so only token holders can view it:
+
+- The file is AES-encrypted under a fresh **per-collection key**; the **ciphertext** is what's stored
+  on-chain (hash-bound to the collection identity).
+- The key travels **obfuscated** in the TX1 template, so **any holder** — including a buyer who
+  *permissionlessly replicates* an edition — can decrypt it with **no server and no live party**.
+- Clicking **View** unwraps the key, decrypts the ciphertext, and displays the file.
+
+Important: this is **"an inconvenience, not DRM."** The wrap is open-source obfuscation — a casual
+block-explorer reader can't lift the file, but a determined coder can. The real protection is
+**economic**: the content is priced below the bother-cost of extracting it, and because every holder
+earns the built-in replication royalties, leaking undercuts a market they themselves profit from.
+Stronger tiers — a live per-recipient key sender, or a server that watermarks each buyer's copy — are
+designed but not built.
 
 ## Running it
 
@@ -136,6 +162,9 @@ Validated on **BSV mainnet**:
 - ✅ Collection mint (single + multi), embedded-file binding, transfer, discovery, verification, viewer
 - ✅ **Edition covenant**: mint, **permissionless replicate** (confirmed in a block), owner-signed
   transfer, file embed/view, discovery
+- ✅ **Encrypted, authenticated messaging** (text / file / content key)
+- ✅ **Tier-1 encrypted content** (holder-only embedded files, decrypt-on-view)
 
-Still experimental — treat it as a working prototype, and use small amounts. Encrypted-content delivery
-(holder-only files) and creator↔holder messaging are designed but not yet built.
+Still experimental — treat it as a working prototype, and use small amounts. Stronger encrypted-content
+tiers (live per-recipient key delivery; a server with per-buyer watermarking) and edition deep-verify
+(full lineage proof) are designed but not yet built.
