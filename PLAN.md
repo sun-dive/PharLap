@@ -326,6 +326,27 @@ The messaging-phase UI must surface these choices to the buyer/holder explicitly
 Deferred: the announcement/pull channel, the message record format (plaintext + ECIES), and covenant-enforced
 tracking. Reserving the bits/record-type now keeps both models open without committing to either.
 
+### Addendum E — IMPLEMENTATION STATUS (Messaging v1, 2026-06-11) + future work
+
+**v1 BUILT & validated (offline + mainnet, by the user):** targeted, encrypted/public, authenticated on-chain
+DMs carrying text + file. Record = exact P-token twin `[P, ver, RECORD_MESSAGE(0x04), ref(32), envelope]` (the
+reserved script field was dropped as redundant). `src/messageCodec.ts` (envelope = version‖flags‖senderPubKey‖
+body; body = TLV parts text/key/file-inline/file-ref, plaintext or authenticated real-key ECIES electrum,
+noKey=true with senderPubKey in header), `src/messageBuilder.ts` (buildMessageTx → message PushDrop + 1-sat
+notification + change; sendMessage; scanIncomingMessages = history ∪ getUtxos mempool-aware), tokenCodec
+MessageFields + build/parseMessageScript. Minimal "Messages" UI (compose + Check messages → inbox).
+
+**FUTURE DEVELOPMENT WORK (recorded 2026-06-11):**
+- **UI overhaul (significant, time-consuming):** make the messaging UX feel like a real email / DM client —
+  conversation threads (group by counterparty / `ref`), persistent local inbox+sent store (don't re-scan/re-
+  decrypt every time), contacts/known-senders, compose-reply, unread state, spam filtering (only show
+  senders/collections you know), attachment gallery, notifications. The current UI is a minimal functional
+  stub (send + flat inbox list, transient).
+- **v1.1 protocol:** ride-along messages (attach a message/key to a transfer/replicate tx — same-tx key
+  delivery for a sale); broadcast/pull announcement channel (anchored to TX1 creator pubkey, plaintext or
+  group-encrypted); ephemeral/anonymous ECIES mode (unauthenticated, hides senderPubKey); `FILE_REF` + the
+  hosting layer for large bonus files.
+
 ---
 
 ## Addendum F — Encrypted content (envelope encryption + permissionless editions w/ key-delivery) [design 2026-06-10]
