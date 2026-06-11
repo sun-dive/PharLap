@@ -10,7 +10,8 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
 > embedded-file binding, transfer, discovery, lightweight verification, and a file viewer are validated.
 > The permissionless **"unlimited mints" edition covenant** is now built and **validated on mainnet** —
 > mint, permissionless replicate (confirmed in a block), and owner-signed transfer all work, hand-rolled
-> on `@bsv/sdk` with no external smart-contract toolchain.
+> on `@bsv/sdk` with no external smart-contract toolchain. **Encrypted, authenticated on-chain
+> messaging** (text / files / content keys) is also working.
 >
 > **New here? Read [`docs/OVERVIEW.md`](./docs/OVERVIEW.md)** — a plain-language functional tour. See
 > `PLAN.md` for the full design and `docs/DEVIATIONS_FROM_MPT.md` for how it differs from MPT.
@@ -28,6 +29,9 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   own copy permissionlessly — the spend is rejected unless the holder's token is returned, the buyer's
   replica carries the same covenant forward, and fixed creator + holder fees are paid. Built on a
   hand-rolled **OP_PUSH_TX** covenant (transaction introspection in script). See `docs/OVERVIEW.md`.
+- **Messaging.** Send encrypted, authenticated (ECIES) on-chain messages to any pubkey — a typed payload
+  carrying text, a file (bonus content), and/or a content key. The same record shape as a token
+  (`[P, version, RECORD_MESSAGE, ref, envelope]`); the delivery layer the encrypted-content feature builds on.
 - **1-byte protocol prefix** `"P"` (`0x50`), format version `0x03`.
 
 ## Toolchain
@@ -60,6 +64,8 @@ src/
   pushtx.ts            hand-rolled optimal OP_PUSH_TX primitive (tx introspection in script)
   covenant.ts          unlimited-mints edition covenant (build + parse the locking script)
   editionBuilder.ts    edition genesis / replicate / transfer + discovery, over the covenant
+  messageCodec.ts      message envelope: typed TLV payload (text/key/file) + authenticated ECIES
+  messageBuilder.ts    send / scan on-chain messages (delivered like a transfer)
   walletProvider.ts    WhatsOnChain client (UTXOs, raw tx, broadcast, headers)
   pharlapStore.ts      local token store (localStorage)
   app.ts               browser wallet UI
