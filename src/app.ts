@@ -286,6 +286,24 @@ function renderInbox(msgs: IncomingMessage[]): void {
 }
 
 // ─── check incoming ─────────────────────────────────────────────────
+// A received edition's token doesn't carry the collection title (that lives in TX1's template), so the
+// incoming scan defaults it to "Edition". Resolve the real name from TX1 (cached per collection).
+const nameCache = new Map<string, string>()
+async function resolveCollectionName(tx1RefHex: string): Promise<string> {
+  const cached = nameCache.get(tx1RefHex)
+  if (cached != null) return cached
+  let name = 'Edition'
+  try {
+    const tx1 = await provider.getSourceTransaction(tx1RefHex)
+    for (const o of tx1.outputs) {
+      const t = parseTemplateScript(o.lockingScript)
+      if (t && t.fields.tokenName) { name = t.fields.tokenName; break }
+    }
+  } catch { /* keep fallback */ }
+  nameCache.set(tx1RefHex, name)
+  return name
+}
+
 async function onCheckIncoming(): Promise<void> {
   setStatus('Scanning for incoming tokens and editions…')
   let added = 0
@@ -308,11 +326,13 @@ async function onCheckIncoming(): Promise<void> {
   try {
     const editions = await scanIncomingEditions(provider, pubKeyHex)
     for (const e of editions) {
+      const name = await resolveCollectionName(e.tx1RefHex)
       if (store.add({
-        txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: 'Edition',
+        txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: name,
         kind: 'edition', lockHex: e.lockHex, creatorPubKeyHashHex: Utils.toHex(e.terms.creatorPubKeyHash),
         creatorFeeSats: e.terms.creatorFeeSats, holderFeeSats: e.terms.holderFeeSats,
       })) edAdded++
+      else store.setCollectionName(e.txId, e.outputIndex, name) // backfill the real title on older "Edition" entries
     }
   } catch (e) { errors.push(`editions: ${(e as Error).message}`) }
 
