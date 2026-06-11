@@ -6,10 +6,14 @@ A PushDrop-based BSV token wallet — a standalone browser app for minting, shar
 tokenized content. Derived from the **MPT v05.24** prototype, rebuilt around PushDrop so token data lives
 in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
 
-> **Status:** experimental. Collection mint (single + multi-edition), embedded-file binding, transfer,
-> discovery, lightweight verification, and a file viewer are working and validated on BSV mainnet. The
-> permissionless "unlimited mints" edition covenant is in design/development. See `PLAN.md` for the full
-> design and `docs/DEVIATIONS_FROM_MPT.md` for how it differs from MPT.
+> **Status:** experimental, but the core works on BSV mainnet. Collection mint (single + multi),
+> embedded-file binding, transfer, discovery, lightweight verification, and a file viewer are validated.
+> The permissionless **"unlimited mints" edition covenant** is now built and **validated on mainnet** —
+> mint, permissionless replicate (confirmed in a block), and owner-signed transfer all work, hand-rolled
+> on `@bsv/sdk` with no external smart-contract toolchain.
+>
+> **New here? Read [`docs/OVERVIEW.md`](./docs/OVERVIEW.md)** — a plain-language functional tour. See
+> `PLAN.md` for the full design and `docs/DEVIATIONS_FROM_MPT.md` for how it differs from MPT.
 
 ## How it works
 
@@ -20,6 +24,10 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   so they stay in the UTXO set. An embedded file is bound to the collection identity by hash (tamper-evident).
 - **SPV-only.** No indexers or trusted third parties — a token is a valid edition if it traces to a real
   genesis; proofs are fetched on demand (BEEF-ready). Transfers are constant-size (no on-chain proof chain).
+- **Unlimited-mints editions (covenant).** Optional miner-enforced tokens where *any buyer* can mint their
+  own copy permissionlessly — the spend is rejected unless the holder's token is returned, the buyer's
+  replica carries the same covenant forward, and fixed creator + holder fees are paid. Built on a
+  hand-rolled **OP_PUSH_TX** covenant (transaction introspection in script). See `docs/OVERVIEW.md`.
 - **1-byte protocol prefix** `"P"` (`0x50`), format version `0x03`.
 
 ## Toolchain
@@ -49,6 +57,9 @@ src/
   collectionBuilder.ts collection genesis (TX1 template + TX2 mint)
   transfer.ts          transfers, ownership detection, incoming scan
   verify.ts            lightweight lineage verification
+  pushtx.ts            hand-rolled optimal OP_PUSH_TX primitive (tx introspection in script)
+  covenant.ts          unlimited-mints edition covenant (build + parse the locking script)
+  editionBuilder.ts    edition genesis / replicate / transfer + discovery, over the covenant
   walletProvider.ts    WhatsOnChain client (UTXOs, raw tx, broadcast, headers)
   pharlapStore.ts      local token store (localStorage)
   app.ts               browser wallet UI

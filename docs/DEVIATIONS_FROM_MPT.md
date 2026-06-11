@@ -79,6 +79,32 @@ this adds **no extra service/node/overlay**. Verify functions take a `ChainTrack
 *optionally* swappable later (WoC → ARC → overlay → local headers) without touching verification logic. Trust
 model is unchanged from MPT (WoC as header source; proofs are verified, the provider is not trusted).
 
+## 10. Miner-enforced "unlimited mints" editions (covenant) — new in PHAR LAP
+MPT had no covenant: token rules were wallet-enforced only (SPV self-verification). PHAR LAP adds an
+**optional, miner-enforced covenant** token type — the "unlimited mints" edition (Addendum A) — that has no
+analogue in MPT. The edition locking script is a custom covenant (not the standard `<pubkey> OP_CHECKSIG …`
+PushDrop), structured as `<P, ver, RECORD_EDITION(0x05), tx1Ref(32), ownerPubKey(33), stateData> OP_2DROP×3`
+followed by a shared OP_PUSH_TX prefix and an `OP_IF transfer OP_ELSE replicate OP_ENDIF` branch.
+
+Key points / deviations:
+- **Transaction introspection by hand-rolled optimal OP_PUSH_TX** (`src/pushtx.ts`): BSV has no
+  OP_CHECKDATASIG, so the spender pushes the sighash preimage and the script re-derives an ECDSA signature
+  over it with fixed *public* constants and verifies it via `OP_CHECKSIG`, forcing a genuine preimage. The
+  covenant then reads `hashOutputs` and reconstructs the required outputs. Requires BSV **Chronicle** (tx
+  version 2) for relaxed low-S + big-int arithmetic; signature DER is still minimal-encoded (handled in-script
+  via `OP_NUM2BIN` + fixed reverse + a runtime `OP_SPLIT`). No sCrypt / external toolchain — only `@bsv/sdk`.
+- **Self-replication (quine):** outputs re-create the covenant's *own* script (read from the preimage's
+  scriptCode, so no second copy is embedded), with the owner pubkey swapped where needed (replica → buyer,
+  transfer → new owner). Full both-branch edition script ≈ **767 bytes**.
+- **Economic enforcement at consensus:** replicate forces `[0]` token→holder, `[1]` replica→buyer, `[2]`
+  creator fee, `[3]` holder fee, `[4+]` buyer change. Transfer is owner-signed (`OP_CHECKSIGVERIFY`) and also
+  re-creates the covenant for the new owner. Introspection scope is `ANYONECANPAY|ALL|FORKID` so buyers can
+  add funding inputs.
+- **New modules:** `src/pushtx.ts`, `src/covenant.ts`, `src/editionBuilder.ts` (kept separate from the
+  mainnet-validated plain `collectionBuilder` path). Editions carry economic terms *in the script itself*, so
+  a recipient recovers them with `parseEditionScript` — no out-of-band metadata.
+- **Validated on BSV mainnet** (2026-06-11): a permissionless replicate was mined into a block.
+
 ---
 
-*Recorded during the PHAR LAP design sessions, 2026-06-10.*
+*Recorded during the PHAR LAP design sessions, 2026-06-10; §10 covenant added 2026-06-11.*
