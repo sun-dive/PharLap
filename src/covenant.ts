@@ -346,6 +346,31 @@ export function swapEditionOwner(lockBytes: number[], newOwnerPub: number[]): nu
   return out
 }
 
+/**
+ * Byte offset of the 32-byte tx1Ref (Collection ID) within the edition locking script:
+ * P(2) + ver(2) + record(2) + push-opcode(1) = 7 (the 32 ref bytes sit at [7, 39)).
+ */
+export const EDITION_TX1REF_SCRIPT_OFFSET = 7
+
+/**
+ * Reconstruct a holder's exact edition locking script from a collection's covenant TEMPLATE.
+ *
+ * Every edition of a collection shares one covenant body — identical stateData (immutable storefront),
+ * fees, and tokenSats — differing only in the two identity fields the covenant fills in: tx1Ref (the
+ * Collection ID, at offset 7) and the owner pubkey (at offset 40). TX1 commits that template with both
+ * zeroed. So splicing a real tx1Ref + owner into the template bytes yields the byte-for-byte script of
+ * that holder's edition — which is exactly what genesis/replicate produce. This makes the holder's
+ * edition deterministically derivable (and thus its UTXO findable by script hash) without any history walk.
+ */
+export function buildHolderEditionScript(templateCovenantBytes: number[], tx1Ref: number[], ownerPub: number[]): number[] {
+  if (tx1Ref.length !== 32) throw new Error('buildHolderEditionScript: tx1Ref must be 32 bytes')
+  if (ownerPub.length !== 33) throw new Error('buildHolderEditionScript: owner pubkey must be 33 bytes')
+  const out = [...templateCovenantBytes]
+  for (let i = 0; i < 32; i++) out[EDITION_TX1REF_SCRIPT_OFFSET + i] = tx1Ref[i]
+  for (let i = 0; i < 33; i++) out[EDITION_OWNER_SCRIPT_OFFSET + i] = ownerPub[i]
+  return out
+}
+
 /** Extract the 33-byte owner pubkey from an edition locking script. */
 export function editionOwnerPubKey(lockBytes: number[]): number[] {
   return lockBytes.slice(EDITION_OWNER_SCRIPT_OFFSET, EDITION_OWNER_SCRIPT_OFFSET + 33)

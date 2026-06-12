@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionScript } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -532,6 +532,8 @@ interface CollectionInfo {
   hasContentFile: boolean
   creatorPubKeyHex: string | null
   fees: { creator: number; holder: number } | null
+  /** The collection's covenant template bytes (hex) — lets the buy flow reconstruct a holder's edition. */
+  covenantHex: string
 }
 
 let cvObjectUrl: string | null = null
@@ -582,7 +584,7 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
     cover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
-    creatorPubKeyHex, fees,
+    creatorPubKeyHex, fees, covenantHex: template.covenantScript,
   }
 }
 
@@ -614,6 +616,7 @@ function renderCollectionView(info: CollectionInfo): void {
 
 async function openCollectionView(tx1Ref: string, holderPubKey: string | null): Promise<void> {
   $('collectionView').style.display = 'flex'
+  hideFundPrompt()
   $('cvTitle').textContent = 'Loading…'
   $('cvCover').innerHTML = ''
   $('cvBadges').innerHTML = ''
@@ -656,6 +659,70 @@ function shareCollectionLink(): void {
   setCvStatus('Share link copied to clipboard.')
 }
 
+function showFundPrompt(needed: number, have: number): void {
+  $('cvFundNeed').textContent = `${needed} sat`
+  $('cvFundHave').textContent = `${have} sat`
+  $('cvFundAddr').textContent = address
+  $('cvFund').style.display = 'block'
+  setCvStatus('Not enough funds yet — send a little BSV to your wallet, then click “I’ve funded”.', 'error')
+}
+function hideFundPrompt(): void { $('cvFund').style.display = 'none' }
+
+// "Get a copy": resolve the seller's current edition → fund check → permissionless replicate → reveal.
+let buying = false
+async function onGetCopy(): Promise<void> {
+  if (buying || !currentCollection) return
+  const { info, holderPubKey } = currentCollection
+  if (!info.fees || !info.covenantHex) { setCvStatus('This collection is not a buyable edition.', 'error'); return }
+  const sellerPub = holderPubKey ?? info.creatorPubKeyHex
+  if (!sellerPub) { setCvStatus('No seller could be determined for this link.', 'error'); return }
+
+  buying = true
+  ;($('cvGet') as HTMLButtonElement).disabled = true
+  try {
+    setCvStatus('Finding the seller’s current edition…')
+    let tip = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex })
+    if (!tip) { setCvStatus('This seller has no edition available right now — try another link or ask them to mint one.', 'error'); return }
+
+    // Fund check: token + replica + both fees + a little for the miner fee/margin.
+    const needed = tip.terms.creatorFeeSats + tip.terms.holderFeeSats + 2 * tip.tokenSats + 1200
+    const have = (await getSafeUtxos(provider)).reduce((s, u) => s + u.satoshis, 0)
+    if (have < needed) { showFundPrompt(needed, have); return }
+    hideFundPrompt()
+
+    setCvStatus('Buying your copy — replicating the edition…')
+    let bought: Awaited<ReturnType<typeof replicateEdition>> | null = null
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try {
+        bought = await replicateEdition(provider, key, {
+          editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms,
+        })
+        break
+      } catch (e) {
+        if (attempt === 2) throw e
+        // The tip was likely taken by another buyer (double-spend) — re-resolve the seller's new edition and retry.
+        setCvStatus('Another buyer was first — finding the seller’s new edition…')
+        const again = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex })
+        if (!again) throw new Error('the seller’s edition is no longer available')
+        tip = again
+      }
+    }
+    if (!bought) return
+    // The buyer's replica (out[1]) is now ours — track it so it shows in the wallet.
+    storeEdition({ txId: bought.replicaOutpoint.txId, outputIndex: bought.replicaOutpoint.outputIndex, lockHex: bought.lockHex },
+      info.tx1Ref, info.name, tip.terms)
+    renderTokens()
+    setCvStatus(`✅ You own a copy of “${info.name}”! Tx ${short(bought.txId)} — it’s now in your wallet.`)
+    // Reveal the content (decrypts automatically — you're a holder now).
+    if (info.hasContentFile) void onView(info.tx1Ref, info.name)
+  } catch (e) {
+    setCvStatus(`Could not complete the purchase: ${(e as Error).message}`, 'error')
+  } finally {
+    buying = false
+    ;($('cvGet') as HTMLButtonElement).disabled = false
+  }
+}
+
 function init(): void {
   store = new PharLapStore()
   useKey(loadKey())
@@ -690,7 +757,9 @@ function init(): void {
   // Collection / sales view (shareable links).
   $('cvWallet').onclick = () => closeCollectionView()
   $('cvShare').onclick = () => shareCollectionLink()
-  $('cvGet').onclick = () => setCvStatus('Resolving the current edition to buy — the one-click buy flow lands in the next step.')
+  $('cvGet').onclick = () => void onGetCopy()
+  $('cvFundCopy').onclick = () => void navigator.clipboard?.writeText(address)
+  $('cvFundDone').onclick = () => void onGetCopy()
   window.addEventListener('hashchange', () => {
     const r = parseHashRoute()
     if (r) void openCollectionView(r.c, r.h)

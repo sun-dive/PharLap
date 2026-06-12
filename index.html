@@ -64,6 +64,8 @@
     .cv-actions button { padding:12px 18px; font-size:15px; }
     .cv-status { margin-top:12px; color:var(--muted); font-size:13px; min-height:18px; }
     .cv-status.error { color:#ffb4ae; }
+    .cv-fund { margin-top:14px; padding:14px; border:1px solid #9e6a03; border-radius:8px; background:#1a1206; font-size:14px; }
+    .cv-fund .mono { color:var(--fg); }
   </style>
 </head>
 <body>
@@ -178,6 +180,16 @@
         <button id="cvGet">Get a copy</button>
         <button id="cvShare" class="secondary">Share</button>
         <button id="cvWallet" class="secondary">Open wallet</button>
+      </div>
+      <div id="cvFund" class="cv-fund" style="display:none">
+        <div>Fund your wallet to buy — need <b id="cvFundNeed"></b>, have <span id="cvFundHave" class="muted"></span>.</div>
+        <div style="margin-top:8px">Send a little BSV to your wallet address:</div>
+        <div class="row" style="margin-top:4px">
+          <span id="cvFundAddr" class="mono"></span>
+          <button id="cvFundCopy" class="secondary">Copy</button>
+        </div>
+        <div id="cvFundQr" class="muted" style="font-size:12px;margin-top:6px">QR code coming shortly — for now, copy the address above and send from your phone/wallet.</div>
+        <button id="cvFundDone" style="margin-top:10px">I’ve funded — buy now</button>
       </div>
       <div id="cvStatus" class="cv-status"></div>
       <footer class="foot">

@@ -25,6 +25,7 @@ import type { PrivateKey } from '@bsv/sdk'
 import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
   editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE, parseEditionScript,
+  buildHolderEditionScript,
 } from './covenant.ts'
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
@@ -493,6 +494,52 @@ export async function broadcastV2Probe(provider: WalletProvider, key: PrivateKey
   provider.registerPendingTx(tx.id('hex'), selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
     tx.outputs[0]?.satoshis != null ? { outputIndex: 0, satoshis: tx.outputs[0].satoshis } : undefined)
   return tx.id('hex')
+}
+
+/** WoC script hash for an output: SHA-256(scriptBytes) byte-reversed (Electrum/WoC convention). */
+export function wocScriptHash(scriptBytes: number[]): string {
+  return Utils.toHex(Hash.sha256(scriptBytes).reverse())
+}
+
+export interface ResolvedEdition {
+  txId: string
+  outputIndex: number
+  /** The exact edition locking script (hex) — feeds straight into replicateEdition. */
+  lockHex: string
+  terms: EditionTerms
+  tokenSats: number
+}
+
+/**
+ * Resolve a holder's CURRENT spendable edition of a collection, given the collection's covenant template
+ * (from TX1) and the holder's pubkey — the "sales link" tip resolution (PLAN.md Step 2, D2).
+ *
+ * The holder's edition script is deterministic (buildHolderEditionScript: template + tx1Ref + owner), so
+ * we derive it and ask WoC for its unspent UTXO(s) by script hash — no address-history walk. Returns the
+ * tip to replicate from, or null if the holder currently holds no edition of this collection.
+ */
+export async function resolveHolderEdition(provider: WalletProvider, params: {
+  tx1RefHex: string
+  holderPubKeyHex: string
+  /** The collection's covenant template bytes (hex) — TX1 template.covenantScript. */
+  templateCovenantHex: string
+}): Promise<ResolvedEdition | null> {
+  const tx1Ref = Utils.toArray(params.tx1RefHex, 'hex')
+  const ownerPub = Utils.toArray(params.holderPubKeyHex, 'hex')
+  const templateBytes = Utils.toArray(params.templateCovenantHex, 'hex')
+  const lockBytes = buildHolderEditionScript(templateBytes, tx1Ref, ownerPub)
+  const lockScript = LockingScript.fromHex(Utils.toHex(lockBytes))
+  const ed = parseEditionScript(lockScript)
+  if (ed == null) throw new Error('resolveHolderEdition: reconstructed script is not a valid edition')
+
+  const unspent = await provider.getUnspentByScriptHash(wocScriptHash(lockBytes))
+  if (unspent.length === 0) return null
+  // Any unspent edition of this holder is an interchangeable sale source; prefer a confirmed one.
+  const pick = unspent.find(u => u.satoshis > 0) ?? unspent[0]
+  return {
+    txId: pick.txId, outputIndex: pick.outputIndex, lockHex: Utils.toHex(lockBytes),
+    terms: { ...ed.terms, tokenSats: pick.satoshis }, tokenSats: pick.satoshis,
+  }
 }
 
 export interface IncomingEdition {
