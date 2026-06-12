@@ -547,9 +547,16 @@ must be mutable*:
   reseller can change it freely (publish a newer one) with zero covenant cost, and the buyer receives the current
   one *with their purchase*, visible in-wallet, on-chain. Overwrite-by-default (i): latest published note wins at
   purchase time; an un-updated note keeps carrying the last seller's promo downstream. No covenant change, no
-  fixed-length field, no re-validation. Lands with the buy flow (Layer B), since the buyer's purchase tx carries
-  it: seller publishes their current note (self-record keyed to holder+collection, resolved in the same
-  address-history pass as the edition tip), the buyer's "Get a copy" echoes it onto the notification output.
+  fixed-length field, no re-validation.
+  **DONE (step 5):** `RECORD_NOTE` (0x07) codec + `sellerNote.ts` (`publishSellerNote` / `resolveSellerNote`
+  via the seller's address history) + `getAddressHistory(address?)`. The sales page resolves & shows the link
+  seller's current note; the holder gets an editor on their own page (publish = overwrite-latest). The buyer
+  CAPTURES the note at purchase (stored on the edition + shown on the wallet card + post-purchase), and a
+  reseller's own page pre-fills the editor with the note they received so they can pass it on in one click.
+  4 codec tests; suite 95/95. DEVIATION from the literal design: the note is delivered via the seller's
+  standalone on-chain published note (resolved by the buyer) + local capture, NOT yet echoed as an extra
+  output on the replicate tx — the covenant already supports a trailing note output (outputs[4+] are appended
+  verbatim), so the on-chain echo + fully hands-off multi-hop propagation remain an available refinement.
 
 **D4 — First-cut scope: (b) full flow.**
 Landing page **+** in-page **"Get a copy"** (auto-create wallet if none → resolve holder's edition tip →

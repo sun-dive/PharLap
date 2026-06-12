@@ -299,8 +299,7 @@ export class WalletProvider {
 
   // ── Address History ───────────────────────────────────────────
 
-  async getAddressHistory(): Promise<{ txId: string; blockHeight: number }[]> {
-    const address = this.getAddress()
+  async getAddressHistory(address: string = this.getAddress()): Promise<{ txId: string; blockHeight: number }[]> {
     const resp = await fetchWithRetry(`${WOC_BASE}/address/${address}/history`)
     if (!resp.ok) throw new Error(`WoC history fetch failed: ${resp.status}`)
     const data = await resp.json()

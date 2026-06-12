@@ -66,6 +66,9 @@
     .cv-status.error { color:#ffb4ae; }
     .cv-fund { margin-top:14px; padding:14px; border:1px solid #9e6a03; border-radius:8px; background:#1a1206; font-size:14px; }
     .cv-fund .mono { color:var(--fg); }
+    .cv-note { margin:12px 0; padding:10px 12px; border-left:3px solid var(--accent2); background:#0d1117; border-radius:6px; font-size:14px; white-space:pre-wrap; }
+    .cv-noteedit { margin:12px 0; }
+    .cv-noteedit textarea { min-height:54px; }
   </style>
 </head>
 <body>
@@ -175,6 +178,15 @@
       <div id="cvBadges" class="cv-badges"></div>
       <div id="cvCreator" class="mono cv-creator muted"></div>
       <p id="cvDesc" class="cv-desc"></p>
+      <div id="cvNote" class="cv-note" style="display:none"></div>
+      <div id="cvNoteEdit" class="cv-noteedit" style="display:none">
+        <label>Your seller note (public — promo, bonuses, redemption info; buyers see it)</label>
+        <textarea id="cvNoteText" placeholder="e.g. Bonus: DM me this txid for a signed print 🎁"></textarea>
+        <div class="row" style="margin-top:6px">
+          <button id="cvNoteSave" class="secondary">Publish note</button>
+          <span id="cvNoteStatus" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
       <div id="cvPrice" class="cv-price"></div>
       <div class="cv-actions">
         <button id="cvGet">Get a copy</button>

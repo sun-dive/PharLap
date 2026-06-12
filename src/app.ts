@@ -16,6 +16,7 @@ import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, sca
 import { parseEditionScript } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
+import { publishSellerNote, resolveSellerNote } from './sellerNote.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
@@ -126,11 +127,12 @@ function termsFromToken(t: StoredToken): EditionTerms {
   }
 }
 
-function storeEdition(o: { txId: string; outputIndex: number; lockHex: string }, collectionId: string, name: string, terms: EditionTerms): void {
+function storeEdition(o: { txId: string; outputIndex: number; lockHex: string }, collectionId: string, name: string, terms: EditionTerms, sellerNote?: string): void {
   store.add({
     txId: o.txId, outputIndex: o.outputIndex, collectionId, stateData: '', collectionName: name,
     kind: 'edition', lockHex: o.lockHex, creatorPubKeyHashHex: Utils.toHex(terms.creatorPubKeyHash),
     creatorFeeSats: terms.creatorFeeSats, holderFeeSats: terms.holderFeeSats,
+    ...(sellerNote ? { sellerNote } : {}),
   })
 }
 
@@ -469,6 +471,7 @@ function renderTokens(): void {
       <div class="mono">collection ${short(t.collectionId)}</div>
       <div class="mono">utxo ${short(t.txId)}:${t.outputIndex}</div>
       ${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ''}
+      ${t.sellerNote ? `<div class="state" style="color:var(--accent2)">📝 ${escapeHtml(t.sellerNote)}</div>` : ''}
     `
     const verify = document.createElement('button')
     verify.textContent = 'Verify'
@@ -538,6 +541,8 @@ interface CollectionInfo {
 
 let cvObjectUrl: string | null = null
 let currentCollection: { info: CollectionInfo; holderPubKey: string | null } | null = null
+/** The seller's current note for the open collection (resolved async), captured onto a purchase. */
+let cvSellerNote: string | null = null
 
 function setCvStatus(msg: string, kind: 'info' | 'error' = 'info'): void {
   const el = $('cvStatus')
@@ -643,6 +648,8 @@ async function openCollectionView(tx1Ref: string, holderPubKey: string | null): 
     currentCollection = { info, holderPubKey }
     renderCollectionView(info)
     setCvStatus('')
+    // Resolve the seller's current promo note (async, best-effort) for the link's seller.
+    void loadSellerNote(info, holderPubKey ?? info.creatorPubKeyHex)
   } catch (e) {
     currentCollection = null
     $('cvTitle').textContent = 'Collection not found'
@@ -671,6 +678,53 @@ function shareCollectionLink(): void {
   const link = `${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`
   void navigator.clipboard?.writeText(link)
   setCvStatus('Share link copied to clipboard.')
+}
+
+/** Resolve and show the seller's current note for the open collection; show the editor if it's my page. */
+async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): Promise<void> {
+  cvSellerNote = null
+  const noteBox = $('cvNote')
+  noteBox.style.display = 'none'
+  const isMine = sellerPub != null && sellerPub === pubKeyHex
+  $('cvNoteEdit').style.display = isMine ? 'block' : 'none'
+  ;($('cvNoteText') as HTMLTextAreaElement).value = ''
+  $('cvNoteStatus').textContent = ''
+  if (sellerPub == null) return
+  let current: string | null = null
+  try {
+    const note = await resolveSellerNote(provider, sellerPub, info.tx1Ref)
+    if (note && note.text) current = note.text
+  } catch { /* best-effort — a missing note is normal */ }
+  // Carry-forward: on my own page, if I haven't published a note, offer the one I received when I bought.
+  if (current == null && isMine) {
+    const held = store.active().find(t => t.collectionId === info.tx1Ref && t.sellerNote)
+    if (held?.sellerNote) {
+      current = held.sellerNote
+      $('cvNoteStatus').textContent = 'This is the note you received when you bought — Publish to pass it on.'
+    }
+  }
+  if (current) {
+    cvSellerNote = current
+    noteBox.textContent = `📝 Seller’s note: ${current}`
+    noteBox.style.display = 'block'
+    if (isMine) ($('cvNoteText') as HTMLTextAreaElement).value = current
+  }
+}
+
+async function onSaveSellerNote(): Promise<void> {
+  if (!currentCollection) return
+  const text = ($('cvNoteText') as HTMLTextAreaElement).value.trim()
+  if (!text) { $('cvNoteStatus').textContent = 'Note is empty.'; return }
+  $('cvNoteStatus').textContent = 'Publishing your note…'
+  try {
+    const txId = await publishSellerNote(provider, key, currentCollection.info.tx1Ref, text)
+    cvSellerNote = text
+    $('cvNote').textContent = `📝 Seller’s note: ${text}`
+    $('cvNote').style.display = 'block'
+    $('cvNoteStatus').textContent = `Published (${short(txId)}). Buyers will see it shortly.`
+  } catch (e) {
+    $('cvNoteStatus').textContent = `Failed: ${(e as Error).message}`
+  }
 }
 
 function showFundPrompt(needed: number, have: number): void {
@@ -731,12 +785,15 @@ async function onGetCopy(): Promise<void> {
       }
     }
     if (!bought) return
-    // The buyer's replica (out[1]) is now ours — track it so it shows in the wallet.
+    // The buyer's replica (out[1]) is now ours — track it (with the seller's note, captured at purchase).
     storeEdition({ txId: bought.replicaOutpoint.txId, outputIndex: bought.replicaOutpoint.outputIndex, lockHex: bought.lockHex },
-      info.tx1Ref, info.name, tip.terms)
+      info.tx1Ref, info.name, tip.terms, cvSellerNote ?? undefined)
     renderTokens()
     showViewButton(info, true) // you're a holder now — keep a persistent View button on the page
-    setCvStatus(`✅ You own a copy of “${info.name}”! Tx ${short(bought.txId)} — it’s now in your wallet.`)
+    setCvStatus(
+      `✅ You own a copy of “${info.name}”! Tx ${short(bought.txId)} — it’s now in your wallet.` +
+      (cvSellerNote ? `\n📝 Seller’s note: ${cvSellerNote}` : ''),
+    )
     // Reveal the content (decrypts automatically — you're a holder now).
     if (info.hasContentFile) void onView(info.tx1Ref, info.name)
   } catch (e) {
@@ -783,6 +840,7 @@ function init(): void {
   $('cvShare').onclick = () => shareCollectionLink()
   $('cvGet').onclick = () => void onGetCopy()
   $('cvView').onclick = () => { if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name) }
+  $('cvNoteSave').onclick = () => void onSaveSellerNote()
   $('cvFundCopy').onclick = () => void navigator.clipboard?.writeText(address)
   $('cvFundDone').onclick = () => void onGetCopy()
   window.addEventListener('hashchange', () => {
