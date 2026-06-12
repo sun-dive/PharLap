@@ -32,6 +32,11 @@ export const RECORD_TOKEN = 0x02
 export const RECORD_FILE = 0x03
 /** Reserved for creator↔holder messages / announcements (encrypted or public). See PLAN.md Addendum E. */
 export const RECORD_MESSAGE = 0x04
+// 0x05 = RECORD_EDITION (covenant edition token; defined in covenant.ts).
+/** Immutable storefront metadata (description + optional public cover image) — a TX1 output, locked to
+ *  the creator. The "what you're buying" face of a collection, public even when the content is encrypted.
+ *  See PLAN.md Step 2 (D3): immutable data lives in an immutable record, never in the mutable stateData. */
+export const RECORD_STOREFRONT = 0x06
 
 /** tokenRules restrictions bitfield. */
 export const RESTRICTION_FUNGIBLE = 0x0001 // interchangeable amounts (satoshis = units)
@@ -296,6 +301,65 @@ export function parseFileScript(
   const d = pushDropDecode(script)
   if (d == null) return null
   const fields = decodeFileFields(d.fields)
+  if (fields == null) return null
+  return { creatorPubKeyHex: d.pubKeyHex, fields }
+}
+
+// ─── STOREFRONT record (TX1, optional) ──────────────────────────────
+// Immutable "what you're buying" metadata, carried as its own TX1 output so it stays in an immutable
+// record (TX1 is the Collection ID tx, never re-created) instead of the mutable stateData field. Every
+// edition binds to it via tx1Ref, and it is the public face of a collection even when the content file
+// is Tier-1 encrypted. Layout mirrors FILE with a leading description field:
+//   [ P, version, RECORD_STOREFRONT, description, coverMimeType, coverFileName, coverBytes ]
+// A cover image is optional: when absent, the three cover fields are empty and only the description shows.
+
+export interface StorefrontFields {
+  /** Short blurb shown on the collection / sales page (set at mint, immutable). May be empty. */
+  description: string
+  /** Optional public (unencrypted) cover image. All three cover fields are present together or absent. */
+  coverMimeType?: string
+  coverFileName?: string
+  coverBytes?: number[]
+}
+
+export function encodeStorefrontFields(data: StorefrontFields): number[][] {
+  return [
+    P_PREFIX,
+    [P_VERSION],
+    [RECORD_STOREFRONT],
+    utf8ToBytes(data.description ?? ''),
+    utf8ToBytes(data.coverMimeType ?? ''),
+    utf8ToBytes(data.coverFileName ?? ''),
+    data.coverBytes ?? [],
+  ]
+}
+
+export function decodeStorefrontFields(fields: number[][]): StorefrontFields | null {
+  if (fields.length < 7) return null
+  if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null
+  if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
+  if (fields[2].length !== 1 || fields[2][0] !== RECORD_STOREFRONT) return null
+  // Empty fields round-trip to "00" via OP_0 (see isEmptyOrZero); normalize those back to empty.
+  const hasCover = !isEmptyOrZero(fields[6])
+  return {
+    description: isEmptyOrZero(fields[3]) ? '' : bytesToUtf8(fields[3]),
+    coverMimeType: hasCover ? bytesToUtf8(fields[4]) : undefined,
+    coverFileName: hasCover ? bytesToUtf8(fields[5]) : undefined,
+    coverBytes: hasCover ? fields[6] : undefined,
+  }
+}
+
+/** Build a STOREFRONT PushDrop locking script, locked to the creator's public key. */
+export function buildStorefrontScript(creatorPubKeyHex: string, data: StorefrontFields): LockingScript {
+  return pushDropLock(creatorPubKeyHex, encodeStorefrontFields(data))
+}
+
+export function parseStorefrontScript(
+  script: LockingScript,
+): { creatorPubKeyHex: string; fields: StorefrontFields } | null {
+  const d = pushDropDecode(script)
+  if (d == null) return null
+  const fields = decodeStorefrontFields(d.fields)
   if (fields == null) return null
   return { creatorPubKeyHex: d.pubKeyHex, fields }
 }

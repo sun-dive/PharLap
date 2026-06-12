@@ -498,3 +498,72 @@ The "shareable sales link" from the product vision; builds on the existing permi
 Order is deliberate: Step 1 is the blocker (without it, multi-user testing fails as SVphone did); Step 2 is the
 feature that makes sharing worthwhile; Step 3 ships it. Future (post-phase): Tier 2/3 encrypted content + the
 key-delivery / watermarking server (the first component that actually needs a backend).
+
+### Step 2 — finalized design (decided 2026-06-12, 4 decisions locked)
+
+Design sketched and decided one question at a time. The four locked decisions:
+
+**D1 — Funding model: mainnet, testers self-fund.**
+Initial testers already hold BSV, so no testnet/faucet (also sidesteps "is Chronicle/v2 live on testnet?").
+"Get a copy" shows a **fund-this-address** prompt = the wallet's **receiving address** (NOT the pubkey — a
+standard BSV wallet sends to an address; the pubkey is only for receiving tokens/messages) + a **copy** button
++ a **QR** of the address (covers PC-testing / phone-funding) + the suggested amount. A **"Buy BSV"** link to
+**Orange Gateway** (buy as little as ~$10 BSV) is reserved for real-world use, not the test phase. QR needs a
+tiny pure-JS encoder bundled (no external image calls).
+
+**D2 — Resolution: any-holder address-history trace now; tiny read-cache resolver service in production.**
+Every current holder gets their OWN share page, not just the creator. Share link carries collection + holder:
+`…/#c=<TX1-txid>&h=<holderPubKey>`. The page resolves **that holder's current edition tip** by tracing the
+holder's address history forward (holder-fee P2PKH breadcrumb + the `out[0]`-returns-to-holder quine make the
+edition discoverable at its latest outpoint). The buyer's replicate then sources from *that* holder, so the
+holder who shared the link earns the holder-fee — the incentive to share your own link. Durable: replicate
+returns the token to the holder verbatim, so a holder's edition SURVIVES being a sale source (moves to a new
+outpoint); the trace walks only that holder's short forward chain, not the hot-token spine. Production resolver
+= a read-cache only (try cached outpoint → if spent-and-not-returned, re-trace → cache new tip); never an
+authority, no custody, pure optimization over the same trustless trace. Tests: live trace each load, no cache.
+
+**D3 — Storefront metadata (immutable creator record + a mutable seller-note on the notification output).**
+
+A field-semantics correction drove the final structure: `tokenRules` is meant to be immutable and `stateData`
+mutable — but under the edition COVENANT *both* are immutable, because the covenant reconstructs each spend's
+outputs from the token's own script bytes and copies them verbatim (only the 33-byte owner pubkey is swapped).
+That immutability is a property of covenant editions only; for plain (non-covenant) PushDrop tokens `stateData`
+is genuinely mutable (an owner-signed transfer re-creates the output freely). So immutable storefront data must
+NOT live in `stateData` (misuses the mutable field + bloats every ~1KB covenant output); and mutable per-token
+state must live OUTSIDE the covenant script (a companion/notification output that isn't part of the cloned
+scriptCode). Resulting split — *covenant token carries what must be immutable; a sibling output carries what
+must be mutable*:
+
+- *Immutable "what you're buying"* (creator, set at mint): a dedicated **`RECORD_STOREFRONT` (0x06) output in
+  TX1** = `[P, ver, 0x06, description, coverMimeType, coverFileName, coverBytes]`. Self-contained and immutable
+  by virtue of living in TX1 (the Collection ID tx, never re-created, locked to the creator); every edition binds
+  to it via `tx1Ref`. Title stays `template.tokenName`. Works even for encrypted collections (cover + blurb
+  public, content locked) — the public face of the "🔒 holders only" gate. Cover BYTES live here (too big for a
+  script field); editions stay small (no per-edition duplication — one `tx1Ref` fetch the page does anyway).
+  **DONE (A.1):** `tokenCodec` storefront codec + `buildTemplateTx` cover output + `createEdition`
+  `description`/`cover` params + mint UI fields; 5 tests, full suite 86/86, bundle builds.
+- *Mutable "seller-note"* (holder/reseller promo: review, bonuses, **bonus-redemption instructions the buyer
+  must see in-wallet**): rides as data on the **purchase notification output**, NOT in the covenant token — so a
+  reseller can change it freely (publish a newer one) with zero covenant cost, and the buyer receives the current
+  one *with their purchase*, visible in-wallet, on-chain. Overwrite-by-default (i): latest published note wins at
+  purchase time; an un-updated note keeps carrying the last seller's promo downstream. No covenant change, no
+  fixed-length field, no re-validation. Lands with the buy flow (Layer B), since the buyer's purchase tx carries
+  it: seller publishes their current note (self-record keyed to holder+collection, resolved in the same
+  address-history pass as the edition tip), the buyer's "Get a copy" echoes it onto the notification output.
+
+**D4 — First-cut scope: (b) full flow.**
+Landing page **+** in-page **"Get a copy"** (auto-create wallet if none → resolve holder's edition tip →
+funds check + fund-address prompt → permissionless replicate w/ retry-on-double-spend → reveal/decrypt). The
+one-click "anyone can click and own" buy IS the thing being tested (the SVphone-style demo); resolve+replicate
+already exist in `editionBuilder.ts`. A read-only landing page alone would just be a viewer.
+
+**Landing-page layout (per-holder link):** `[cover image]` · title · creator · price (creator+holder fees) ·
+type/lock state · **that holder's seller-note** (if any) · `[Get a copy]` `[Share]` `[Open in wallet]` · WoC badge.
+
+**Build order within Step 2:** (1) hash-route reader (`#c=`,`#h=`) + a collection-view mode in the SPA;
+(2) TX1 storefront fetch/render (title/desc/cover/lock); (3) holder-tip resolver over address history (reads the
+seller-note from the resolved token); (4) "Get a copy" wired to existing replicate + fund-address prompt (address
++ copy + QR); (5) Share button (emit `#c=…&h=…` for a collection you hold); (6) reveal/decrypt on success.
+Covenant/codec work: add the immutable title+description + cover-image-hash to the TX1 template, and the capped
+mutable seller-note field at the tail of the edition state (settable on transfer, carried verbatim on replicate).
+Mint UI gains the storefront fields (title/description/cover image); a "seller-note" editor sets it via transfer.

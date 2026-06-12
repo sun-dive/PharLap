@@ -151,11 +151,13 @@ async function onMintEdition(): Promise<void> {
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
   const terms = ownTerms()
+  const description = val('edDescription')
   try {
     const file = await readFile($('edFile') as HTMLInputElement)
+    const cover = await readFile($('edCover') as HTMLInputElement)
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
     setStatus(`Minting ${encrypt ? 'encrypted ' : ''}edition collection (TX1 template + TX2 covenant editions)…`)
-    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt })
+    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt, description, cover })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
     renderTokens()
     setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')

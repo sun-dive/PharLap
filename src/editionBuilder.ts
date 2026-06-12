@@ -316,6 +316,10 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   file?: { mimeType: string; fileName: string; bytes: number[] }
   /** Tier-1 encrypt the embedded file (Addendum F). Requires `file`. */
   encrypt?: boolean
+  /** Immutable storefront blurb shown on the collection / sales page (PLAN.md Step 2, D3). */
+  description?: string
+  /** Optional public (unencrypted) cover image — the storefront's face, shown even when content is encrypted. */
+  cover?: { mimeType: string; fileName: string; bytes: number[] }
   feePerKb?: number
 }): Promise<CreateEditionResult> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
@@ -355,9 +359,22 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes! }
     : undefined
 
-  // Fund both txs. TX1 carries any embedded file, so its fee scales with file size; keep a healthy margin.
+  // Immutable storefront record (description + optional public cover image), carried as a TX1 output.
+  const hasStorefront = (params.description != null && params.description.length > 0) || params.cover != null
+  const storefront = hasStorefront
+    ? {
+        description: params.description ?? '',
+        coverMimeType: params.cover?.mimeType,
+        coverFileName: params.cover?.fileName,
+        coverBytes: params.cover?.bytes,
+      }
+    : undefined
+
+  // Fund both txs. TX1 carries any embedded file + cover, so its fee scales with their size; keep a healthy margin.
   const editionBytes = 800
-  const tx1Bytes = 500 + templateLock.toBinary().length + (file ? file.fileBytes.length : 0)
+  const tx1Bytes = 500 + templateLock.toBinary().length
+    + (file ? file.fileBytes.length : 0)
+    + (params.cover ? params.cover.bytes.length : 0)
   const tx2Bytes = 300 + mintCount * editionBytes
   const estFee = Math.ceil(((tx1Bytes + tx2Bytes) * feePerKb) / 1000)
   const target = (1 + mintCount) * tokenSats + estFee + Math.max(1000, Math.ceil(estFee * 0.2))
@@ -365,7 +382,7 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   const funding = await toFundingInputs(provider, selected)
 
   // Build both offline, broadcast only if both succeed (no orphaned template).
-  const t1 = await buildTemplateTx({ key, funding, template, file, outputSats: tokenSats, feePerKb })
+  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, outputSats: tokenSats, feePerKb })
   if (t1.changeVout == null) throw new Error('Insufficient funding: template tx left no change to fund the edition mint.')
   const t2Funding: FundingInput[] = [{
     utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' },

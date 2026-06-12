@@ -97,6 +97,10 @@
       <div class="row" style="margin-bottom:10px"><button id="btnV2Probe" class="secondary">Test v2 broadcast</button></div>
       <label>Edition collection name</label>
       <input id="edName" placeholder="e.g. My eBook (unlimited editions)" />
+      <label>Description (shown on the sales page — public, immutable)</label>
+      <textarea id="edDescription" placeholder="What is this? What do holders get? (a short blurb buyers see before purchase)"></textarea>
+      <label>Cover image (optional — public storefront art, shown even if the content is encrypted)</label>
+      <input id="edCover" type="file" accept="image/*" />
       <div class="grid2" style="grid-template-columns:1fr 1fr">
         <div><label>Creator fee (sat)</label><input id="edCreatorFee" type="number" min="0" value="5000" /></div>
         <div><label>Holder fee (sat)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>

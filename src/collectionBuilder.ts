@@ -22,11 +22,12 @@ import type { Utxo, WalletProvider } from './walletProvider.ts'
 import {
   buildTemplateScript,
   buildFileScript,
+  buildStorefrontScript,
   buildTokenScript,
   encodeTokenRules,
   classifyRecord,
 } from './tokenCodec.ts'
-import type { TemplateFields, FileFields } from './tokenCodec.ts'
+import type { TemplateFields, FileFields, StorefrontFields } from './tokenCodec.ts'
 
 /** Satoshi value of each PushDrop record output (token / template / file). */
 export const PHARLAP_OUTPUT_SATS = 1
@@ -76,6 +77,7 @@ export interface TemplateTxResult {
   tx1Id: string
   templateVout: number
   fileVout: number | null
+  storefrontVout: number | null
   changeVout: number | null
   changeSats: number
 }
@@ -85,6 +87,8 @@ export async function buildTemplateTx(opts: {
   funding: FundingInput[]
   template: TemplateFields
   file?: FileFields
+  /** Optional immutable storefront record (description + optional cover image), TX1-resident. */
+  storefront?: StorefrontFields
   outputSats?: number
   feePerKb?: number
 }): Promise<TemplateTxResult> {
@@ -105,8 +109,13 @@ export async function buildTemplateTx(opts: {
   const templateVout = 0
   let fileVout: number | null = null
   if (opts.file) {
+    fileVout = tx.outputs.length
     tx.addOutput({ lockingScript: buildFileScript(creatorPub, opts.file), satoshis: sats })
-    fileVout = 1
+  }
+  let storefrontVout: number | null = null
+  if (opts.storefront) {
+    storefrontVout = tx.outputs.length
+    tx.addOutput({ lockingScript: buildStorefrontScript(creatorPub, opts.storefront), satoshis: sats })
   }
 
   const changeVout = tx.outputs.length
@@ -121,6 +130,7 @@ export async function buildTemplateTx(opts: {
     tx1Id: tx.id('hex'),
     templateVout,
     fileVout,
+    storefrontVout,
     changeVout: changeSats > 0 ? changeVout : null,
     changeSats,
   }
