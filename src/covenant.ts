@@ -245,6 +245,74 @@ export function replicateBranchOps(p: ReplicateParams): ScriptChunk[] {
   return [...covenantPrefixOps(p.fieldPubkeyOffset, p.c ?? pushTxConstants()), ...replicateTailOps(p)]
 }
 
+// --- Covenant v2 (Addendum G): replicate with a COMPUTED percentage split of the reseller's price ---
+
+export interface ReplicateV2Params {
+  tokenSats?: number
+  /** 20-byte hash160 of the immutable creator fee address. */
+  creatorPubKeyHash: number[]
+  /** Creator fee in BASIS POINTS (0–10000): creatorCut = ⌊P × cBps / 10000⌋. */
+  cBps: number
+  c?: PushTxConstants
+}
+
+/**
+ * v2 replicate tail. Stack on entry: [ buyerChange, buyerPub, pre, ownerPub, suffix ], alt = [ hashOutputs ].
+ * Reads the price P from the edition's price field (the first field in `suffix`) and enforces:
+ *   out[0] token→holder (verbatim)   out[1] replica→buyer (owner swapped, price carried verbatim)
+ *   out[2] = ⌊P×cBps/10000⌋  → creator P2PKH (baked hash)
+ *   out[3] = P − creatorCut   → reseller P2PKH (hash160 of the owner pubkey)
+ *   out[4+] buyerChange
+ * cBps (≤10000) guarantees creatorCut ≤ P, so resellerCut ≥ 0. Reseller absorbs integer-division dust.
+ */
+export function replicateTailV2Ops(p: ReplicateV2Params): ScriptChunk[] {
+  const VALUE1 = u64le(p.tokenSats ?? 1)
+  const CREATOR_P2PKH = [0x19, ...p2pkhScript(p.creatorPubKeyHash)] // varint(25) ‖ 25-byte P2PKH (value computed)
+  const RESELLER_PRE = [0x19, 0x76, 0xa9, 0x14]                     // varint(25) ‖ OP_DUP OP_HASH160 PUSH20
+  const RESELLER_SUF = [0x88, 0xac]                                 // OP_EQUALVERIFY OP_CHECKSIG
+  return [
+    // out0 = VALUE1 ‖ pre ‖ ownerPub ‖ suffix (token back to holder, verbatim)
+    pushData(VALUE1),
+    pushData([3]), op(OP.OP_PICK), op(OP.OP_CAT),
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_CAT),
+    pushData([1]), op(OP.OP_PICK), op(OP.OP_CAT),
+    // out1 = VALUE1 ‖ pre ‖ buyerPub ‖ suffix (replica to buyer; price carried in suffix)
+    pushData(VALUE1),
+    pushData([4]), op(OP.OP_PICK), op(OP.OP_CAT),
+    pushData([5]), op(OP.OP_PICK), op(OP.OP_CAT),
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_CAT),
+    op(OP.OP_CAT),                                                  // out0‖out1   stack: [.., suffix, out0out1]
+    // Extract P from a COPY of suffix (price = first field; skip its 1-byte push opcode, take 8 bytes).
+    pushData([1]), op(OP.OP_PICK),
+    pushData([1]), op(OP.OP_SPLIT), op(OP.OP_NIP),
+    pushData([8]), op(OP.OP_SPLIT), op(OP.OP_DROP),
+    op(OP.OP_BIN2NUM),                                              // [.., out0out1, P]
+    // creatorCut = ⌊P×cBps/10000⌋ ; resellerCut = P − creatorCut
+    op(OP.OP_DUP), pushData(numLE(p.cBps)), op(OP.OP_MUL), pushData(numLE(10000)), op(OP.OP_DIV),
+    op(OP.OP_TUCK), op(OP.OP_SUB),                                  // [.., out0out1, creatorCut, resellerCut]
+    op(OP.OP_8), op(OP.OP_NUM2BIN),                                 // resellerCut → 8-byte LE
+    op(OP.OP_SWAP), op(OP.OP_8), op(OP.OP_NUM2BIN),                 // [.., out0out1, resellerCut8, creatorCut8]
+    // out2 = creatorCut8 ‖ CREATOR_P2PKH ; prepend out0out1
+    pushData(CREATOR_P2PKH), op(OP.OP_CAT),                         // [.., out0out1, resellerCut8, out2]
+    pushData([2]), op(OP.OP_ROLL), op(OP.OP_SWAP), op(OP.OP_CAT),   // out0out1‖out2   [.., resellerCut8, out012]
+    // out3 = resellerCut8 ‖ RESELLER_PRE ‖ HASH160(ownerPub) ‖ RESELLER_SUF ; append
+    op(OP.OP_SWAP), op(OP.OP_CAT),                                  // out012‖resellerCut8
+    pushData(RESELLER_PRE), op(OP.OP_CAT),
+    pushData([2]), op(OP.OP_PICK), op(OP.OP_HASH160), op(OP.OP_CAT),
+    pushData(RESELLER_SUF), op(OP.OP_CAT),                          // → out0123   [.., suffix, ..., out0123]
+    // ‖ buyerChange → expected ; compare HASH256 to hashOutputs
+    pushData([5]), op(OP.OP_ROLL), op(OP.OP_CAT),
+    op(OP.OP_TOALTSTACK), op(OP.OP_2DROP), op(OP.OP_2DROP),
+    op(OP.OP_FROMALTSTACK), op(OP.OP_HASH256),
+    op(OP.OP_FROMALTSTACK), op(OP.OP_EQUAL),
+  ]
+}
+
+/** Standalone v2 replicate covenant (prefix + v2 tail), for isolated Spend validation. */
+export function replicateBranchV2Ops(p: ReplicateV2Params & { fieldPubkeyOffset: number }): ScriptChunk[] {
+  return [...covenantPrefixOps(p.fieldPubkeyOffset, p.c ?? pushTxConstants()), ...replicateTailV2Ops(p)]
+}
+
 // --- L5: the real edition token (data fields + transfer/replicate branches) ---
 
 /** SIGHASH used for the covenant's OP_PUSH_TX introspection: ANYONECANPAY|ALL|FORKID (0xc1). */
