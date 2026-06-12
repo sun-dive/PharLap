@@ -28,6 +28,7 @@ const MIME = {
   '.map':  'application/json',
   '.css':  'text/css',
   '.json': 'application/json',
+  '.svg':  'image/svg+xml',
 }
 
 const server = http.createServer((req, res) => {

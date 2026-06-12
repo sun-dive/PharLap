@@ -47,6 +47,8 @@
     .warn h2 { color:#e3a008; }
     .foot { text-align:center; color:var(--muted); font-size:12px; margin:28px 0 8px; }
     .foot a { color:var(--accent2); }
+    .woc-badge { height:28px; width:auto; opacity:.9; }
+    .woc-badge:hover { opacity:1; }
   </style>
 </head>
 <body>
@@ -138,8 +140,10 @@
     </div>
 
     <footer class="foot">
-      Blockchain data powered by <a href="https://whatsonchain.com" target="_blank" rel="noopener">WhatsOnChain</a>
-      · PHAR LAP is experimental — use small amounts.
+      <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
+        <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
+      </a>
+      <div style="margin-top:8px">PHAR LAP is experimental — use small amounts.</div>
     </footer>
   </div>
 
