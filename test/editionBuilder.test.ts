@@ -5,6 +5,8 @@ import { Transaction, P2PKH, PrivateKey, LockingScript, Spend, Hash } from '@bsv
 import {
   buildEditionGenesisTx, buildReplicateTx, buildEditionTransferTx, type EditionUtxo, type EditionTerms,
 } from '../src/editionBuilder.ts'
+import { readNoteFromTx } from '../src/sellerNote.ts'
+import { parseNoteScript } from '../src/tokenCodec.ts'
 import type { FundingInput } from '../src/collectionBuilder.ts'
 
 const TX1REF = 'ab'.repeat(32)
@@ -65,6 +67,42 @@ test('replicate: builds a valid permissionless mint (token, replica, fees, chang
   const rep = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer, funding: [faucet(buyer, 200000)] })
   assert.equal(rep.tx.outputs.length, 5)
   assert.equal(spendOk(rep.tx, LockingScript.fromBinary(utxo.lockBytes), 1), true)
+})
+
+test('replicate with a seller-note echoes a NOTE output to the buyer, covenant still valid', async () => {
+  const { utxo } = await genesisEdition()
+  const buyer = PrivateKey.fromRandom()
+  const rep = await buildReplicateTx({
+    edition: utxo, terms, buyerKey: buyer, funding: [faucet(buyer, 200000)], noteText: 'Bonus inside 🎁',
+  })
+  // 4 enforced outputs + note + change = 6, and the covenant input still validates (note is trailing).
+  assert.equal(rep.tx.outputs.length, 6)
+  assert.equal(spendOk(rep.tx, LockingScript.fromBinary(utxo.lockBytes), 1), true)
+  // The note rode in, readable and tied to the collection, locked to the BUYER.
+  assert.equal(readNoteFromTx(rep.tx, TX1REF), 'Bonus inside 🎁')
+  const noteOut = rep.tx.outputs.find(o => parseNoteScript(o.lockingScript))!
+  assert.equal(parseNoteScript(noteOut.lockingScript)!.authorPubKeyHex, buyer.toPublicKey().toString())
+})
+
+test('replicate WITHOUT a note keeps the original 5-output shape (no echo)', async () => {
+  const { utxo } = await genesisEdition()
+  const buyer = PrivateKey.fromRandom()
+  const rep = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer, funding: [faucet(buyer, 200000)] })
+  assert.equal(rep.tx.outputs.length, 5)
+  assert.equal(readNoteFromTx(rep.tx, TX1REF), null)
+})
+
+test('transfer with a seller-note carries a NOTE output to the new owner, covenant still valid', async () => {
+  const { utxo } = await genesisEdition()
+  const newOwner = PrivateKey.fromRandom()
+  const xfer = await buildEditionTransferTx({
+    edition: utxo, ownerKey: holder, newOwnerPubKey: pub(newOwner), funding: [faucet(holder, 200000)],
+    noteText: 'see you downstream',
+  })
+  assert.equal(spendOk(xfer.tx, LockingScript.fromBinary(utxo.lockBytes), 1), true)
+  assert.equal(readNoteFromTx(xfer.tx, TX1REF), 'see you downstream')
+  const noteOut = xfer.tx.outputs.find(o => parseNoteScript(o.lockingScript))!
+  assert.equal(parseNoteScript(noteOut.lockingScript)!.authorPubKeyHex, newOwner.toPublicKey().toString())
 })
 
 test('transfer: builds a valid owner-signed move that re-creates the covenant', async () => {

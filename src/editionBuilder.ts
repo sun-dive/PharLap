@@ -30,7 +30,8 @@ import {
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
 } from './collectionBuilder.ts'
-import { encodeTokenRules, RESTRICTION_REPLICABLE, RESTRICTION_ENCRYPTED } from './tokenCodec.ts'
+import { encodeTokenRules, buildNoteScript, RESTRICTION_REPLICABLE, RESTRICTION_ENCRYPTED } from './tokenCodec.ts'
+import { readNoteFromTx } from './sellerNote.ts'
 import { newContentKey, newKeySalt, encryptContent, wrapContentKey } from './contentCrypto.ts'
 import type { WalletProvider, Utxo } from './walletProvider.ts'
 
@@ -200,12 +201,15 @@ export async function buildReplicateTx(opts: {
   buyerKey: PrivateKey
   /** Buyer funding inputs (P2PKH), signed with buyerKey. */
   funding: FundingInput[]
+  /** Seller's note to echo onto the sale (a NOTE output locked to the buyer) — hands-off propagation. */
+  noteText?: string
   feePerKb?: number
 }): Promise<ReplicateResult> {
   const tokenSats = opts.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
   const lock = LockingScript.fromBinary(opts.edition.lockBytes)
   const holderPub = editionOwnerPubKey(opts.edition.lockBytes)
   const buyerPub = pubKeyBytes(opts.buyerKey)
+  const tx1RefHex = parseEditionScript(lock)?.tx1RefHex
   const tx = new Transaction()
   tx.version = 2
 
@@ -227,8 +231,13 @@ export async function buildReplicateTx(opts: {
   tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats }) // [1] replica → buyer
   tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(opts.terms.creatorPubKeyHash)), satoshis: opts.terms.creatorFeeSats }) // [2] creator fee
   tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash.hash160(holderPub))), satoshis: opts.terms.holderFeeSats })       // [3] holder fee
+  // [4] (optional) seller-note echo, locked to the buyer — a spender-supplied trailing output the covenant
+  // appends verbatim (no covenant change). Carries the note to the buyer's wallet + to their future buyers.
+  if (opts.noteText && opts.noteText.length > 0 && tx1RefHex != null) {
+    tx.addOutput({ lockingScript: buildNoteScript(Utils.toHex(buyerPub), { collectionRef: tx1RefHex, text: opts.noteText }), satoshis: tokenSats })
+  }
   const changeVout = tx.outputs.length
-  tx.addOutput({ lockingScript: new P2PKH().lock(opts.buyerKey.toAddress()), change: true })                  // [4] buyer change
+  tx.addOutput({ lockingScript: new P2PKH().lock(opts.buyerKey.toAddress()), change: true })                  // buyer change (last)
 
   await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB))
   await tx.sign()
@@ -253,11 +262,14 @@ export async function buildEditionTransferTx(opts: {
   newOwnerPubKey: number[]
   /** Owner funding inputs (P2PKH) for the miner fee, signed with ownerKey. */
   funding: FundingInput[]
+  /** Seller-note to carry to the new owner (a NOTE output locked to them) — hands-off propagation. */
+  noteText?: string
   tokenSats?: number
   feePerKb?: number
 }): Promise<TransferResult> {
   const tokenSats = opts.tokenSats ?? PHARLAP_OUTPUT_SATS
   const lock = LockingScript.fromBinary(opts.edition.lockBytes)
+  const tx1RefHex = parseEditionScript(lock)?.tx1RefHex
   const tx = new Transaction()
   tx.version = 2
 
@@ -279,6 +291,10 @@ export async function buildEditionTransferTx(opts: {
   // covenant output itself is not WoC-address-indexed). Part of the covenant's free "change" region.
   const notifyAddress = PublicKey.fromString(Utils.toHex(opts.newOwnerPubKey)).toAddress()
   tx.addOutput({ lockingScript: new P2PKH().lock(notifyAddress), satoshis: 1 })
+  // (optional) seller-note echo, locked to the new owner — carries the note across the transfer.
+  if (opts.noteText && opts.noteText.length > 0 && tx1RefHex != null) {
+    tx.addOutput({ lockingScript: buildNoteScript(Utils.toHex(opts.newOwnerPubKey), { collectionRef: tx1RefHex, text: opts.noteText }), satoshis: tokenSats })
+  }
   const changeVout = tx.outputs.length
   tx.addOutput({ lockingScript: new P2PKH().lock(opts.ownerKey.toAddress()), change: true })
 
@@ -412,6 +428,8 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
   editionOutputIndex: number
   editionLockHex: string
   terms: EditionTerms
+  /** Seller's note to echo onto the buyer's copy (hands-off propagation). */
+  noteText?: string
   feePerKb?: number
 }): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
@@ -422,13 +440,14 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
     txId: params.editionTxId, outputIndex: params.editionOutputIndex,
     satoshis: sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? tokenSats, lockBytes, sourceTx,
   }
-  // Buyer funds: token + replica sats, both fees, miner fee, margin.
+  // Buyer funds: token + replica sats, both fees, the optional note output, miner fee, margin.
+  const noteSats = params.noteText ? tokenSats : 0
   const estFee = Math.ceil((1500 * feePerKb) / 1000)
-  const target = 2 * tokenSats + params.terms.creatorFeeSats + params.terms.holderFeeSats + estFee + 1000
+  const target = 2 * tokenSats + noteSats + params.terms.creatorFeeSats + params.terms.holderFeeSats + estFee + 1000
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding = await toFundingInputs(provider, selected)
 
-  const rep = await buildReplicateTx({ edition, terms: params.terms, buyerKey, funding, feePerKb })
+  const rep = await buildReplicateTx({ edition, terms: params.terms, buyerKey, funding, noteText: params.noteText, feePerKb })
   await provider.broadcast(rep.tx.toHex())
   provider.registerPendingTx(rep.txId,
     [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex },
@@ -446,6 +465,8 @@ export async function transferEdition(provider: WalletProvider, ownerKey: Privat
   editionOutputIndex: number
   editionLockHex: string
   newOwnerPubKey: number[]
+  /** Seller-note to carry to the new owner (hands-off propagation). */
+  noteText?: string
   tokenSats?: number
   feePerKb?: number
 }): Promise<{ txId: string; tokenOutpoint: { txId: string; outputIndex: number }; lockHex: string }> {
@@ -457,12 +478,13 @@ export async function transferEdition(provider: WalletProvider, ownerKey: Privat
     txId: params.editionTxId, outputIndex: params.editionOutputIndex,
     satoshis: sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? tokenSats, lockBytes, sourceTx,
   }
+  const noteSats = params.noteText ? tokenSats : 0
   const estFee = Math.ceil((1500 * feePerKb) / 1000)
-  const selected = selectFunding(await getSafeUtxos(provider), tokenSats + estFee + 1000)
+  const selected = selectFunding(await getSafeUtxos(provider), tokenSats + noteSats + estFee + 1000)
   const funding = await toFundingInputs(provider, selected)
 
   const xfer = await buildEditionTransferTx({
-    edition, ownerKey, newOwnerPubKey: params.newOwnerPubKey, funding, tokenSats, feePerKb,
+    edition, ownerKey, newOwnerPubKey: params.newOwnerPubKey, funding, noteText: params.noteText, tokenSats, feePerKb,
   })
   await provider.broadcast(xfer.tx.toHex())
   provider.registerPendingTx(xfer.txId,
@@ -548,6 +570,8 @@ export interface IncomingEdition {
   lockHex: string
   tx1RefHex: string
   terms: EditionTerms
+  /** Seller-note that rode in on the carrying tx (on-chain echo), if any. */
+  sellerNote?: string
 }
 
 /**
@@ -574,9 +598,12 @@ export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: 
       const key = `${txId}:${i}`
       if (seenOutpoint.has(key)) return
       seenOutpoint.add(key)
+      // A seller-note may have ridden in on this same tx (the on-chain echo) — capture it for display.
+      const note = readNoteFromTx(tx, ed.tx1RefHex)
       found.push({
         txId, outputIndex: i, lockHex: Utils.toHex(o.lockingScript.toBinary()), tx1RefHex: ed.tx1RefHex,
         terms: { ...ed.terms, tokenSats: o.satoshis ?? PHARLAP_OUTPUT_SATS },
+        ...(note ? { sellerNote: note } : {}),
       })
     })
   }
