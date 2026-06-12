@@ -564,6 +564,23 @@ must be mutable*:
   it — the price of keeping it freely overwritable. Mempool-aware resolution (getRecentTxIdsForAddress). +3
   edition-echo tests; suite 98/98.
 
+**Bonus delivery (extends the seller-note).** A seller can attach a BONUS to their note that a buyer can
+claim straight from the sales confirmation + wallet. Built as structured fields on the NOTE record so it
+rides + propagates + overwrites exactly like the promo text (sticky default).
+  - **BUILDING NOW — external link/code bonus (instant):** `bonusKind` (link | code) + `bonusValue` on the
+    note. Wallet shows a "🎁 Claim bonus" CTA post-purchase (and on the held edition card); a `link` opens
+    the seller's URL (their site verifies proof-of-purchase via the txid), a `code` is revealed/copyable.
+    Storefront shows a "🎁 includes a bonus" teaser. Public (the value is on-chain in the note) — the seller's
+    site does the gating; cheap, no crypto.
+  - **FUTURE — on-chain content bonus:** the bonus IS an on-chain (Tier-1-encrypted) file/payload claimed via
+    the existing content viewer, instead of an off-chain link — no seller server needed.
+  - **FUTURE — timelocked bonus:** a second bonus that unlocks after a block height / date. Two models:
+    (A) client-gated reveal (cheap, soft — value sits in the tx, wallet just hides it until the time;
+    trivially bypassed); (B) encrypt-now / seller-reveals-key-at-time (real — ciphertext rides with the
+    purchase, key withheld until the seller publishes it at unlock; reuses Tier-1 crypto, and the seller's
+    timed key-publish is a natural fit for scheduling/automation). (C) fully trustless on-chain timelock =
+    heavy, out of scope. Lean: (B) when implemented.
+
 **D4 — First-cut scope: (b) full flow.**
 Landing page **+** in-page **"Get a copy"** (auto-create wallet if none → resolve holder's edition tip →
 funds check + fund-address prompt → permissionless replicate w/ retry-on-double-spend → reveal/decrypt). The

@@ -21,6 +21,24 @@ test('note round-trips through the PushDrop with author + collection + text', ()
   assert.equal(parsed!.fields.text, 'Bonus: DM me this txid for a signed print 🎁')
 })
 
+test('note carries an optional link bonus through the PushDrop', () => {
+  const parsed = parseNoteScript(buildNoteScript(sellerPub, {
+    collectionRef, text: 'Thanks!', bonusKind: 'link', bonusValue: 'https://seller.example/claim',
+  }))
+  assert.ok(parsed)
+  assert.equal(parsed!.fields.bonusKind, 'link')
+  assert.equal(parsed!.fields.bonusValue, 'https://seller.example/claim')
+})
+
+test('note carries an optional code bonus; a note with no bonus has undefined bonus fields', () => {
+  const withCode = parseNoteScript(buildNoteScript(sellerPub, { collectionRef, text: '', bonusKind: 'code', bonusValue: 'FREEGIFT' }))
+  assert.equal(withCode!.fields.bonusKind, 'code')
+  assert.equal(withCode!.fields.bonusValue, 'FREEGIFT')
+  const plain = parseNoteScript(buildNoteScript(sellerPub, { collectionRef, text: 'just a note' }))
+  assert.equal(plain!.fields.bonusKind, undefined)
+  assert.equal(plain!.fields.bonusValue, undefined)
+})
+
 test('a note output classifies as RECORD_NOTE (0x07)', () => {
   assert.equal(classifyRecord(buildNoteScript(sellerPub, { collectionRef, text: 'hi' })), RECORD_NOTE)
 })

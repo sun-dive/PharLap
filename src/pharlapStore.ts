@@ -27,6 +27,9 @@ export interface StoredToken {
   holderFeeSats?: number
   /** Seller's promo note captured at purchase (the note that was current when this copy was bought). */
   sellerNote?: string
+  /** Optional buyer bonus captured with the note: an external link or a redeemable code. */
+  bonusKind?: 'link' | 'code'
+  bonusValue?: string
 }
 
 export interface KVStore {

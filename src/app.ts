@@ -16,7 +16,7 @@ import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, sca
 import { parseEditionScript } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
-import { publishSellerNote, resolveSellerNote, readNoteFromTx } from './sellerNote.ts'
+import { publishSellerNote, resolveSellerNote, readNoteFromTx, type SellerNote } from './sellerNote.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
@@ -127,12 +127,13 @@ function termsFromToken(t: StoredToken): EditionTerms {
   }
 }
 
-function storeEdition(o: { txId: string; outputIndex: number; lockHex: string }, collectionId: string, name: string, terms: EditionTerms, sellerNote?: string): void {
+function storeEdition(o: { txId: string; outputIndex: number; lockHex: string }, collectionId: string, name: string, terms: EditionTerms, note?: SellerNote | null): void {
   store.add({
     txId: o.txId, outputIndex: o.outputIndex, collectionId, stateData: '', collectionName: name,
     kind: 'edition', lockHex: o.lockHex, creatorPubKeyHashHex: Utils.toHex(terms.creatorPubKeyHash),
     creatorFeeSats: terms.creatorFeeSats, holderFeeSats: terms.holderFeeSats,
-    ...(sellerNote ? { sellerNote } : {}),
+    ...(note?.text ? { sellerNote: note.text } : {}),
+    ...(note?.bonusValue ? { bonusKind: note.bonusKind, bonusValue: note.bonusValue } : {}),
   })
 }
 
@@ -168,11 +169,12 @@ async function onMintEdition(): Promise<void> {
   }
 }
 
-/** The note to carry when I sell/transfer an edition I hold: my own published note wins, else the note
- *  that came with this copy (sticky default → hands-off propagation). */
-async function noteToPropagate(t: StoredToken): Promise<string | undefined> {
-  try { const p = await resolveSellerNote(provider, pubKeyHex, t.collectionId); if (p?.text) return p.text } catch { /* best-effort */ }
-  return t.sellerNote
+/** The note (promo + bonus) to carry when I sell/transfer an edition I hold: my own published note wins,
+ *  else the note that came with this copy (sticky default → hands-off propagation). */
+async function noteToPropagate(t: StoredToken): Promise<SellerNote | undefined> {
+  try { const p = await resolveSellerNote(provider, pubKeyHex, t.collectionId); if (p && (p.text || p.bonusValue)) return p } catch { /* best-effort */ }
+  if (t.sellerNote || t.bonusValue) return { text: t.sellerNote ?? '', bonusKind: t.bonusKind, bonusValue: t.bonusValue }
+  return undefined
 }
 
 async function onReplicate(t: StoredToken): Promise<void> {
@@ -182,12 +184,13 @@ async function onReplicate(t: StoredToken): Promise<void> {
     const note = await noteToPropagate(t)
     const r = await replicateEdition(provider, key, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex, terms: termsFromToken(t),
-      noteText: note,
+      note,
     })
     // The original UTXO is now spent; it was re-created at out[0] (token back to the holder = us, verbatim).
     store.markSent(t.txId, t.outputIndex)
     storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex },
-      t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t), t.sellerNote)
+      t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t),
+      t.sellerNote || t.bonusValue ? { text: t.sellerNote ?? '', bonusKind: t.bonusKind, bonusValue: t.bonusValue } : null)
     // The buyer's new replica (out[1]) is also ours in a self-test — it carries the propagated note.
     storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex },
       t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t), note)
@@ -209,7 +212,7 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
     const note = await noteToPropagate(t)
     const r = await transferEdition(provider, key, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex,
-      newOwnerPubKey: Utils.toArray(recipient, 'hex'), noteText: note,
+      newOwnerPubKey: Utils.toArray(recipient, 'hex'), note,
     })
     store.markSent(t.txId, t.outputIndex)
     renderTokens()
@@ -345,7 +348,8 @@ async function onCheckIncoming(): Promise<void> {
         txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: name,
         kind: 'edition', lockHex: e.lockHex, creatorPubKeyHashHex: Utils.toHex(e.terms.creatorPubKeyHash),
         creatorFeeSats: e.terms.creatorFeeSats, holderFeeSats: e.terms.holderFeeSats,
-        ...(e.sellerNote ? { sellerNote: e.sellerNote } : {}),
+        ...(e.sellerNote?.text ? { sellerNote: e.sellerNote.text } : {}),
+        ...(e.sellerNote?.bonusValue ? { bonusKind: e.sellerNote.bonusKind, bonusValue: e.sellerNote.bonusValue } : {}),
       })) edAdded++
       else store.setCollectionName(e.txId, e.outputIndex, name) // backfill the real title on older "Edition" entries
     }
@@ -483,6 +487,9 @@ function renderTokens(): void {
       <div class="mono">utxo ${short(t.txId)}:${t.outputIndex}</div>
       ${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ''}
       ${t.sellerNote ? `<div class="state" style="color:var(--accent2)">📝 ${escapeHtml(t.sellerNote)}</div>` : ''}
+      ${t.bonusValue ? (t.bonusKind === 'link'
+        ? `<div class="state">🎁 <a href="${escapeHtml(t.bonusValue)}" target="_blank" rel="noopener" class="bonus-claim">Claim your bonus ↗</a></div>`
+        : `<div class="state">🎁 Bonus code: <span class="mono">${escapeHtml(t.bonusValue)}</span></div>`) : ''}
     `
     const verify = document.createElement('button')
     verify.textContent = 'Verify'
@@ -552,8 +559,8 @@ interface CollectionInfo {
 
 let cvObjectUrl: string | null = null
 let currentCollection: { info: CollectionInfo; holderPubKey: string | null } | null = null
-/** The seller's current note for the open collection (resolved async), captured onto a purchase. */
-let cvSellerNote: string | null = null
+/** The seller's current note (promo + optional bonus) for the open collection, captured onto a purchase. */
+let cvNote: SellerNote | null = null
 
 function setCvStatus(msg: string, kind: 'info' | 'error' = 'info'): void {
   const el = $('cvStatus')
@@ -691,20 +698,47 @@ function shareCollectionLink(): void {
   setCvStatus('Share link copied to clipboard.')
 }
 
+/** Render the bonus area: a claim CTA for a holder, else a teaser; nothing if there's no bonus. */
+function hideBonus(): void { const h = $('cvBonus'); h.style.display = 'none'; h.innerHTML = '' }
+function showBonus(note: SellerNote | null, claimable: boolean): void {
+  const host = $('cvBonus')
+  host.innerHTML = ''
+  if (!note?.bonusValue) { host.style.display = 'none'; return }
+  if (!claimable) {
+    host.textContent = '🎁 Includes a bonus — claim it after you buy.'
+  } else if (note.bonusKind === 'link') {
+    const a = document.createElement('a')
+    a.href = note.bonusValue; a.target = '_blank'; a.rel = 'noopener'
+    a.textContent = '🎁 Claim your bonus ↗'; a.className = 'bonus-claim'
+    host.append(a)
+  } else {
+    host.append(document.createTextNode('🎁 Bonus code: '))
+    const code = document.createElement('span'); code.className = 'mono'; code.textContent = note.bonusValue
+    const copy = document.createElement('button'); copy.className = 'secondary'; copy.textContent = 'Copy'; copy.style.marginLeft = '8px'
+    copy.onclick = () => void navigator.clipboard?.writeText(note.bonusValue!)
+    host.append(code, copy)
+  }
+  host.style.display = 'block'
+}
+
 /** Resolve and show the seller's current note for the open collection; show the editor if it's my page. */
 async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): Promise<void> {
-  cvSellerNote = null
+  cvNote = null
   const noteBox = $('cvNote')
   noteBox.style.display = 'none'
+  hideBonus()
   const isMine = sellerPub != null && sellerPub === pubKeyHex
+  const holdsIt = store.active().some(t => t.collectionId === info.tx1Ref)
   $('cvNoteEdit').style.display = isMine ? 'block' : 'none'
   ;($('cvNoteText') as HTMLTextAreaElement).value = ''
+  ;($('cvBonusValue') as HTMLInputElement).value = ''
+  ;($('cvBonusKind') as HTMLSelectElement).value = 'none'
   $('cvNoteStatus').textContent = ''
   if (sellerPub == null) return
-  let current: string | null = null
+  let current: SellerNote | null = null
   try {
     const note = await resolveSellerNote(provider, sellerPub, info.tx1Ref)
-    if (note && note.text) current = note.text
+    if (note) current = note
   } catch { /* best-effort — a missing note is normal */ }
   // Hands-off propagation: if the seller hasn't published their own, use the note that rode in on their
   // edition (the on-chain echo from when they acquired it).
@@ -714,32 +748,43 @@ async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): P
       if (tip) current = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref)
     } catch { /* best-effort */ }
   }
-  // Carry-forward: on my own page, if nothing resolved, offer the one I captured when I bought.
+  // Carry-forward: on my own page, if nothing resolved, offer what I captured when I bought.
   if (current == null && isMine) {
-    const held = store.active().find(t => t.collectionId === info.tx1Ref && t.sellerNote)
-    if (held?.sellerNote) {
-      current = held.sellerNote
-      $('cvNoteStatus').textContent = 'This is the note you received when you bought — Publish to pass it on.'
+    const held = store.active().find(t => t.collectionId === info.tx1Ref && (t.sellerNote || t.bonusValue))
+    if (held) {
+      current = { text: held.sellerNote ?? '', bonusKind: held.bonusKind, bonusValue: held.bonusValue }
+      $('cvNoteStatus').textContent = 'This is what you received when you bought — Publish to pass it on.'
     }
   }
-  if (current) {
-    cvSellerNote = current
-    noteBox.textContent = `📝 Seller’s note: ${current}`
-    noteBox.style.display = 'block'
-    if (isMine) ($('cvNoteText') as HTMLTextAreaElement).value = current
+  if (current && (current.text || current.bonusValue)) {
+    cvNote = current
+    if (current.text) { noteBox.textContent = `📝 Seller’s note: ${current.text}`; noteBox.style.display = 'block' }
+    showBonus(current, holdsIt) // holder sees a claim button; everyone else a teaser
+    if (isMine) {
+      ;($('cvNoteText') as HTMLTextAreaElement).value = current.text
+      if (current.bonusKind && current.bonusValue) {
+        ;($('cvBonusKind') as HTMLSelectElement).value = current.bonusKind
+        ;($('cvBonusValue') as HTMLInputElement).value = current.bonusValue
+      }
+    }
   }
 }
 
 async function onSaveSellerNote(): Promise<void> {
   if (!currentCollection) return
   const text = ($('cvNoteText') as HTMLTextAreaElement).value.trim()
-  if (!text) { $('cvNoteStatus').textContent = 'Note is empty.'; return }
+  const bonusKindRaw = ($('cvBonusKind') as HTMLSelectElement).value
+  const bonusValue = ($('cvBonusValue') as HTMLInputElement).value.trim()
+  const bonusKind = (bonusKindRaw === 'link' || bonusKindRaw === 'code') ? bonusKindRaw : undefined
+  if (!text && !bonusValue) { $('cvNoteStatus').textContent = 'Add a note or a bonus first.'; return }
+  if (bonusValue && !bonusKind) { $('cvNoteStatus').textContent = 'Pick a bonus type (link or code).'; return }
+  const note: SellerNote = { text, bonusKind, bonusValue: bonusValue || undefined }
   $('cvNoteStatus').textContent = 'Publishing your note…'
   try {
-    const txId = await publishSellerNote(provider, key, currentCollection.info.tx1Ref, text)
-    cvSellerNote = text
-    $('cvNote').textContent = `📝 Seller’s note: ${text}`
-    $('cvNote').style.display = 'block'
+    const txId = await publishSellerNote(provider, key, currentCollection.info.tx1Ref, note)
+    cvNote = note
+    if (text) { $('cvNote').textContent = `📝 Seller’s note: ${text}`; $('cvNote').style.display = 'block' }
+    showBonus(note, true)
     $('cvNoteStatus').textContent = `Published (${short(txId)}). Buyers will see it shortly.`
   } catch (e) {
     $('cvNoteStatus').textContent = `Failed: ${(e as Error).message}`
@@ -786,8 +831,9 @@ async function onGetCopy(): Promise<void> {
     if (have < needed) { showFundPrompt(needed, have); return }
     hideFundPrompt()
 
-    // The note to carry to my copy: the seller's resolved note, or (fallback) whatever rode in on their edition.
-    let echoNote = cvSellerNote
+    // The note (promo + bonus) to carry to my copy: the seller's resolved note, or (fallback) whatever rode
+    // in on their edition.
+    let echoNote: SellerNote | null = cvNote
     if (!echoNote) {
       try { echoNote = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref) } catch { /* best-effort */ }
     }
@@ -798,7 +844,7 @@ async function onGetCopy(): Promise<void> {
       try {
         bought = await replicateEdition(provider, key, {
           editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms,
-          noteText: echoNote ?? undefined,
+          note: echoNote ?? undefined,
         })
         break
       } catch (e) {
@@ -811,14 +857,16 @@ async function onGetCopy(): Promise<void> {
       }
     }
     if (!bought) return
-    // The buyer's replica (out[1]) is now ours — track it with the note that rode in on the purchase.
+    // The buyer's replica (out[1]) is now ours — track it with the note + bonus that rode in on the purchase.
     storeEdition({ txId: bought.replicaOutpoint.txId, outputIndex: bought.replicaOutpoint.outputIndex, lockHex: bought.lockHex },
-      info.tx1Ref, info.name, tip.terms, echoNote ?? undefined)
+      info.tx1Ref, info.name, tip.terms, echoNote)
     renderTokens()
     showViewButton(info, true) // you're a holder now — keep a persistent View button on the page
+    showBonus(echoNote, true)  // flip any bonus teaser to a live claim
     setCvStatus(
       `✅ You own a copy of “${info.name}”! Tx ${short(bought.txId)} — it’s now in your wallet.` +
-      (echoNote ? `\n📝 Seller’s note: ${echoNote}` : ''),
+      (echoNote?.text ? `\n📝 Seller’s note: ${echoNote.text}` : '') +
+      (echoNote?.bonusValue ? '\n🎁 Bonus included — claim it below / on the token card.' : ''),
     )
     // Reveal the content (decrypts automatically — you're a holder now).
     if (info.hasContentFile) void onView(info.tx1Ref, info.name)

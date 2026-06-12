@@ -67,8 +67,11 @@
     .cv-fund { margin-top:14px; padding:14px; border:1px solid #9e6a03; border-radius:8px; background:#1a1206; font-size:14px; }
     .cv-fund .mono { color:var(--fg); }
     .cv-note { margin:12px 0; padding:10px 12px; border-left:3px solid var(--accent2); background:#0d1117; border-radius:6px; font-size:14px; white-space:pre-wrap; }
+    .cv-bonus { margin:12px 0; padding:10px 12px; border:1px solid var(--accent); border-radius:6px; background:#0d1117; font-size:14px; }
+    .bonus-claim { display:inline-block; color:var(--accent); font-weight:600; }
     .cv-noteedit { margin:12px 0; }
     .cv-noteedit textarea { min-height:54px; }
+    .cv-noteedit select { background:#0d1117; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:8px 10px; font:inherit; width:100%; }
   </style>
 </head>
 <body>
@@ -179,10 +182,20 @@
       <div id="cvCreator" class="mono cv-creator muted"></div>
       <p id="cvDesc" class="cv-desc"></p>
       <div id="cvNote" class="cv-note" style="display:none"></div>
+      <div id="cvBonus" class="cv-bonus" style="display:none"></div>
       <div id="cvNoteEdit" class="cv-noteedit" style="display:none">
-        <label>Your seller note (public — promo, bonuses, redemption info; buyers see it)</label>
-        <textarea id="cvNoteText" placeholder="e.g. Bonus: DM me this txid for a signed print 🎁"></textarea>
-        <div class="row" style="margin-top:6px">
+        <label>Your seller note (public — promo, redemption info; buyers see it)</label>
+        <textarea id="cvNoteText" placeholder="e.g. Thanks for buying! Here's how to redeem your bonus…"></textarea>
+        <label>Buyer bonus (optional — delivered to buyers, propagates downstream)</label>
+        <div class="grid2" style="grid-template-columns:120px 1fr">
+          <select id="cvBonusKind">
+            <option value="none">No bonus</option>
+            <option value="link">Link</option>
+            <option value="code">Code</option>
+          </select>
+          <input id="cvBonusValue" placeholder="https://your-site/claim  or  a redeem code" />
+        </div>
+        <div class="row" style="margin-top:8px">
           <button id="cvNoteSave" class="secondary">Publish note</button>
           <span id="cvNoteStatus" class="muted" style="font-size:12px"></span>
         </div>
