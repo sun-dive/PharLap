@@ -334,6 +334,24 @@ export class WalletProvider {
       }))
   }
 
+  /**
+   * Mempool-aware txids touching an address, via `/unspent/all` (confirmed + unconfirmed outputs).
+   * A just-broadcast tx's change output appears here before it confirms, so this surfaces a freshly
+   * published seller-note (its change pays the seller's address) that `/history` hasn't indexed yet.
+   */
+  async getRecentTxIdsForAddress(address: string): Promise<string[]> {
+    const out = new Set<string>()
+    try {
+      const r = await fetchWithRetry(`${WOC_BASE}/address/${address}/unspent/all`)
+      if (r.ok) {
+        const data = await r.json()
+        const rows: any[] = Array.isArray(data?.result) ? data.result : (Array.isArray(data) ? data : [])
+        for (const u of rows) if (u.tx_hash) out.add(u.tx_hash as string)
+      }
+    } catch { /* best-effort */ }
+    return [...out]
+  }
+
   // ── Merkle Proofs (feeds into proof chain construction) ───────
 
   async getMerkleProof(txId: string): Promise<MerkleProofEntry | null> {
