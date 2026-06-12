@@ -555,6 +555,23 @@ later, a **fiat-pegged price via an oracle** (robust but reintroduces a trusted 
 - Price field 8 bytes (cap `max` ≪ 2^63) — confirm sane upper bound.
 - Host-fee config surface (per-deployment `<meta>` vs build constant) + how the page learns its own host address.
 
+### Future extension (non-covenant) — multi-level referral fees [idea 2026-06-13]
+
+Same family as the host fee — **page-added, percentage, on-top, convention** (bypassable like web/MLM
+referrals, NOT miner-enforced) — a sellable future feature, no covenant change.
+
+- **Elegant fit:** PharLap's resale chain IS a referral chain (creator → A → B → C). We already propagate data
+  sale-to-sale (the seller-note echo) and track provenance, so a propagating **referrer stack** (the last N
+  sellers'/referrers' payout addresses) can ride the same outputs. Each buy pays the stack on a **decaying
+  schedule** (e.g. L1 2%, L2 1%, L3 0.5%), then pushes the current seller and trims to N.
+- **Knobs:** levels `N` + the percentage schedule (**cap the total** — every level adds to the buyer's
+  surcharge and stacks with the host fee); **resale-chain referrers** (owners) vs **affiliate-link referrers**
+  (promoters who needn't own); schedule set by the **creator at mint** (TX1 metadata, non-covenant) so honest
+  deployments honour it.
+- **Reality:** convention only — a buyer/modified page can omit payouts or stuff the stack with their own
+  addresses (the same circumvention the web already lives with). That's the accepted price of zero covenant
+  change. Keep percentages small and the depth shallow so the buyer's total stays sane.
+
 ---
 
 ## Next phase — Public web version (3-step plan) [planned 2026-06-12]
