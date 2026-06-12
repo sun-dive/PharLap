@@ -313,25 +313,28 @@ export class WalletProvider {
   // ── Script-hash UTXOs (find covenant outputs not at our address) ──
 
   /**
-   * Unspent outputs paying a given script hash (WoC `/script/{hash}/unspent`). Edition covenant outputs
-   * are locked to an owner pubkey embedded in a custom script, NOT to a P2PKH address, so they aren't in
-   * any address's UTXO set — but their exact script is deterministically derivable (covenant.buildHolderEditionScript),
-   * and WoC indexes by script hash. This is how the sales page resolves a holder's current spendable edition.
-   * `scriptHash` is SHA-256(scriptBytes) byte-reversed (Electrum/WoC convention).
+   * Unspent outputs paying a given script hash. Edition covenant outputs are locked to an owner pubkey
+   * embedded in a custom script, NOT to a P2PKH address, so they aren't in any address's UTXO set — but
+   * their exact script is deterministically derivable (covenant.buildHolderEditionScript), and WoC indexes
+   * by script hash. This is how the sales page resolves a holder's current spendable edition.
+   *
+   * Uses the MEMPOOL-AWARE `/unspent/all` (confirmed + unconfirmed, flags mempool-spent) so a just-acquired
+   * edition — and the note/bonus that rode in on its tx — resolves immediately, before confirmation; falls
+   * back to the confirmed-only `/unspent` if `/all` isn't available. `scriptHash` is SHA-256(scriptBytes)
+   * byte-reversed (Electrum/WoC convention).
    */
   async getUnspentByScriptHash(scriptHash: string): Promise<Utxo[]> {
+    const mapRows = (data: any): Utxo[] => {
+      const rows: any[] = Array.isArray(data?.result) ? data.result : (Array.isArray(data) ? data : [])
+      return rows
+        .filter((u: any) => u.isSpentInMempoolTx !== true)
+        .map((u: any) => ({ txId: u.tx_hash as string, outputIndex: u.tx_pos as number, satoshis: u.value as number, script: '' }))
+    }
+    const all = await fetchWithRetry(`${WOC_BASE}/script/${scriptHash}/unspent/all`)
+    if (all.ok) return mapRows(await all.json())
     const resp = await fetchWithRetry(`${WOC_BASE}/script/${scriptHash}/unspent`)
     if (!resp.ok) throw new Error(`WoC script-unspent fetch failed: ${resp.status}`)
-    const data = await resp.json()
-    const rows: any[] = Array.isArray(data?.result) ? data.result : (Array.isArray(data) ? data : [])
-    return rows
-      .filter((u: any) => u.isSpentInMempoolTx !== true)
-      .map((u: any) => ({
-        txId: u.tx_hash as string,
-        outputIndex: u.tx_pos as number,
-        satoshis: u.value as number,
-        script: '',
-      }))
+    return mapRows(await resp.json())
   }
 
   /**
