@@ -65,13 +65,29 @@ export async function resolveSellerNote(
   provider: WalletProvider, sellerPubKeyHex: string, collectionId: string,
 ): Promise<{ text: string; txId: string } | null> {
   const sellerAddress = PublicKey.fromString(sellerPubKeyHex).toAddress()
-  let history: { txId: string; blockHeight: number }[]
-  try { history = await provider.getAddressHistory(sellerAddress) } catch { return null }
-  // Newest first: unconfirmed (height 0 → treated as newest), then descending block height.
-  const ordered = [...history].sort((a, b) => (b.blockHeight || 1e12) - (a.blockHeight || 1e12)).slice(0, MAX_HISTORY_SCAN)
+
+  // Candidates: confirmed history (with heights) UNIONed with mempool-aware txids (the just-published
+  // note's change output surfaces here before `/history` indexes it). Unconfirmed → height 0 → ranked newest.
+  const heightByTx = new Map<string, number>()
+  try {
+    for (const h of await provider.getAddressHistory(sellerAddress)) heightByTx.set(h.txId, h.blockHeight || 0)
+  } catch { /* best-effort */ }
+  try {
+    for (const txId of await provider.getRecentTxIdsForAddress(sellerAddress)) {
+      if (!heightByTx.has(txId)) heightByTx.set(txId, 0) // mempool / unconfirmed
+    }
+  } catch { /* best-effort */ }
+  if (heightByTx.size === 0) return null
+
+  // Newest first: unconfirmed (height 0 → +inf), then descending block height.
+  const ordered = [...heightByTx.entries()]
+    .sort((a, b) => (b[1] || 1e12) - (a[1] || 1e12))
+    .slice(0, MAX_HISTORY_SCAN)
+    .map(([txId]) => txId)
+
   const seller = sellerPubKeyHex.toLowerCase()
   const want = collectionId.toLowerCase()
-  for (const { txId } of ordered) {
+  for (const txId of ordered) {
     let tx: Transaction
     try { tx = await provider.getSourceTransaction(txId) } catch { continue }
     for (const o of tx.outputs) {
