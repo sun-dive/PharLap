@@ -103,9 +103,13 @@ external smart-contract toolchain — and runs under BSV's post-Chronicle (versi
 | **Mint collection** | Create a fixed-supply collection (+ optional file). |
 | **Mint edition collection** | Create an unlimited-mints collection with fixed creator/holder fees (+ optional file, which can be **encrypted** for holders). |
 | **Replicate** | Permissionlessly mint your own copy of an edition (pays the fees). |
+| **Sales page / Share** | Open a collection's public storefront and copy a postable link to it. |
+| **Get a copy** | Buy an edition in one click from a sales link (resolve → fund → replicate → reveal). |
+| **Seller note / bonus** | Attach a public promo note (+ optional link/code bonus) buyers receive at purchase. |
 | **Send / Transfer** | Move a token to another wallet (owner-signed, free). |
 | **Message** | Send an **encrypted, authenticated** on-chain message — text, a file, and/or a content key — to any pubkey. |
-| **Check incoming** | Discover tokens / editions / messages sent to you (via a 1-sat notification breadcrumb). |
+| **Check incoming / recover** | Discover tokens / editions / messages sent to you, and rebuild your holdings from chain. |
+| **Restore from WIF** | Recover your wallet **and** purchases on any browser/device from your private key. |
 | **Verify** | Confirm a token/edition is structurally valid and which collection it belongs to. |
 | **View** | Open the embedded file — **decrypting it** if the collection is encrypted — and check its hash against the collection commitment. |
 | **Test v2 broadcast** | Sanity-check that the network accepts version-2 (Chronicle) transactions. |
@@ -141,6 +145,52 @@ earns the built-in replication royalties, leaking undercuts a market they themse
 Stronger tiers — a live per-recipient key sender, or a server that watermarks each buyer's copy — are
 designed but not built.
 
+## Shareable sales pages
+
+Every collection — and every individual holder — has a **postable link** that opens a public storefront,
+served entirely from the same client-side page (no backend):
+
+```
+…/#c=<Collection-ID>&h=<holder-pubkey>
+```
+
+The storefront shows a **cover image**, title, description, the lock state (e.g. "🔒 holders only"), and
+the price (creator + holder fee). A stranger can press **"Get a copy"** and own one in a single click:
+
+1. the page **resolves the holder's current edition** deterministically (by script hash — no indexer);
+2. it **funds-checks** the visitor's wallet (auto-created on first use; shows an address to top up if needed);
+3. it runs the **permissionless replicate** (with a retry if another buyer was first);
+4. it **reveals / decrypts** the content.
+
+Because the holder named in the link earns the holder-fee, everyone has a reason to share *their own*
+link — and a sale never spends the holder's only copy (it comes straight back to them), so links stay live.
+
+## Seller notes & bonuses
+
+A seller can attach a short **note** to a collection — a thank-you, redemption instructions, a promo. It
+is published on-chain, shown on the storefront, and **rides onto the buyer's purchase**, so it lands in
+their wallet. It then **propagates down the resale chain** as a *sticky default*: each onward sale carries
+the seller's own note if they've set one, otherwise the note that came with the copy — until someone
+overwrites it. It lives **outside** the frozen covenant, so it stays freely editable (no re-validation).
+
+The note can also carry a **bonus** the buyer claims from the sale confirmation:
+
+- a **link** (the seller's site delivers the reward, gating by proof-of-purchase), or
+- a **code** (a coupon / redeem code).
+
+The bonus value is **public on the chain** (it's part of the note), so gating is the *seller's* job — fine
+for links and shareable coupons; don't put a one-time secret there. On-chain (encrypted) and *time-locked*
+bonuses are designed for later.
+
+## Recovering on a new device
+
+The wallet is **self-custodial**: the local list of tokens is just a **cache**, and the **WIF private key
+plus the chain are the source of truth**. Paste your WIF into **Restore from WIF** on any browser or
+device and your holdings rebuild from chain — including each one's captured note and bonus. (A seller's
+published notes resolve from chain on demand too.) Editions you've already sold or transferred are left
+out; only your current, live holdings come back. No accounts, no server, nothing to lose but the key
+itself — so back it up.
+
 ## Running it
 
 ```bash
@@ -164,7 +214,12 @@ Validated on **BSV mainnet**:
   transfer, file embed/view, discovery
 - ✅ **Encrypted, authenticated messaging** (text / file / content key)
 - ✅ **Tier-1 encrypted content** (holder-only embedded files, decrypt-on-view)
+- ✅ **Shareable sales pages + one-click "Get a copy"** (storefront, cover/description, deterministic
+  tip resolution, fund-and-replicate, reveal)
+- ✅ **Seller notes & bonuses** (on-chain, ride to the buyer, propagate down the resale chain)
+- ✅ **Self-custody recovery** — restore the WIF on any device and rebuild holdings (with notes/bonuses)
+  from chain
 
 Still experimental — treat it as a working prototype, and use small amounts. Stronger encrypted-content
-tiers (live per-recipient key delivery; a server with per-buyer watermarking) and edition deep-verify
-(full lineage proof) are designed but not yet built.
+tiers (live per-recipient key delivery; a server with per-buyer watermarking), on-chain / time-locked
+bonuses, and edition deep-verify (full lineage proof) are designed but not yet built.
