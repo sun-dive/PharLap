@@ -3,8 +3,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, LockingScript, Spend, Hash } from '@bsv/sdk'
 import {
-  buildEditionGenesisTx, buildReplicateTx, buildEditionTransferTx, type EditionUtxo, type EditionTerms,
+  buildEditionGenesisTx, buildReplicateTx, buildReplicateV2Tx, buildEditionTransferTx,
+  type EditionUtxo, type EditionTerms,
 } from '../src/editionBuilder.ts'
+import { buildEditionLockV2, p2pkhScript } from '../src/covenant.ts'
 import { readNoteFromTx } from '../src/sellerNote.ts'
 import { parseNoteScript } from '../src/tokenCodec.ts'
 import type { FundingInput } from '../src/collectionBuilder.ts'
@@ -122,4 +124,40 @@ test('transfer: rejects a non-owner signer', async () => {
     edition: utxo, ownerKey: imposter, newOwnerPubKey: pub(newOwner), funding: [faucet(imposter, 200000)],
   })
   assert.throws(() => spendOk(xfer.tx, LockingScript.fromBinary(utxo.lockBytes), 1))
+})
+
+// --- Covenant v2: buildReplicateV2Tx pays the COMPUTED percentage split (matches the covenant) ---
+const V2_PRICE = 100_000
+const V2_CBPS = 250 // 2.5%
+
+function u64le(n: number): number[] { const o: number[] = []; let v = n; for (let i = 0; i < 8; i++) { o.push(v & 0xff); v = Math.floor(v / 256) } return o }
+
+function v2Edition() {
+  const holder = PrivateKey.fromRandom()
+  const creatorHash = Hash.hash160(pub(PrivateKey.fromRandom()))
+  const lock = buildEditionLockV2({
+    tx1Ref: TX1REF.length ? Array.from({ length: 32 }, (_, i) => (i * 5 + 1) & 0xff) : [],
+    ownerPubKey: pub(holder), price: u64le(V2_PRICE), stateData: [0xde, 0xad],
+    creatorPubKeyHash: creatorHash, cBps: V2_CBPS, tokenSats: 1,
+  })
+  const src = new Transaction(); src.addOutput({ lockingScript: lock, satoshis: 1 })
+  const utxo: EditionUtxo = { txId: src.id('hex'), outputIndex: 0, satoshis: 1, lockBytes: lock.toBinary(), sourceTx: src }
+  return { holder, creatorHash, lock, utxo }
+}
+
+test('v2 builder: replicate pays ⌊P·c%⌋ to creator + remainder to reseller, and the covenant accepts it', async () => {
+  const { holder, creatorHash, lock, utxo } = v2Edition()
+  const buyer = PrivateKey.fromRandom()
+  const rep = await buildReplicateV2Tx({ edition: utxo, buyerKey: buyer, funding: [faucet(buyer, 200000)] })
+
+  const expectedCreator = Math.floor((V2_PRICE * V2_CBPS) / 10000) // 2500
+  assert.equal(rep.creatorCut, expectedCreator)
+  assert.equal(rep.resellerCut, V2_PRICE - expectedCreator)        // 97500
+  assert.equal(rep.tx.outputs[2].satoshis, expectedCreator)        // [2] creator cut
+  assert.equal(rep.tx.outputs[3].satoshis, V2_PRICE - expectedCreator) // [3] reseller cut
+  // out[2] pays the baked creator hash; out[3] pays the holder.
+  assert.deepEqual(rep.tx.outputs[2].lockingScript.toBinary(), p2pkhScript(creatorHash))
+  assert.deepEqual(rep.tx.outputs[3].lockingScript.toBinary(), p2pkhScript(Hash.hash160(pub(holder))))
+  // The covenant input validates — builder's amounts match what the script recomputes & enforces.
+  assert.equal(spendOk(rep.tx, lock, 1), true)
 })
