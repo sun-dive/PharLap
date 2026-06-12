@@ -452,6 +452,111 @@ large files need anyway). Pair any tier with **per-buyer watermarking** for trac
 
 ---
 
+## Addendum G — Covenant v2: ranged percentage pricing + reseller-set price [design 2026-06-13]
+
+**Why now.** Still experimental, so this is the moment to finalize the covenant to its intended FINAL shape.
+A covenant is immutable per collection; once testers/creators mint on v1 the wallet must parse both forever.
+Locking the design before the public deploy avoids a v1/v2 split. The public test therefore runs on the
+FINALISED covenant (Step 3 deploy waits for it). Non-covenant work already shipped (sales pages, recovery,
+notes, bonuses) is unaffected.
+
+**Motivation — BSV/fiat volatility.** A fee/price fixed in sats at mint drifts badly if BSV moves (a 5,000-sat
+royalty becomes expensive if BSV 50×'s; a fixed ebook price is unrealistic long-term). Fix: the price becomes a
+**percentage of a reseller-chosen price within a creator-set band** — each reseller acts as a local
+price-discovery agent tracking real value within bounds, no oracle. Decision (2026-06-13): **percentage-only**
+fee model (no fixed-sat mode). Permissionless replicate stays the core (buyer one-clicks; reseller PRE-SETS the
+price; no holder action at buy time).
+
+### Money flow (final)
+
+```
+Reseller sets price P  — within the creator's [min,max], range-checked, owner-signed (mutable field)
+A buyer one-clicks "Get a copy" and pays:
+  • P, split by the COVENANT (miner-enforced):
+        creator  = ⌊P × c%⌋        → creator address (baked at mint)
+        reseller = P − creator      → holder address (hash160 of the owner pubkey, in-script)
+  • + host fee (page-added, CONVENTION, on top):
+        host     = ⌊P × h%⌋        → the domain that served the link
+  • + token sat + network fee
+```
+
+- `c%` (creator), `h%` (host), and `[min,max]` are **baked at mint, immutable** (like today's fixed fees).
+- **Rounding:** integer math; the reseller absorbs truncation dust (creator gets exactly `⌊P×c%⌋`, reseller the
+  remainder). Express `c%` as **basis points** (`cBps`, 0–10000): `creatorCut = P × cBps / 10000`.
+- **Range matters:** `min` stops a reseller zeroing `P` to dodge the creator's cut (and sets the royalty floor
+  `c%·min`); `max` caps it. Aligned incentives: the reseller maximises their own `(1−c%)·P` against demand; the
+  creator rides at `c%` of whatever the market bears.
+
+### Creator fee = covenant-enforced; host fee = convention (the asymmetry)
+
+- **Creator fee** is enforceable: the creator address is fixed at mint, so the covenant computes `P×c%` and
+  REJECTS any sale that doesn't pay it. Miner-guaranteed.
+- **Host fee** is NOT enforceable in the covenant: the host is *whichever domain served that link* — unknown at
+  mint, unverifiable in-script (a buyer would set the host address to themselves and pocket it). So it stays a
+  **page-added trailing output** (same sticky-default trade as the seller-note), now a percentage. It sits **on
+  top** of the split, not inside it — otherwise a buyer bypassing the hosted page would shrink the *reseller's*
+  take (penalising the reseller for something they don't control). On-top means creator+reseller are unaffected
+  by host-fee bypass; only the host loses if bypassed. Configured per-deployment (a `<meta>`/build constant for
+  the host address + `h%`); disclosed in the buy confirmation (price + platform fee + network).
+
+### Covenant changes (v2)
+
+Current edition: `[P, ver, RECORD_EDITION, tx1Ref(32), ownerPubKey(33), stateData]` `OP_2DROP×3` + shared
+prefix + `selector OP_IF transfer OP_ELSE replicate OP_ENDIF`. v2:
+
+1. **New fixed-length PRICE field** in the script, placed AFTER ownerPubKey so the owner offset (40) and tx1Ref
+   offset (7) stay stable: `… ownerPubKey(33) ‖ price(8, LE)`. Fixed length → constant offsets → extractable in
+   script like the owner pubkey (and the varint/scriptlen stay constant, so the quine/swap machinery is unchanged
+   in shape). Bump the edition **version byte** (0x03→0x04) as a covenant-rules marker (pre-launch = no v1
+   back-compat, but the byte future-proofs the parser).
+2. **Third branch: UPDATE (owner-signed).** Selector grows from 2 to 3 (numeric selector or nested IF:
+   0=replicate, 1=transfer, 2=update). Update re-creates the covenant with a NEW price, **range-checked**
+   `min ≤ P ≤ max` (`OP_WITHIN`, min/max baked), owner sig verified (reuse the transfer branch's
+   `OP_CHECKSIGVERIFY`). Everything else (tx1Ref, owner, covenant body) copied verbatim. (The seller-NOTE does
+   NOT need this — it already lives outside the covenant on the notification output and is editable by
+   re-publishing; the mutable field is for PRICE only.)
+3. **Replicate branch: computed fee outputs** (replace the baked constants).
+   - Extract `P` from the price field; `OP_BIN2NUM` → number.
+   - `creatorCut = P × cBps / 10000` (`OP_MUL`,`OP_DIV`; `cBps` baked). `resellerCut = P − creatorCut` (`OP_SUB`).
+   - Encode each as an 8-byte LE output value with **`OP_NUM2BIN(cut, 8)`** (positive, `< 2^63` ⇒ correct
+     unsigned LE), then `‖ varint(25) ‖ P2PKH(addr)` — `out[2]` to the baked creator hash, `out[3]` to
+     `hash160(ownerPub)`. Post-Chronicle big-int math means no overflow for sane `P`; **cap `max` well under
+     `2^63`** and keep the price field 8 bytes. Optionally re-check `min ≤ P ≤ max` here too (defence in depth;
+     primary enforcement is at update so a reseller can't store an out-of-range price).
+4. **Replica (`out[1]`) clones the price field verbatim** → the buyer inherits the reseller's price and can later
+   UPDATE it (range-checked). Genesis mint sets an initial in-range price.
+5. **Unlock templates:** replicate = no sig (`OP_0` selector + preimage); transfer = owner sig + new owner;
+   update = owner sig + new price. Scopes unchanged (replicate `ANYONECANPAY|ALL|FORKID = 0xc1`; owner-signed
+   branches use `ALL|FORKID` for the sig + introspection).
+
+### The honest caveat (volatility)
+
+Percentage fees auto-track the reseller-adjusted `P`, but the `[min,max]` **band is fixed in sats at mint**, so
+it absorbs MODERATE volatility (reseller slides within the band) — an extreme long-term move drifts the band
+itself. Mitigations: set a **wide band** (near-total reseller latitude, soft creator floor/ceiling); or, much
+later, a **fiat-pegged price via an oracle** (robust but reintroduces a trusted feed — out of scope).
+
+### Build / validation plan (foundational — spec-first, validate before wiring)
+
+1. Implement v2 covenant ops in `covenant.ts` incrementally, each **`Spend`-validated offline** (as L1–L5 were):
+   price-field extract → `NUM2BIN` fee outputs → percentage math → UPDATE branch + 3-way selector + range check.
+2. **Prototype the riskiest pieces on MAINNET first** — the `OP_MUL/OP_DIV/OP_NUM2BIN` fee computation and the
+   owner-signed UPDATE branch — confirming a real mint → set-price(update) → permissionless-replicate cycle is
+   relayed/mined (mirror the original replicate validation at block 953007). Only then layer the rest.
+3. Wire `editionBuilder` (genesis takes `cBps`/`min`/`max`/initial price; new `updatePrice`; replicate reads the
+   price; funding/disclosure) + the wallet UI (creator sets `c%`,`min`,`max` at mint; holder sets price within
+   band; buy shows the computed split + host surcharge) + the host-fee percentage trailing output.
+4. **Then** deploy the public test (Step 3) on the finalised covenant.
+
+### Open knobs to confirm at build time
+
+- `cBps` precision (basis points = 0.01% granularity — enough?); default `c%`, `h%`, and `[min,max]` suggestions.
+- Whether to re-check range at replicate (defence-in-depth) vs update-only.
+- Price field 8 bytes (cap `max` ≪ 2^63) — confirm sane upper bound.
+- Host-fee config surface (per-deployment `<meta>` vs build constant) + how the page learns its own host address.
+
+---
+
 ## Next phase — Public web version (3-step plan) [planned 2026-06-12]
 
 Goal: a publicly-hosted, multi-user-safe web build people can open and test end-to-end (mint / replicate /
@@ -485,6 +590,9 @@ The "shareable sales link" from the product vision; builds on the existing permi
   share button yields a working link.
 
 ### Step 3 — Deploy to static hosting + test harness (hand out a URL)
+**GATED on Covenant v2 (Addendum G):** finalise + mainnet-validate the v2 covenant FIRST, so the public test
+mints on the intended covenant and we avoid a v1/v2 split. Deploy mechanics (Namecheap cPanel Git + `.cpanel.yml`,
+mainnet, root domain, built bundle on origin/main via publish.sh) are wired and ready to go once v2 lands.
 - **WIF recovery FIRST (DONE) — prerequisite for multi-device hosting.** The local token store is now treated as
   a rebuildable CACHE; the WIF + chain are the source of truth, so purchases recover on any browser/device.
   `scanIncomingEditions` rewritten to two passes: (1) discover the collections a pubkey holds/held via address
