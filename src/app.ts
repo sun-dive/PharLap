@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, createEditionV2, replicateEditionV2, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionScript } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -183,6 +183,33 @@ async function onMintEdition(): Promise<void> {
     setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
   } catch (e) {
     setStatus(`Edition mint failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Covenant v2 mainnet self-test: mint a percentage-pricing edition, then permissionlessly replicate it. */
+async function onV2SelfTest(): Promise<void> {
+  const cBps = Math.max(0, Math.min(10000, parseInt(val('v2Bps') || '250', 10)))
+  const price = Math.max(1, parseInt(val('v2Price') || '50000', 10))
+  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are creator = holder = buyer). Proceed?`)) return
+  setStatus('v2 self-test: minting (TX1 template + TX2 v2 genesis)…')
+  try {
+    const creatorPubKeyHash = key.toPublicKey().toHash() as number[]
+    const minted = await createEditionV2(provider, key, {
+      tokenName: 'v2 mainnet test', terms: { creatorPubKeyHash, cBps }, initialPriceSats: price,
+    })
+    const ed = minted.editions[0]
+    setStatus(`Minted v2 collection ${short(minted.tx1Id)} · edition ${short(ed.txId)}:${ed.outputIndex}. Replicating (computed split)…`)
+    const r = await replicateEditionV2(provider, key, {
+      editionTxId: ed.txId, editionOutputIndex: ed.outputIndex, editionLockHex: ed.lockHex, editionSourceTx: minted.tx2,
+    })
+    setStatus(
+      `✅ v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} · TX2 ${short(minted.tx2Id)} · replicate ${short(r.txId)} ` +
+      `— creator ${r.creatorCut} + reseller ${r.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
+      'ok',
+    )
+    console.log('v2 self-test txids:', { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r.txId, creatorCut: r.creatorCut, resellerCut: r.resellerCut })
+  } catch (e) {
+    setStatus(`v2 self-test failed: ${(e as Error).message}`, 'error')
   }
 }
 
@@ -912,6 +939,7 @@ function init(): void {
   $('btnMint').onclick = () => void onMint()
   $('btnV2Probe').onclick = () => void onV2Probe()
   $('btnMintEdition').onclick = () => void onMintEdition()
+  $('btnV2SelfTest').onclick = () => void onV2SelfTest()
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()

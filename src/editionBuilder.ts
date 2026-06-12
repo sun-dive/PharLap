@@ -585,6 +585,102 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
   }
 }
 
+// ─── Covenant v2 network wrappers (Addendum G) ──────────────────────
+
+/** Mint a v2 (percentage-pricing) edition collection on-chain: TX1 template + TX2 v2 genesis. */
+export async function createEditionV2(provider: WalletProvider, key: PrivateKey, params: {
+  tokenName: string
+  terms: EditionV2Terms
+  initialPriceSats: number
+  mintCount?: number
+  ownerPubKey?: number[]
+  stateData?: number[]
+  feePerKb?: number
+}): Promise<CreateEditionResult & { tx2: Transaction }> {
+  const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
+  const mintCount = params.mintCount ?? 1
+  const ownerPub = params.ownerPubKey ?? pubKeyBytes(key)
+  const tokenSats = params.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
+  const stateData = params.stateData ?? []
+  const price = u64le(params.initialPriceSats)
+
+  // v2 covenant template (identity zeroed) committed in TX1 — lets a holder's edition be reconstructed later.
+  const templateLock = buildEditionLockV2({
+    tx1Ref: new Array(32).fill(0), ownerPubKey: new Array(33).fill(0), price, stateData,
+    creatorPubKeyHash: params.terms.creatorPubKeyHash, cBps: params.terms.cBps, tokenSats,
+  })
+  const template = {
+    tokenName: params.tokenName,
+    tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE, 1),
+    covenantScript: Utils.toHex(templateLock.toBinary()),
+  }
+  const tx1Bytes = 500 + templateLock.toBinary().length
+  const tx2Bytes = 300 + mintCount * 900
+  const estFee = Math.ceil(((tx1Bytes + tx2Bytes) * feePerKb) / 1000)
+  const target = (1 + mintCount) * tokenSats + estFee + Math.max(1000, Math.ceil(estFee * 0.2))
+  const selected = selectFunding(await getSafeUtxos(provider), target)
+  const funding = await toFundingInputs(provider, selected)
+
+  const t1 = await buildTemplateTx({ key, funding, template, outputSats: tokenSats, feePerKb })
+  if (t1.changeVout == null) throw new Error('Insufficient funding: template tx left no change to fund the v2 mint.')
+  const t2Funding: FundingInput[] = [{
+    utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' }, sourceTx: t1.tx,
+  }]
+  const t2 = await buildEditionGenesisV2Tx({
+    key, funding: t2Funding, tx1Ref: t1.tx1Id, terms: params.terms, initialPriceSats: params.initialPriceSats,
+    ownerPubKey: ownerPub, stateData, mintCount, feePerKb,
+  })
+
+  await provider.broadcast(t1.tx.toHex())
+  provider.registerPendingTx(t1.tx1Id, selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
+    { outputIndex: t1.changeVout, satoshis: t1.changeSats })
+  await provider.broadcast(t2.tx.toHex())
+  provider.registerPendingTx(t2.txId, [{ txId: t1.tx1Id, outputIndex: t1.changeVout }],
+    t2.changeVout != null ? { outputIndex: t2.changeVout, satoshis: t2.changeSats } : undefined)
+
+  const editions = t2.editionVouts.map(v => ({
+    txId: t2.txId, outputIndex: v, lockHex: Utils.toHex(t2.tx.outputs[v].lockingScript.toBinary()),
+  }))
+  return { collectionId: t1.tx1Id, tx1Id: t1.tx1Id, tx2Id: t2.txId, editions, tx2: t2.tx }
+}
+
+/** Permissionlessly replicate a v2 edition (computed percentage split). The caller is the buyer. */
+export async function replicateEditionV2(provider: WalletProvider, buyerKey: PrivateKey, params: {
+  editionTxId: string
+  editionOutputIndex: number
+  editionLockHex: string
+  /** Pass the edition's source tx to skip the WoC fetch (e.g. replicating an own just-minted, unconfirmed edition). */
+  editionSourceTx?: Transaction
+  feePerKb?: number
+}): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string; creatorCut: number; resellerCut: number }> {
+  const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
+  const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
+  const parsed = parseEditionScriptV2(LockingScript.fromBinary(lockBytes))
+  if (parsed == null) throw new Error('replicateEditionV2: not a v2 edition covenant')
+  const sourceTx = params.editionSourceTx ?? await provider.getSourceTransaction(params.editionTxId)
+  const tokenSats = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS
+  const edition: EditionUtxo = {
+    txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis: tokenSats, lockBytes, sourceTx,
+  }
+  // Buyer funds: token + replica sats + the price (creator + reseller cuts) + miner fee + margin.
+  const estFee = Math.ceil((1600 * feePerKb) / 1000)
+  const target = 2 * tokenSats + parsed.priceSats + estFee + 1000
+  const selected = selectFunding(await getSafeUtxos(provider), target)
+  const funding = await toFundingInputs(provider, selected)
+
+  const rep = await buildReplicateV2Tx({ edition, buyerKey, funding, feePerKb })
+  await provider.broadcast(rep.tx.toHex())
+  provider.registerPendingTx(rep.txId,
+    [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex },
+      ...selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex }))],
+    rep.changeVout != null ? { outputIndex: rep.changeVout, satoshis: rep.tx.outputs[rep.changeVout].satoshis ?? 0 } : undefined)
+  return {
+    txId: rep.txId, replicaOutpoint: { txId: rep.txId, outputIndex: rep.replicaVout },
+    lockHex: Utils.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary()),
+    creatorCut: rep.creatorCut, resellerCut: rep.resellerCut,
+  }
+}
+
 /** Transfer (owner-signed) an on-chain edition to a new owner, re-creating the covenant. */
 export async function transferEdition(provider: WalletProvider, ownerKey: PrivateKey, params: {
   editionTxId: string

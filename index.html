@@ -139,6 +139,17 @@
         Any buyer can later <b>Replicate</b> an edition (returns the token to the holder, mints their own copy,
         pays both fees). <b>Transfer</b> moves it owner-signed, re-creating the covenant.
       </p>
+      <hr style="border:0;border-top:1px solid var(--line);margin:14px 0" />
+      <label>⚡ Covenant v2 (percentage pricing) — mainnet self-test</label>
+      <div class="grid2" style="grid-template-columns:1fr 1fr">
+        <div><label>Creator fee (basis points, 0–10000)</label><input id="v2Bps" type="number" min="0" max="10000" value="250" /></div>
+        <div><label>Reseller price (sat)</label><input id="v2Price" type="number" min="1" value="50000" /></div>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="btnV2SelfTest" class="secondary">Mint + replicate v2 (mainnet test)</button></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">
+        Mints a v2 edition then permissionlessly replicates it (you = creator/holder/buyer). The covenant computes
+        the split: creator gets ⌊price × bps/10000⌋, reseller the remainder. Broadcasts to mainnet; check the txids on WoC.
+      </p>
     </div>
 
     <h2>My tokens</h2>
