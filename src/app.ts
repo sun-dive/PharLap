@@ -611,7 +611,21 @@ function renderCollectionView(info: CollectionInfo): void {
     ? `Get your own copy — <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(creator ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`
     : '<span class="muted">This collection is not a replicable edition.</span>'
   ;($('cvGet') as HTMLButtonElement).disabled = info.fees == null
+  // Show a "View content" button if this wallet already holds an edition of this collection.
+  const holdsIt = store.active().some(t => t.collectionId === info.tx1Ref)
+  showViewButton(info, holdsIt)
   $('collectionView').style.display = 'flex'
+}
+
+/** Reveal the sales-page "View content" button for holders (label reflects encryption). */
+function showViewButton(info: CollectionInfo, show: boolean): void {
+  const vb = $('cvView') as HTMLButtonElement
+  if (show && info.hasContentFile) {
+    vb.textContent = info.encrypted ? '🔓 View content' : 'View content'
+    vb.style.display = ''
+  } else {
+    vb.style.display = 'none'
+  }
 }
 
 async function openCollectionView(tx1Ref: string, holderPubKey: string | null): Promise<void> {
@@ -677,6 +691,15 @@ async function onGetCopy(): Promise<void> {
   const sellerPub = holderPubKey ?? info.creatorPubKeyHex
   if (!sellerPub) { setCvStatus('No seller could be determined for this link.', 'error'); return }
 
+  // Confirm the purchase before spending — show the item and the price (the fixed fees).
+  const price = info.fees.creator + info.fees.holder
+  const ok = confirm(
+    `Buy a copy of “${info.name}” for ${price} sat?\n\n` +
+    `creator ${info.fees.creator} + holder ${info.fees.holder} sat, plus a small network fee.\n` +
+    `This is an instant, on-chain purchase.`,
+  )
+  if (!ok) { setCvStatus('Purchase cancelled.'); return }
+
   buying = true
   ;($('cvGet') as HTMLButtonElement).disabled = true
   try {
@@ -712,6 +735,7 @@ async function onGetCopy(): Promise<void> {
     storeEdition({ txId: bought.replicaOutpoint.txId, outputIndex: bought.replicaOutpoint.outputIndex, lockHex: bought.lockHex },
       info.tx1Ref, info.name, tip.terms)
     renderTokens()
+    showViewButton(info, true) // you're a holder now — keep a persistent View button on the page
     setCvStatus(`✅ You own a copy of “${info.name}”! Tx ${short(bought.txId)} — it’s now in your wallet.`)
     // Reveal the content (decrypts automatically — you're a holder now).
     if (info.hasContentFile) void onView(info.tx1Ref, info.name)
@@ -758,6 +782,7 @@ function init(): void {
   $('cvWallet').onclick = () => closeCollectionView()
   $('cvShare').onclick = () => shareCollectionLink()
   $('cvGet').onclick = () => void onGetCopy()
+  $('cvView').onclick = () => { if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name) }
   $('cvFundCopy').onclick = () => void navigator.clipboard?.writeText(address)
   $('cvFundDone').onclick = () => void onGetCopy()
   window.addEventListener('hashchange', () => {
