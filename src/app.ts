@@ -64,6 +64,23 @@ function useKey(k: PrivateKey): void {
   renderWallet()
 }
 
+/**
+ * Switch the active wallet. The local token store is a CACHE belonging to the previous wallet, so clear it
+ * and (on a WIF restore) rebuild this wallet's holdings from chain — the WIF + chain are the source of
+ * truth, so purchases recover on any device. A fresh random wallet has nothing to recover.
+ */
+function switchWallet(k: PrivateKey, recover: boolean): void {
+  localStorage.setItem(WIF_KEY, k.toWif())
+  store.clear()
+  useKey(k)
+  renderTokens()
+  void refreshBalance()
+  if (recover) {
+    setStatus('Wallet restored — recovering your purchases from chain…')
+    void onCheckIncoming()
+  }
+}
+
 function renderWallet(): void {
   $('address').textContent = address
   $('pubkey').textContent = pubKeyHex
@@ -892,18 +909,13 @@ function init(): void {
   $('btnCheckMessages').onclick = () => void onCheckMessages()
   $('btnNewWallet').onclick = () => {
     if (!confirm('Replace the current wallet with a new random key? Your current key is in the WIF box — back it up first.')) return
-    const k = PrivateKey.fromRandom()
-    localStorage.setItem(WIF_KEY, k.toWif())
-    useKey(k)
+    switchWallet(PrivateKey.fromRandom(), false)
     setStatus('New wallet created.', 'ok')
   }
   $('btnRestore').onclick = () => {
-    try {
-      const k = PrivateKey.fromWif(val('restoreWif'))
-      localStorage.setItem(WIF_KEY, k.toWif())
-      useKey(k)
-      setStatus('Wallet restored from WIF.', 'ok')
-    } catch { setStatus('Invalid WIF.', 'error') }
+    let k: PrivateKey
+    try { k = PrivateKey.fromWif(val('restoreWif')) } catch { setStatus('Invalid WIF.', 'error'); return }
+    switchWallet(k, true) // recover this wallet's purchases from chain
   }
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)
   $('viewerClose').onclick = () => closeViewer()

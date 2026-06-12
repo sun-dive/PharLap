@@ -485,6 +485,16 @@ The "shareable sales link" from the product vision; builds on the existing permi
   share button yields a working link.
 
 ### Step 3 — Deploy to static hosting + test harness (hand out a URL)
+- **WIF recovery FIRST (DONE) — prerequisite for multi-device hosting.** The local token store is now treated as
+  a rebuildable CACHE; the WIF + chain are the source of truth, so purchases recover on any browser/device.
+  `scanIncomingEditions` rewritten to two passes: (1) discover the collections a pubkey holds/held via address
+  breadcrumbs, (2) for each distinct (deterministic) edition script, query WoC unspent-by-script-hash → only
+  CURRENT live holdings (excludes editions already sold/transferred), reading each one's echoed note/bonus.
+  `PharLapStore.clear()`; `switchWallet()` clears the cache and (on WIF restore) auto-recovers from chain; New
+  wallet clears too. Holdings, captured notes, and bonuses all rebuild from chain (the on-chain echo work powers
+  this); published seller-notes already resolve from chain on demand. Caveat: relies on the breadcrumb assumption
+  (acquisitions touch the address — true in practice); a thorough scan is a bounded burst of WoC calls (fine
+  per-IP). UI: Restore note + "Check incoming / recover" button. Suite 100/100.
 - Static deploy: **GitHub Pages** from the public repo (or Netlify/Vercel). Configure base paths for hash routing
   under a subpath (e.g. `/PharLap/`). Build = `index.html` + `bundle.js`; no backend.
 - **Network choice for testers (decide here):** small-value MAINNET (Chronicle/v2 confirmed working there) needs

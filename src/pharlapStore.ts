@@ -69,6 +69,11 @@ export class PharLapStore {
     this.kv.setItem(STORAGE_KEY, JSON.stringify(tokens))
   }
 
+  /** Empty the cache (e.g. on wallet switch — holdings are rebuildable from the WIF + chain). */
+  clear(): void {
+    this.write([])
+  }
+
   /** Add a token if not already present (dedup by outpoint). Returns true if added. */
   add(token: {
     txId: string
