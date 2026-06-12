@@ -495,6 +495,15 @@ The "shareable sales link" from the product vision; builds on the existing permi
   this); published seller-notes already resolve from chain on demand. Caveat: relies on the breadcrumb assumption
   (acquisitions touch the address — true in practice); a thorough scan is a bounded burst of WoC calls (fine
   per-IP). UI: Restore note + "Check incoming / recover" button. Suite 100/100.
+  - Display order: sorted by the acquiring tx's block height (unconfirmed = newest), so a bulk recovery reads
+    sensibly instead of in scan order.
+  - **TODO (deferred, cosmetic): recovery-browser ordering.** In a recovery browser there is no local action
+    timeline, so order falls back to on-chain acquisition height — meaning an edition you bought AFTER minting
+    another collection ranks above that earlier mint (honest acquisition-recency, but it can surprise: "my
+    newest mint isn't at the top"). Options when revisited: (a) order by each collection's TX1/genesis recency
+    so your latest mint floats up regardless of later buys (one extra TX1 fetch per collection); (b) group
+    "minted by me" vs "acquired", each newest-first; (c) a manual sort toggle (newest-acquired / by name /
+    minted-first). Not blocking — purely display.
 - Static deploy: **GitHub Pages** from the public repo (or Netlify/Vercel). Configure base paths for hash routing
   under a subpath (e.g. `/PharLap/`). Build = `index.html` + `bundle.js`; no backend.
 - **Network choice for testers (decide here):** small-value MAINNET (Chronicle/v2 confirmed working there) needs
