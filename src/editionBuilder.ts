@@ -585,37 +585,54 @@ export interface IncomingEdition {
 }
 
 /**
- * Find edition covenant outputs locked to `pubKeyHex` by scanning the wallet address history (the
- * transfer notification breadcrumbs land there) and parsing each tx's outputs. Terms are recovered
- * from the covenant script itself, so received editions are fully replicable/transferable.
+ * Find the edition covenant outputs CURRENTLY held by `pubKeyHex` (unspent). Two passes:
+ *   1) Discover which collections this pubkey has held, by scanning the wallet's address history (the
+ *      change / notification breadcrumbs land there) for edition outputs locked to it.
+ *   2) For each distinct edition script (one per collection+owner, deterministic), ask WoC for its current
+ *      UNSPENT outputs by script hash — so editions already sold/transferred away are excluded.
+ * This makes the result a true snapshot of live holdings, which is what both "check incoming" and
+ * recover-from-WIF need (the local store is a rebuildable cache; the chain is the source of truth).
+ * Terms come from the covenant script itself, and any seller-note that rode in is read from each tx.
  */
 export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: string): Promise<IncomingEdition[]> {
   const mine = pubKeyHex.toLowerCase()
-  const found: IncomingEdition[] = []
-  const seenOutpoint = new Set<string>()
-  // Candidate txs: confirmed address history PLUS the txids of current address UTXOs. The latter is
-  // mempool-aware (getUtxos includes unconfirmed), so the 1-sat transfer notification surfaces the
-  // carrying tx immediately, before it confirms — matching the plain-token scanIncoming.
+
+  // Pass 1 — discover distinct edition scripts (lockHex) this pubkey holds/held, from address breadcrumbs.
   const candidateTxIds = new Set<string>()
   try { for (const { txId } of await provider.getAddressHistory()) candidateTxIds.add(txId) } catch { /* best-effort */ }
   try { for (const u of await provider.getUtxos()) candidateTxIds.add(u.txId) } catch { /* best-effort */ }
+  const scripts = new Map<string, string>() // lockHex -> tx1RefHex
   for (const txId of candidateTxIds) {
     let tx: Transaction
     try { tx = await provider.getSourceTransaction(txId) } catch { continue }
-    tx.outputs.forEach((o, i) => {
+    for (const o of tx.outputs) {
       const ed = parseEditionScript(o.lockingScript)
-      if (ed == null || ed.ownerPubKeyHex.toLowerCase() !== mine) return
-      const key = `${txId}:${i}`
-      if (seenOutpoint.has(key)) return
-      seenOutpoint.add(key)
-      // A seller-note may have ridden in on this same tx (the on-chain echo) — capture it for display.
-      const note = readNoteFromTx(tx, ed.tx1RefHex)
+      if (ed == null || ed.ownerPubKeyHex.toLowerCase() !== mine) continue
+      scripts.set(Utils.toHex(o.lockingScript.toBinary()), ed.tx1RefHex)
+    }
+  }
+
+  // Pass 2 — for each distinct script, the current UNSPENT outputs are the live holdings (mempool-aware).
+  const found: IncomingEdition[] = []
+  const seen = new Set<string>()
+  for (const [lockHex, tx1RefHex] of scripts) {
+    const lockBytes = Utils.toArray(lockHex, 'hex')
+    let unspent: Utxo[]
+    try { unspent = await provider.getUnspentByScriptHash(wocScriptHash(lockBytes)) } catch { continue }
+    const ed = parseEditionScript(LockingScript.fromHex(lockHex))
+    if (ed == null) continue
+    for (const u of unspent) {
+      const key = `${u.txId}:${u.outputIndex}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      let note: SellerNote | null = null
+      try { note = readNoteFromTx(await provider.getSourceTransaction(u.txId), tx1RefHex) } catch { /* best-effort */ }
       found.push({
-        txId, outputIndex: i, lockHex: Utils.toHex(o.lockingScript.toBinary()), tx1RefHex: ed.tx1RefHex,
-        terms: { ...ed.terms, tokenSats: o.satoshis ?? PHARLAP_OUTPUT_SATS },
+        txId: u.txId, outputIndex: u.outputIndex, lockHex, tx1RefHex,
+        terms: { ...ed.terms, tokenSats: u.satoshis ?? PHARLAP_OUTPUT_SATS },
         ...(note ? { sellerNote: note } : {}),
       })
-    })
+    }
   }
   return found
 }

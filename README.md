@@ -14,6 +14,12 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
 > messaging** (text / files / content keys) and optional **Tier-1 encrypted content** (gate an embedded
 > file to token holders — an inconvenience, not DRM) are also working.
 >
+> **Recent updates:** shareable **collection sales pages** (a postable link that opens a storefront and a
+> **one-click "Get a copy"** permissionless buy), a **cover image + description** per collection, mutable
+> **seller notes** that ride on-chain to buyers and propagate down the resale chain, an optional **buyer
+> bonus** (link/code) attached to the note, and **self-custody recovery** — restore your WIF on any browser
+> or device and your purchases rebuild from chain.
+>
 > **New here? Read [`docs/OVERVIEW.md`](./docs/OVERVIEW.md)** — a plain-language functional tour. See
 > `PLAN.md` for the full design and `docs/DEVIATIONS_FROM_MPT.md` for how it differs from MPT.
 
@@ -38,6 +44,17 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   holder — including a permissionless replica's buyer — decrypts it with no server. The wrap is a casual
   speed-bump, not security; the real protection is economic (price + the resale incentive). "An inconvenience,
   not DRM." See `docs/OVERVIEW.md`.
+- **Shareable sales pages.** Every collection (and every holder) has a postable link — `…/#c=<TX1>&h=<holder>` —
+  that opens a **storefront**: cover image, title, description, lock state, and price, served entirely client-side.
+  A stranger can **"Get a copy"** in one click: the page resolves the holder's current edition (deterministically,
+  by script hash — no indexer), funds-checks, runs the permissionless replicate, and reveals/decrypts the content.
+- **Seller notes & bonuses.** A seller can attach a public **note** (promo / redemption info) to a collection; it
+  rides on-chain to the buyer at purchase and **propagates down the resale chain** as a sticky default (any owner
+  can overwrite it). The note can carry an optional **bonus** — an external link or code the buyer claims from the
+  sale confirmation. Lives outside the frozen covenant, so it stays freely editable; gating is the seller's site.
+- **Self-custody recovery.** The local token store is just a cache — the **WIF + chain are the source of truth**.
+  Restore your WIF on any browser or device and your holdings (with their notes/bonuses) rebuild from chain: a
+  pubkey's live editions are found by address breadcrumbs + unspent-by-script-hash. No accounts, no server.
 - **1-byte protocol prefix** `"P"` (`0x50`), format version `0x03`.
 
 ## Toolchain
@@ -73,7 +90,8 @@ src/
   contentCrypto.ts     Tier-1 encrypted content (AES-GCM file + obfuscated per-collection key wrap)
   messageCodec.ts      message envelope: typed TLV payload (text/key/file) + authenticated ECIES
   messageBuilder.ts    send / scan on-chain messages (delivered like a transfer)
-  walletProvider.ts    WhatsOnChain client (UTXOs, raw tx, broadcast, headers)
+  sellerNote.ts        seller notes + buyer bonuses: publish / resolve / echo (rides + propagates)
+  walletProvider.ts    WhatsOnChain client (UTXOs, raw tx, broadcast, headers, script-hash unspent)
   pharlapStore.ts      local token store (localStorage)
   app.ts               browser wallet UI
   fileCache.ts         IndexedDB cache for embedded files
