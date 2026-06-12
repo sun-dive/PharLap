@@ -367,6 +367,7 @@ async function onCheckIncoming(): Promise<void> {
         creatorFeeSats: e.terms.creatorFeeSats, holderFeeSats: e.terms.holderFeeSats,
         ...(e.sellerNote?.text ? { sellerNote: e.sellerNote.text } : {}),
         ...(e.sellerNote?.bonusValue ? { bonusKind: e.sellerNote.bonusKind, bonusValue: e.sellerNote.bonusValue } : {}),
+        ...(e.height ? { heightHint: e.height } : {}),
       })) edAdded++
       else store.setCollectionName(e.txId, e.outputIndex, name) // backfill the real title on older "Edition" entries
     }
@@ -489,8 +490,15 @@ function closeViewer(): void {
 // ─── token list ─────────────────────────────────────────────────────
 function renderTokens(): void {
   const host = $('tokens')
-  // Newest first, so a freshly minted / just-received token appears at the TOP (not buried at the bottom).
-  const active = [...store.active()].reverse()
+  // Newest first by acquisition height (unconfirmed/unknown = newest), so the order is meaningful even
+  // after a bulk from-chain recovery (where insertion order is scan order, not chronological). Tiebreak
+  // by addedAt so freshly minted/received tokens stay on top.
+  const active = [...store.active()].sort((a, b) => {
+    const ha = a.heightHint ?? Infinity
+    const hb = b.heightHint ?? Infinity
+    if (ha !== hb) return hb - ha
+    return (b.addedAt ?? '').localeCompare(a.addedAt ?? '')
+  })
   if (active.length === 0) { host.innerHTML = '<p class="muted">No tokens yet. Mint a collection or Check Incoming.</p>'; return }
   host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held — newest first</p>`
   for (const t of active) {
