@@ -49,6 +49,21 @@
     .foot a { color:var(--accent2); }
     .woc-badge { height:56px; width:auto; opacity:.9; }
     .woc-badge:hover { opacity:1; }
+    /* Collection / sales view (shareable link landing) */
+    .cview { position:fixed; inset:0; background:var(--bg); overflow:auto; z-index:5; display:flex; justify-content:center; padding:24px 16px 48px; }
+    .cview-box { max-width:560px; width:100%; }
+    .cv-cover { margin-bottom:16px; border-radius:12px; overflow:hidden; background:var(--card); border:1px solid var(--line); }
+    .cv-cover-img { width:100%; display:block; }
+    .cv-cover-ph { font-size:64px; text-align:center; padding:48px 0; color:var(--muted); }
+    .cv-title { font-size:26px; margin:0 0 6px; letter-spacing:.3px; }
+    .cv-badges { margin-bottom:8px; display:flex; gap:6px; flex-wrap:wrap; }
+    .cv-creator { margin-bottom:12px; }
+    .cv-desc { white-space:pre-wrap; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin:0; }
+    .cv-price { margin:16px 0; font-size:16px; }
+    .cv-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .cv-actions button { padding:12px 18px; font-size:15px; }
+    .cv-status { margin-top:12px; color:var(--muted); font-size:13px; min-height:18px; }
+    .cv-status.error { color:#ffb4ae; }
   </style>
 </head>
 <body>
@@ -149,6 +164,29 @@
       </a>
       <div style="margin-top:8px">PHAR LAP is experimental — use small amounts.</div>
     </footer>
+  </div>
+
+  <div id="collectionView" class="cview" style="display:none">
+    <div class="cview-box">
+      <div id="cvCover" class="cv-cover"></div>
+      <h1 id="cvTitle" class="cv-title"></h1>
+      <div id="cvBadges" class="cv-badges"></div>
+      <div id="cvCreator" class="mono cv-creator muted"></div>
+      <p id="cvDesc" class="cv-desc"></p>
+      <div id="cvPrice" class="cv-price"></div>
+      <div class="cv-actions">
+        <button id="cvGet">Get a copy</button>
+        <button id="cvShare" class="secondary">Share</button>
+        <button id="cvWallet" class="secondary">Open wallet</button>
+      </div>
+      <div id="cvStatus" class="cv-status"></div>
+      <footer class="foot">
+        <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
+          <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
+        </a>
+        <div style="margin-top:8px">PHAR LAP is experimental — use small amounts.</div>
+      </footer>
+    </div>
   </div>
 
   <div id="viewer" class="modal" style="display:none">
