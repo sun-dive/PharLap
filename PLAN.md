@@ -449,3 +449,52 @@ my own royalty stream). That flips DRM from punish-only to reward-the-honest-pat
 reachable now (creator-active messaging). Tier 3 = the eventual product (needs the server that shareable links /
 large files need anyway). Pair any tier with **per-buyer watermarking** for traceability. Primitives: `SymmetricKey`
 (AES-GCM), `ECIES`, `Random`; RECORD_MESSAGE key-part (Addendum E) for Tier 1/2 delivery; off-chain HTTP for Tier 3.
+
+---
+
+## Next phase — Public web version (3-step plan) [planned 2026-06-12]
+
+Goal: a publicly-hosted, multi-user-safe web build people can open and test end-to-end (mint / replicate /
+transfer / message / encrypted content), much like the SVphone public test — but without SVphone's API
+rate-limit failure. PHAR LAP is fully client-side (browser + WhatsOnChain), so no backend is required.
+
+### Step 1 — Serverless WoC + attribution (UNBLOCKS multi-user testing; do first)
+The SVphone failure: the dev server proxied every `/woc/*` call, so WoC saw ALL users' calls coming from ONE IP
+(the server) and rate-limited the aggregate. Subdomains don't fix this (they resolve to the same server IP). The
+fix is to have **each browser call `api.whatsonchain.com` DIRECTLY**, so calls originate from each user's OWN IP
+and WoC's free per-IP limit applies per-user, not in aggregate.
+- Make `walletProvider` base URL configurable: production = direct `https://api.whatsonchain.com/v1/bsv/main`;
+  keep the `serve.mjs` proxy only as a local-dev convenience (e.g. choose by `location.hostname === 'localhost'`).
+- Verify WoC is **CORS-enabled** for every endpoint used (read endpoints yes; confirm broadcast `POST /tx/raw`).
+- Reduce per-user call volume: the provider already caches raw txs (`txCache`); debounce/avoid polling; reuse
+  fetched TX1s (the `nameCache` pattern). A shared WoC **API key** raises the limit but RE-SHARES one bucket, so
+  it's a complement, not a substitute for per-user-IP.
+- Add a **"Powered by WhatsOnChain"** footer linking to https://whatsonchain.com — VERIFY exact wording/placement
+  against WoC's current free-tier terms before shipping (compliance, not approximation).
+- Acceptance: two testers on different networks/IPs run the full flow with no rate-limit blocks; attribution visible.
+
+### Step 2 — Shareable collection links + public view page (the headline feature)
+The "shareable sales link" from the product vision; builds on the existing permissionless replicate.
+- **Hash routing** (works on static hosting, no server routing): `…/#c=<TX1-txid>` → read `location.hash` on load.
+- **Collection view page:** fetch TX1, render name + rules/terms (creator/holder fees, edition flag, encrypted
+  flag), and a file preview (decrypt if a holder + encrypted, else a "🔒 holders only" placeholder).
+- **"Get a copy"** action = the permissionless replicate flow (auto-create a wallet if none). Friction to design:
+  a stranger needs funds — testnet faucet, or a "fund this address to buy" prompt on mainnet.
+- **Share** button: copy the `#c=…` link for a collection you hold/created, to paste anywhere.
+- Acceptance: a link opens the right collection from a fresh browser; "Get a copy" replicates (with funds); the
+  share button yields a working link.
+
+### Step 3 — Deploy to static hosting + test harness (hand out a URL)
+- Static deploy: **GitHub Pages** from the public repo (or Netlify/Vercel). Configure base paths for hash routing
+  under a subpath (e.g. `/PharLap/`). Build = `index.html` + `bundle.js`; no backend.
+- **Network choice for testers (decide here):** small-value MAINNET (Chronicle/v2 confirmed working there) needs
+  testers to fund a wallet; TESTNET is friendlier (free faucet coins) **only if Chronicle/v2 is active on testnet
+  — VERIFY, since the covenant needs v2**. Likely start mainnet with clear "fund this address" guidance + a tiny
+  amount, or stand up a testnet build if v2 is available.
+- Onboarding: clear first-run guidance (wallet auto-created → fund address → try mint/replicate/transfer/message).
+- Acceptance: multiple testers from different IPs complete the full lifecycle with no rate-limit blocks, and
+  shared `#c=…` links work from the hosted URL.
+
+Order is deliberate: Step 1 is the blocker (without it, multi-user testing fails as SVphone did); Step 2 is the
+feature that makes sharing worthwhile; Step 3 ships it. Future (post-phase): Tier 2/3 encrypted content + the
+key-delivery / watermarking server (the first component that actually needs a backend).
