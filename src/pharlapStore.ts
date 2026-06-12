@@ -30,6 +30,8 @@ export interface StoredToken {
   /** Optional buyer bonus captured with the note: an external link or a redeemable code. */
   bonusKind?: 'link' | 'code'
   bonusValue?: string
+  /** Block height of the acquiring tx (0/undefined = unconfirmed/newest) — orders the display, esp. after recovery. */
+  heightHint?: number
 }
 
 export interface KVStore {

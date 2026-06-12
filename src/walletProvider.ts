@@ -27,6 +27,8 @@ export interface Utxo {
   outputIndex: number
   satoshis: number
   script: string
+  /** Block height of the confirming tx (0 / undefined = unconfirmed). Used to order recovered holdings. */
+  height?: number
 }
 
 export interface WalletBlockHeader extends SpvBlockHeader {
@@ -328,7 +330,7 @@ export class WalletProvider {
       const rows: any[] = Array.isArray(data?.result) ? data.result : (Array.isArray(data) ? data : [])
       return rows
         .filter((u: any) => u.isSpentInMempoolTx !== true)
-        .map((u: any) => ({ txId: u.tx_hash as string, outputIndex: u.tx_pos as number, satoshis: u.value as number, script: '' }))
+        .map((u: any) => ({ txId: u.tx_hash as string, outputIndex: u.tx_pos as number, satoshis: u.value as number, script: '', height: u.height as number }))
     }
     const all = await fetchWithRetry(`${WOC_BASE}/script/${scriptHash}/unspent/all`)
     if (all.ok) return mapRows(await all.json())

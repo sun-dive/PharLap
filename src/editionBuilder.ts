@@ -582,6 +582,8 @@ export interface IncomingEdition {
   terms: EditionTerms
   /** Seller-note (promo + optional bonus) that rode in on the carrying tx (on-chain echo), if any. */
   sellerNote?: SellerNote
+  /** Block height of the acquiring tx (0/undefined = unconfirmed) — for ordering recovered holdings. */
+  height?: number
 }
 
 /**
@@ -631,6 +633,7 @@ export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: 
         txId: u.txId, outputIndex: u.outputIndex, lockHex, tx1RefHex,
         terms: { ...ed.terms, tokenSats: u.satoshis ?? PHARLAP_OUTPUT_SATS },
         ...(note ? { sellerNote: note } : {}),
+        ...(u.height ? { height: u.height } : {}),
       })
     }
   }
