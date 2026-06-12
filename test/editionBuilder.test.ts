@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, LockingScript, Spend, Hash } from '@bsv/sdk'
 import {
-  buildEditionGenesisTx, buildReplicateTx, buildReplicateV2Tx, buildEditionTransferTx,
+  buildEditionGenesisTx, buildReplicateTx, buildReplicateV2Tx, buildEditionGenesisV2Tx, buildEditionTransferTx,
   type EditionUtxo, type EditionTerms,
 } from '../src/editionBuilder.ts'
 import { buildEditionLockV2, p2pkhScript } from '../src/covenant.ts'
@@ -159,5 +159,25 @@ test('v2 builder: replicate pays ⌊P·c%⌋ to creator + remainder to reseller,
   assert.deepEqual(rep.tx.outputs[2].lockingScript.toBinary(), p2pkhScript(creatorHash))
   assert.deepEqual(rep.tx.outputs[3].lockingScript.toBinary(), p2pkhScript(Hash.hash160(pub(holder))))
   // The covenant input validates — builder's amounts match what the script recomputes & enforces.
+  assert.equal(spendOk(rep.tx, lock, 1), true)
+})
+
+test('v2 lifecycle: genesis mints a v2 edition → replicate from it enforces the split', async () => {
+  const creatorHash = Hash.hash160(pub(PrivateKey.fromRandom()))
+  const minter = PrivateKey.fromRandom()
+  const tx1Ref = Array.from({ length: 32 }, (_, i) => (i * 9 + 3) & 0xff)
+  const genesis = await buildEditionGenesisV2Tx({
+    key: minter, funding: [faucet(minter, 200000)], tx1Ref: Buffer.from(tx1Ref).toString('hex'),
+    terms: { creatorPubKeyHash: creatorHash, cBps: V2_CBPS }, initialPriceSats: V2_PRICE, ownerPubKey: pub(minter),
+  })
+  const vout = genesis.editionVouts[0]
+  const lock = genesis.tx.outputs[vout].lockingScript
+  const utxo: EditionUtxo = { txId: genesis.txId, outputIndex: vout, satoshis: 1, lockBytes: lock.toBinary(), sourceTx: genesis.tx }
+
+  const buyer = PrivateKey.fromRandom()
+  const rep = await buildReplicateV2Tx({ edition: utxo, buyerKey: buyer, funding: [faucet(buyer, 200000)] })
+  const expectedCreator = Math.floor((V2_PRICE * V2_CBPS) / 10000)
+  assert.equal(rep.tx.outputs[2].satoshis, expectedCreator)
+  assert.equal(rep.tx.outputs[3].satoshis, V2_PRICE - expectedCreator)
   assert.equal(spendOk(rep.tx, lock, 1), true)
 })

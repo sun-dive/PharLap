@@ -25,7 +25,7 @@ import type { PrivateKey } from '@bsv/sdk'
 import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
   editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE, parseEditionScript,
-  buildHolderEditionScript, parseEditionScriptV2,
+  buildHolderEditionScript, parseEditionScriptV2, buildEditionLockV2, u64le,
 } from './covenant.ts'
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
@@ -90,6 +90,62 @@ export async function buildEditionGenesisTx(opts: {
       tx1Ref, ownerPubKey: ownerPub, stateData: opts.stateData ?? [],
       creatorPubKeyHash: opts.terms.creatorPubKeyHash, creatorFeeSats: opts.terms.creatorFeeSats,
       holderFeeSats: opts.terms.holderFeeSats, tokenSats,
+    })
+    editionVouts.push(tx.outputs.length)
+    tx.addOutput({ lockingScript: lock, satoshis: tokenSats })
+  }
+
+  const changeVout = tx.outputs.length
+  tx.addOutput({ lockingScript: new P2PKH().lock(opts.key.toAddress()), change: true })
+  await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB))
+  await tx.sign()
+
+  const changeSats = tx.outputs[changeVout]?.satoshis ?? 0
+  return { tx, txId: tx.id('hex'), editionVouts, changeVout: changeSats > 0 ? changeVout : null, changeSats }
+}
+
+/** Covenant v2 economic terms: a percentage split (cBps), no fixed fee amounts. */
+export interface EditionV2Terms {
+  /** 20-byte hash160 of the immutable creator fee address. */
+  creatorPubKeyHash: number[]
+  /** Creator fee in basis points (0–10000). */
+  cBps: number
+  tokenSats?: number
+}
+
+/** v2 genesis: mint edition outputs that enforce the percentage split, with an initial reseller price. */
+export async function buildEditionGenesisV2Tx(opts: {
+  key: PrivateKey
+  funding: FundingInput[]
+  tx1Ref: string
+  terms: EditionV2Terms
+  /** Initial reseller price (sats) baked into the genesis editions; resellers update it later (Layer 3). */
+  initialPriceSats: number
+  ownerPubKey?: number[]
+  stateData?: number[]
+  mintCount?: number
+  feePerKb?: number
+}): Promise<EditionGenesisResult> {
+  const tokenSats = opts.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
+  const ownerPub = opts.ownerPubKey ?? pubKeyBytes(opts.key)
+  const tx1Ref = Utils.toArray(opts.tx1Ref, 'hex')
+  if (tx1Ref.length !== 32) throw new Error('buildEditionGenesisV2Tx: tx1Ref must be a 32-byte txid hex')
+  const price = u64le(opts.initialPriceSats)
+  const tx = new Transaction()
+  tx.version = 2
+
+  for (const f of opts.funding) {
+    tx.addInput({
+      sourceTransaction: f.sourceTx, sourceOutputIndex: f.utxo.outputIndex,
+      unlockingScriptTemplate: new P2PKH().unlock(opts.key),
+    })
+  }
+
+  const editionVouts: number[] = []
+  for (let i = 0; i < (opts.mintCount ?? 1); i++) {
+    const lock = buildEditionLockV2({
+      tx1Ref, ownerPubKey: ownerPub, price, stateData: opts.stateData ?? [],
+      creatorPubKeyHash: opts.terms.creatorPubKeyHash, cBps: opts.terms.cBps, tokenSats,
     })
     editionVouts.push(tx.outputs.length)
     tx.addOutput({ lockingScript: lock, satoshis: tokenSats })
