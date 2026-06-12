@@ -4,11 +4,11 @@
 // and a percentage split (creator = ⌊P×cBps/10000⌋, reseller = P − creatorCut) instead of fixed fees.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Transaction, P2PKH, PrivateKey, LockingScript, UnlockingScript, Spend, OP, Hash, type ScriptChunk } from '@bsv/sdk'
+import { Transaction, P2PKH, PrivateKey, LockingScript, UnlockingScript, Spend, OP, Hash, Utils, type ScriptChunk } from '@bsv/sdk'
 import { pushTxConstants, pushTxPreimage, pushData } from '../src/pushtx.ts'
 import {
   replicateBranchV2Ops, buildEditionLockV2, editionReplicateUnlockChunks, EDITION_SCOPE,
-  serializeOutput, p2pkhScript,
+  parseEditionScriptV2, parseEditionScript, serializeOutput, p2pkhScript,
 } from '../src/covenant.ts'
 
 const buyer = PrivateKey.fromRandom()
@@ -148,4 +148,22 @@ test('v2 FULL edition lock: permissionless replicate enforces the computed split
 
 test('v2 FULL edition lock: rejects short-paying the creator cut', () => {
   assert.throws(() => runEditionV2Replicate({ creatorFee: CREATOR_CUT - 1 }))
+})
+
+test('parseEditionScriptV2 recovers owner, price, creator hash + cBps; v1 parser rejects a v2 lock', () => {
+  const holderPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
+  const creatorHash = Hash.hash160(PrivateKey.fromRandom().toPublicKey().encode(true) as number[])
+  const tx1Ref = Array.from({ length: 32 }, (_, i) => (i * 7 + 2) & 0xff)
+  const lock = buildEditionLockV2({
+    tx1Ref, ownerPubKey: holderPub, price: u64le(PRICE), stateData: [0x01, 0x02],
+    creatorPubKeyHash: creatorHash, cBps: CBPS, tokenSats: 1,
+  })
+  const parsed = parseEditionScriptV2(lock)
+  assert.ok(parsed)
+  assert.equal(parsed!.ownerPubKeyHex, Utils.toHex(holderPub))
+  assert.equal(parsed!.priceSats, PRICE)
+  assert.deepEqual(parsed!.terms.creatorPubKeyHash, creatorHash)
+  assert.equal(parsed!.terms.cBps, CBPS)
+  assert.equal(parsed!.tx1RefHex, Utils.toHex(tx1Ref))
+  assert.equal(parseEditionScript(lock), null) // v1 parser rejects v2 (version 0x04)
 })

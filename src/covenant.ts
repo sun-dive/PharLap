@@ -439,13 +439,17 @@ export function editionLockV2Ops(p: EditionV2Params): ScriptChunk[] {
   ]
 }
 
-/** Build a v2 edition locking script (computes the owner-pubkey offset like buildEditionLock). */
+/** Format version byte marking a v2 (percentage-pricing) edition covenant. */
+export const EDITION_VERSION_V2 = 0x04
+
+/** Build a v2 edition locking script (computes the owner-pubkey offset like buildEditionLock; version 0x04). */
 export function buildEditionLockV2(p: Omit<EditionV2Params, 'fieldPubkeyOffset'>): LockingScript {
-  const before = [p.prefix ?? [0x50], p.version ?? [0x03], [RECORD_EDITION], p.tx1Ref]
+  const pv = { ...p, version: p.version ?? [EDITION_VERSION_V2] }
+  const before = [pv.prefix ?? [0x50], pv.version, [RECORD_EDITION], pv.tx1Ref]
   const O = before.reduce((s, f) => s + serializedPushLen(f), 0) + 1
-  const probeLen = new LockingScript(editionLockV2Ops({ ...p, fieldPubkeyOffset: 1 })).toBinary().length
+  const probeLen = new LockingScript(editionLockV2Ops({ ...pv, fieldPubkeyOffset: 1 })).toBinary().length
   const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5
-  return new LockingScript(editionLockV2Ops({ ...p, fieldPubkeyOffset: varIntSize + O }))
+  return new LockingScript(editionLockV2Ops({ ...pv, fieldPubkeyOffset: varIntSize + O }))
 }
 
 /**
@@ -562,6 +566,58 @@ export function parseEditionScript(script: LockingScript): ParsedEdition | null 
   return {
     tx1RefHex: Utils.toHex(tx1Ref), ownerPubKeyHex: Utils.toHex(ownerPub), priceSats: leToNum(price),
     stateDataHex: Utils.toHex(stateData), terms: { creatorPubKeyHash, creatorFeeSats, holderFeeSats },
+  }
+}
+
+export interface ParsedEditionV2 {
+  tx1RefHex: string
+  ownerPubKeyHex: string
+  /** The reseller's set price (sats). */
+  priceSats: number
+  stateDataHex: string
+  /** v2 terms recovered from the covenant body: creator address + fee basis points (no fixed amounts). */
+  terms: { creatorPubKeyHash: number[]; cBps: number }
+}
+
+/**
+ * Parse a v2 (percentage-pricing) edition covenant. A v2 lock bakes NO fixed fee amounts — instead a 26-byte
+ * creator-P2PKH constant (`19 76 a9 14 ‖ hash(20) ‖ 88 ac`) and the `<cBps> OP_MUL <10000> OP_DIV` split
+ * pattern — so we recover the creator hash + cBps from those. Version byte = 0x04. Returns null if not a v2
+ * edition (use parseEditionScript for v1).
+ */
+export function parseEditionScriptV2(script: LockingScript): ParsedEditionV2 | null {
+  const ch = script.chunks
+  if (ch == null || ch.length < 11) return null
+  const P = chunkBytes(ch[0]); const ver = chunkBytes(ch[1]); const rec = chunkBytes(ch[2])
+  const tx1Ref = chunkBytes(ch[3]); const ownerPub = chunkBytes(ch[4])
+  const price = chunkBytes(ch[5]); const stateData = chunkBytes(ch[6]) ?? []
+  if (P == null || P.length !== 1 || P[0] !== 0x50) return null
+  if (ver == null || ver[0] !== EDITION_VERSION_V2) return null
+  if (rec == null || rec[0] !== RECORD_EDITION) return null
+  if (tx1Ref == null || tx1Ref.length !== 32) return null
+  if (ownerPub == null || ownerPub.length !== 33) return null
+  if (price == null || price.length !== 8) return null
+  if (ch[7].op !== OP.OP_2DROP || ch[8].op !== OP.OP_2DROP || ch[9].op !== OP.OP_2DROP || ch[10].op !== OP.OP_DROP) return null
+
+  let creatorPubKeyHash: number[] | null = null
+  let cBps: number | null = null
+  for (let i = 0; i < ch.length; i++) {
+    const d = chunkBytes(ch[i])
+    // creator P2PKH constant: 19 76 a9 14 <hash20> 88 ac (26 bytes)
+    if (d != null && d.length === 26 && d[0] === 0x19 && d[1] === 0x76 && d[2] === 0xa9 && d[3] === 0x14 && d[24] === 0x88 && d[25] === 0xac) {
+      creatorPubKeyHash = d.slice(4, 24)
+    }
+    // split pattern: <cBps> OP_MUL <10000=10 27> OP_DIV
+    if (ch[i + 1]?.op === OP.OP_MUL && ch[i + 3]?.op === OP.OP_DIV) {
+      const tenK = chunkBytes(ch[i + 2])
+      const cb = chunkBytes(ch[i])
+      if (tenK != null && tenK.length === 2 && tenK[0] === 0x10 && tenK[1] === 0x27 && cb != null) cBps = leToNum(cb)
+    }
+  }
+  if (creatorPubKeyHash == null || cBps == null) return null
+  return {
+    tx1RefHex: Utils.toHex(tx1Ref), ownerPubKeyHex: Utils.toHex(ownerPub), priceSats: leToNum(price),
+    stateDataHex: Utils.toHex(stateData), terms: { creatorPubKeyHash, cBps },
   }
 }
 
