@@ -299,8 +299,7 @@ export class WalletProvider {
 
   // ── Address History ───────────────────────────────────────────
 
-  async getAddressHistory(): Promise<{ txId: string; blockHeight: number }[]> {
-    const address = this.getAddress()
+  async getAddressHistory(address: string = this.getAddress()): Promise<{ txId: string; blockHeight: number }[]> {
     const resp = await fetchWithRetry(`${WOC_BASE}/address/${address}/history`)
     if (!resp.ok) throw new Error(`WoC history fetch failed: ${resp.status}`)
     const data = await resp.json()
@@ -309,6 +308,30 @@ export class WalletProvider {
       txId: entry.tx_hash as string,
       blockHeight: (entry.height ?? 0) as number,
     }))
+  }
+
+  // ── Script-hash UTXOs (find covenant outputs not at our address) ──
+
+  /**
+   * Unspent outputs paying a given script hash (WoC `/script/{hash}/unspent`). Edition covenant outputs
+   * are locked to an owner pubkey embedded in a custom script, NOT to a P2PKH address, so they aren't in
+   * any address's UTXO set — but their exact script is deterministically derivable (covenant.buildHolderEditionScript),
+   * and WoC indexes by script hash. This is how the sales page resolves a holder's current spendable edition.
+   * `scriptHash` is SHA-256(scriptBytes) byte-reversed (Electrum/WoC convention).
+   */
+  async getUnspentByScriptHash(scriptHash: string): Promise<Utxo[]> {
+    const resp = await fetchWithRetry(`${WOC_BASE}/script/${scriptHash}/unspent`)
+    if (!resp.ok) throw new Error(`WoC script-unspent fetch failed: ${resp.status}`)
+    const data = await resp.json()
+    const rows: any[] = Array.isArray(data?.result) ? data.result : (Array.isArray(data) ? data : [])
+    return rows
+      .filter((u: any) => u.isSpentInMempoolTx !== true)
+      .map((u: any) => ({
+        txId: u.tx_hash as string,
+        outputIndex: u.tx_pos as number,
+        satoshis: u.value as number,
+        script: '',
+      }))
   }
 
   // ── Merkle Proofs (feeds into proof chain construction) ───────

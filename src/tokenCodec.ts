@@ -32,6 +32,16 @@ export const RECORD_TOKEN = 0x02
 export const RECORD_FILE = 0x03
 /** Reserved for creator↔holder messages / announcements (encrypted or public). See PLAN.md Addendum E. */
 export const RECORD_MESSAGE = 0x04
+// 0x05 = RECORD_EDITION (covenant edition token; defined in covenant.ts).
+/** Immutable storefront metadata (description + optional public cover image) — a TX1 output, locked to
+ *  the creator. The "what you're buying" face of a collection, public even when the content is encrypted.
+ *  See PLAN.md Step 2 (D3): immutable data lives in an immutable record, never in the mutable stateData. */
+export const RECORD_STOREFRONT = 0x06
+/** A seller's MUTABLE promo note for a collection (review, bonuses, redemption instructions). Public,
+ *  locked to the author's pubkey, keyed to a collection. Lives OUTSIDE the frozen edition covenant so a
+ *  reseller can overwrite it freely (latest published wins); rides onto a buyer's purchase tx at sale
+ *  time so it reaches their wallet. See PLAN.md Step 2 (D3). */
+export const RECORD_NOTE = 0x07
 
 /** tokenRules restrictions bitfield. */
 export const RESTRICTION_FUNGIBLE = 0x0001 // interchangeable amounts (satoshis = units)
@@ -298,6 +308,114 @@ export function parseFileScript(
   const fields = decodeFileFields(d.fields)
   if (fields == null) return null
   return { creatorPubKeyHex: d.pubKeyHex, fields }
+}
+
+// ─── STOREFRONT record (TX1, optional) ──────────────────────────────
+// Immutable "what you're buying" metadata, carried as its own TX1 output so it stays in an immutable
+// record (TX1 is the Collection ID tx, never re-created) instead of the mutable stateData field. Every
+// edition binds to it via tx1Ref, and it is the public face of a collection even when the content file
+// is Tier-1 encrypted. Layout mirrors FILE with a leading description field:
+//   [ P, version, RECORD_STOREFRONT, description, coverMimeType, coverFileName, coverBytes ]
+// A cover image is optional: when absent, the three cover fields are empty and only the description shows.
+
+export interface StorefrontFields {
+  /** Short blurb shown on the collection / sales page (set at mint, immutable). May be empty. */
+  description: string
+  /** Optional public (unencrypted) cover image. All three cover fields are present together or absent. */
+  coverMimeType?: string
+  coverFileName?: string
+  coverBytes?: number[]
+}
+
+export function encodeStorefrontFields(data: StorefrontFields): number[][] {
+  return [
+    P_PREFIX,
+    [P_VERSION],
+    [RECORD_STOREFRONT],
+    utf8ToBytes(data.description ?? ''),
+    utf8ToBytes(data.coverMimeType ?? ''),
+    utf8ToBytes(data.coverFileName ?? ''),
+    data.coverBytes ?? [],
+  ]
+}
+
+export function decodeStorefrontFields(fields: number[][]): StorefrontFields | null {
+  if (fields.length < 7) return null
+  if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null
+  if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
+  if (fields[2].length !== 1 || fields[2][0] !== RECORD_STOREFRONT) return null
+  // Empty fields round-trip to "00" via OP_0 (see isEmptyOrZero); normalize those back to empty.
+  const hasCover = !isEmptyOrZero(fields[6])
+  return {
+    description: isEmptyOrZero(fields[3]) ? '' : bytesToUtf8(fields[3]),
+    coverMimeType: hasCover ? bytesToUtf8(fields[4]) : undefined,
+    coverFileName: hasCover ? bytesToUtf8(fields[5]) : undefined,
+    coverBytes: hasCover ? fields[6] : undefined,
+  }
+}
+
+/** Build a STOREFRONT PushDrop locking script, locked to the creator's public key. */
+export function buildStorefrontScript(creatorPubKeyHex: string, data: StorefrontFields): LockingScript {
+  return pushDropLock(creatorPubKeyHex, encodeStorefrontFields(data))
+}
+
+export function parseStorefrontScript(
+  script: LockingScript,
+): { creatorPubKeyHex: string; fields: StorefrontFields } | null {
+  const d = pushDropDecode(script)
+  if (d == null) return null
+  const fields = decodeStorefrontFields(d.fields)
+  if (fields == null) return null
+  return { creatorPubKeyHex: d.pubKeyHex, fields }
+}
+
+// ─── NOTE record (seller's mutable promo note) ──────────────────────
+// A public, author-locked note keyed to a collection: [ P, version, RECORD_NOTE, collectionRef(32), text ].
+// Published standalone by a seller (discoverable via their address history) and/or carried on a buyer's
+// purchase tx as the notification output. Not part of the edition covenant, so it is freely mutable.
+
+export interface NoteFields {
+  /** Collection id (TX1 txid, 32-byte hex) this note is about. */
+  collectionRef: string
+  /** The note text (UTF-8). */
+  text: string
+}
+
+export function encodeNoteFields(data: NoteFields): number[][] {
+  return [
+    P_PREFIX,
+    [P_VERSION],
+    [RECORD_NOTE],
+    hexToBytes(data.collectionRef),
+    utf8ToBytes(data.text),
+  ]
+}
+
+export function decodeNoteFields(fields: number[][]): NoteFields | null {
+  if (fields.length < 5) return null
+  if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null
+  if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
+  if (fields[2].length !== 1 || fields[2][0] !== RECORD_NOTE) return null
+  if (fields[3].length !== 32) return null
+  return {
+    collectionRef: bytesToHex(fields[3]),
+    text: isEmptyOrZero(fields[4]) ? '' : bytesToUtf8(fields[4]),
+  }
+}
+
+/** Build a NOTE PushDrop locking script, locked to the author's public key. */
+export function buildNoteScript(authorPubKeyHex: string, data: NoteFields): LockingScript {
+  return pushDropLock(authorPubKeyHex, encodeNoteFields(data))
+}
+
+export function parseNoteScript(
+  script: LockingScript,
+): { authorPubKeyHex: string; fields: NoteFields } | null {
+  const d = pushDropDecode(script)
+  if (d == null) return null
+  const fields = decodeNoteFields(d.fields)
+  if (fields == null) return null
+  return { authorPubKeyHex: d.pubKeyHex, fields }
 }
 
 // ─── Token rules (8 bytes: 4 × uint16 LE) ───────────────────────────

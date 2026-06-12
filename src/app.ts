@@ -8,18 +8,19 @@
  * verification via verifyTokenLineage. Tokens are tracked locally (PharLapStore) since PushDrop
  * outputs are not WoC-address-indexed.
  */
-import { PrivateKey, Utils, Hash } from '@bsv/sdk'
+import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionScript } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
+import { publishSellerNote, resolveSellerNote } from './sellerNote.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
-import { parseTemplateScript, parseFileScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
+import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
 
 const WIF_KEY = 'p:wallet:wif'
@@ -126,11 +127,12 @@ function termsFromToken(t: StoredToken): EditionTerms {
   }
 }
 
-function storeEdition(o: { txId: string; outputIndex: number; lockHex: string }, collectionId: string, name: string, terms: EditionTerms): void {
+function storeEdition(o: { txId: string; outputIndex: number; lockHex: string }, collectionId: string, name: string, terms: EditionTerms, sellerNote?: string): void {
   store.add({
     txId: o.txId, outputIndex: o.outputIndex, collectionId, stateData: '', collectionName: name,
     kind: 'edition', lockHex: o.lockHex, creatorPubKeyHashHex: Utils.toHex(terms.creatorPubKeyHash),
     creatorFeeSats: terms.creatorFeeSats, holderFeeSats: terms.holderFeeSats,
+    ...(sellerNote ? { sellerNote } : {}),
   })
 }
 
@@ -151,11 +153,13 @@ async function onMintEdition(): Promise<void> {
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
   const terms = ownTerms()
+  const description = val('edDescription')
   try {
     const file = await readFile($('edFile') as HTMLInputElement)
+    const cover = await readFile($('edCover') as HTMLInputElement)
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
     setStatus(`Minting ${encrypt ? 'encrypted ' : ''}edition collection (TX1 template + TX2 covenant editions)…`)
-    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt })
+    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt, description, cover })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
     renderTokens()
     setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
@@ -467,6 +471,7 @@ function renderTokens(): void {
       <div class="mono">collection ${short(t.collectionId)}</div>
       <div class="mono">utxo ${short(t.txId)}:${t.outputIndex}</div>
       ${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ''}
+      ${t.sellerNote ? `<div class="state" style="color:var(--accent2)">📝 ${escapeHtml(t.sellerNote)}</div>` : ''}
     `
     const verify = document.createElement('button')
     verify.textContent = 'Verify'
@@ -487,7 +492,11 @@ function renderTokens(): void {
       view.textContent = 'View'
       view.className = 'secondary'
       view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Edition')
-      actions.append(replicate, xfer, view, verify)
+      const sales = document.createElement('button')
+      sales.textContent = 'Sales page'
+      sales.className = 'secondary'
+      sales.onclick = () => onOpenSalesPage(t)
+      actions.append(replicate, xfer, view, sales, verify)
     } else {
       const send = document.createElement('button')
       send.textContent = 'Send'
@@ -511,6 +520,290 @@ function escapeHtml(s: string): string {
 }
 
 // ─── init ───────────────────────────────────────────────────────────
+// ─── collection / sales view (shareable link landing) ───────────────
+// A link of the form  …/#c=<TX1-txid>[&h=<holderPubKey>]  opens a public storefront page for a
+// collection (PLAN.md Step 2). `c` is the Collection ID (TX1 txid); `h` (optional) names the holder
+// whose edition a buyer will replicate from — the tip-resolution + buy flow land in the next steps.
+
+interface CollectionInfo {
+  tx1Ref: string
+  name: string
+  description: string
+  cover: { mimeType: string; bytes: number[] } | null
+  encrypted: boolean
+  replicable: boolean
+  hasContentFile: boolean
+  creatorPubKeyHex: string | null
+  fees: { creator: number; holder: number } | null
+  /** The collection's covenant template bytes (hex) — lets the buy flow reconstruct a holder's edition. */
+  covenantHex: string
+}
+
+let cvObjectUrl: string | null = null
+let currentCollection: { info: CollectionInfo; holderPubKey: string | null } | null = null
+/** The seller's current note for the open collection (resolved async), captured onto a purchase. */
+let cvSellerNote: string | null = null
+
+function setCvStatus(msg: string, kind: 'info' | 'error' = 'info'): void {
+  const el = $('cvStatus')
+  el.textContent = msg
+  el.className = `cv-status ${kind === 'error' ? 'error' : ''}`.trim()
+}
+
+/** Read a `#c=…&h=…` hash route, or null if absent. */
+function parseHashRoute(): { c: string; h: string | null } | null {
+  const raw = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
+  if (!raw) return null
+  const params = new URLSearchParams(raw)
+  const c = params.get('c')
+  if (!c) return null
+  return { c, h: params.get('h') }
+}
+
+/** Fetch TX1 and extract everything the storefront page needs (template + storefront + fees). */
+async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
+  const tx1 = await provider.getSourceTransaction(tx1Ref)
+  let template: TemplateFields | undefined
+  let creatorPubKeyHex: string | null = null
+  let storefront: { description: string; coverMimeType?: string; coverBytes?: number[] } | null = null
+  let hasContentFile = false
+  for (const o of tx1.outputs) {
+    const t = parseTemplateScript(o.lockingScript)
+    if (t) { template = t.fields; creatorPubKeyHex = t.creatorPubKeyHex }
+    const s = parseStorefrontScript(o.lockingScript)
+    if (s) storefront = s.fields
+    if (parseFileScript(o.lockingScript)) hasContentFile = true
+  }
+  if (!template) throw new Error('not a PHAR LAP collection (no template output in TX1)')
+  const rules = decodeTokenRules(template.tokenRules)
+  let fees: { creator: number; holder: number } | null = null
+  if (template.covenantScript) {
+    try {
+      const ed = parseEditionScript(LockingScript.fromHex(template.covenantScript))
+      if (ed) fees = { creator: ed.terms.creatorFeeSats, holder: ed.terms.holderFeeSats }
+    } catch { /* leave fees null — non-replicable or unparseable covenant */ }
+  }
+  const cover = storefront?.coverBytes
+    ? { mimeType: storefront.coverMimeType ?? 'application/octet-stream', bytes: storefront.coverBytes }
+    : null
+  return {
+    tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
+    cover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
+    creatorPubKeyHex, fees, covenantHex: template.covenantScript,
+  }
+}
+
+function renderCollectionView(info: CollectionInfo): void {
+  $('cvTitle').textContent = info.name || 'Untitled collection'
+  const coverHost = $('cvCover')
+  coverHost.innerHTML = ''
+  if (cvObjectUrl) { URL.revokeObjectURL(cvObjectUrl); cvObjectUrl = null }
+  if (info.cover) {
+    cvObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(info.cover.bytes)], { type: info.cover.mimeType }))
+    const img = document.createElement('img'); img.src = cvObjectUrl; img.className = 'cv-cover-img'
+    coverHost.append(img)
+  } else {
+    coverHost.innerHTML = '<div class="cv-cover-ph">🎴</div>'
+  }
+  const badges: string[] = []
+  if (info.replicable) badges.push('<span class="badge">♾ Unlimited editions</span>')
+  if (info.encrypted) badges.push('<span class="badge" style="background:#9e6a03;color:#1a1206">🔒 Holders only</span>')
+  else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">📎 Embedded file</span>')
+  $('cvBadges').innerHTML = badges.join('')
+  $('cvCreator').textContent = info.creatorPubKeyHex ? `by ${short(info.creatorPubKeyHex)}` : ''
+  $('cvDesc').textContent = info.description || '(no description provided)'
+  $('cvPrice').innerHTML = info.fees
+    ? `Get your own copy — <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(creator ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`
+    : '<span class="muted">This collection is not a replicable edition.</span>'
+  ;($('cvGet') as HTMLButtonElement).disabled = info.fees == null
+  // Show a "View content" button if this wallet already holds an edition of this collection.
+  const holdsIt = store.active().some(t => t.collectionId === info.tx1Ref)
+  showViewButton(info, holdsIt)
+  $('collectionView').style.display = 'flex'
+}
+
+/** Reveal the sales-page "View content" button for holders (label reflects encryption). */
+function showViewButton(info: CollectionInfo, show: boolean): void {
+  const vb = $('cvView') as HTMLButtonElement
+  if (show && info.hasContentFile) {
+    vb.textContent = info.encrypted ? '🔓 View content' : 'View content'
+    vb.style.display = ''
+  } else {
+    vb.style.display = 'none'
+  }
+}
+
+async function openCollectionView(tx1Ref: string, holderPubKey: string | null): Promise<void> {
+  $('collectionView').style.display = 'flex'
+  hideFundPrompt()
+  $('cvTitle').textContent = 'Loading…'
+  $('cvCover').innerHTML = ''
+  $('cvBadges').innerHTML = ''
+  $('cvCreator').textContent = ''
+  $('cvDesc').textContent = ''
+  $('cvPrice').innerHTML = ''
+  setCvStatus('Loading collection from the chain…')
+  try {
+    const info = await loadCollection(tx1Ref)
+    currentCollection = { info, holderPubKey }
+    renderCollectionView(info)
+    setCvStatus('')
+    // Resolve the seller's current promo note (async, best-effort) for the link's seller.
+    void loadSellerNote(info, holderPubKey ?? info.creatorPubKeyHex)
+  } catch (e) {
+    currentCollection = null
+    $('cvTitle').textContent = 'Collection not found'
+    setCvStatus(`Could not load this collection: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Open the sales page for an edition you hold, as its seller (so Share yields YOUR link). */
+function onOpenSalesPage(t: StoredToken): void {
+  history.replaceState(null, '', `${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}`)
+  void openCollectionView(t.collectionId, pubKeyHex)
+}
+
+function closeCollectionView(): void {
+  $('collectionView').style.display = 'none'
+  if (cvObjectUrl) { URL.revokeObjectURL(cvObjectUrl); cvObjectUrl = null }
+  // Drop the hash so a reload returns to the wallet rather than re-opening the storefront.
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search)
+}
+
+function shareCollectionLink(): void {
+  if (!currentCollection) return
+  const { info, holderPubKey } = currentCollection
+  // Share from the perspective of the current seller: prefer the routed holder, else this wallet's pubkey.
+  const h = holderPubKey ?? pubKeyHex
+  const link = `${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`
+  void navigator.clipboard?.writeText(link)
+  setCvStatus('Share link copied to clipboard.')
+}
+
+/** Resolve and show the seller's current note for the open collection; show the editor if it's my page. */
+async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): Promise<void> {
+  cvSellerNote = null
+  const noteBox = $('cvNote')
+  noteBox.style.display = 'none'
+  const isMine = sellerPub != null && sellerPub === pubKeyHex
+  $('cvNoteEdit').style.display = isMine ? 'block' : 'none'
+  ;($('cvNoteText') as HTMLTextAreaElement).value = ''
+  $('cvNoteStatus').textContent = ''
+  if (sellerPub == null) return
+  let current: string | null = null
+  try {
+    const note = await resolveSellerNote(provider, sellerPub, info.tx1Ref)
+    if (note && note.text) current = note.text
+  } catch { /* best-effort — a missing note is normal */ }
+  // Carry-forward: on my own page, if I haven't published a note, offer the one I received when I bought.
+  if (current == null && isMine) {
+    const held = store.active().find(t => t.collectionId === info.tx1Ref && t.sellerNote)
+    if (held?.sellerNote) {
+      current = held.sellerNote
+      $('cvNoteStatus').textContent = 'This is the note you received when you bought — Publish to pass it on.'
+    }
+  }
+  if (current) {
+    cvSellerNote = current
+    noteBox.textContent = `📝 Seller’s note: ${current}`
+    noteBox.style.display = 'block'
+    if (isMine) ($('cvNoteText') as HTMLTextAreaElement).value = current
+  }
+}
+
+async function onSaveSellerNote(): Promise<void> {
+  if (!currentCollection) return
+  const text = ($('cvNoteText') as HTMLTextAreaElement).value.trim()
+  if (!text) { $('cvNoteStatus').textContent = 'Note is empty.'; return }
+  $('cvNoteStatus').textContent = 'Publishing your note…'
+  try {
+    const txId = await publishSellerNote(provider, key, currentCollection.info.tx1Ref, text)
+    cvSellerNote = text
+    $('cvNote').textContent = `📝 Seller’s note: ${text}`
+    $('cvNote').style.display = 'block'
+    $('cvNoteStatus').textContent = `Published (${short(txId)}). Buyers will see it shortly.`
+  } catch (e) {
+    $('cvNoteStatus').textContent = `Failed: ${(e as Error).message}`
+  }
+}
+
+function showFundPrompt(needed: number, have: number): void {
+  $('cvFundNeed').textContent = `${needed} sat`
+  $('cvFundHave').textContent = `${have} sat`
+  $('cvFundAddr').textContent = address
+  $('cvFund').style.display = 'block'
+  setCvStatus('Not enough funds yet — send a little BSV to your wallet, then click “I’ve funded”.', 'error')
+}
+function hideFundPrompt(): void { $('cvFund').style.display = 'none' }
+
+// "Get a copy": resolve the seller's current edition → fund check → permissionless replicate → reveal.
+let buying = false
+async function onGetCopy(): Promise<void> {
+  if (buying || !currentCollection) return
+  const { info, holderPubKey } = currentCollection
+  if (!info.fees || !info.covenantHex) { setCvStatus('This collection is not a buyable edition.', 'error'); return }
+  const sellerPub = holderPubKey ?? info.creatorPubKeyHex
+  if (!sellerPub) { setCvStatus('No seller could be determined for this link.', 'error'); return }
+
+  // Confirm the purchase before spending — show the item and the price (the fixed fees).
+  const price = info.fees.creator + info.fees.holder
+  const ok = confirm(
+    `Buy a copy of “${info.name}” for ${price} sat?\n\n` +
+    `creator ${info.fees.creator} + holder ${info.fees.holder} sat, plus a small network fee.\n` +
+    `This is an instant, on-chain purchase.`,
+  )
+  if (!ok) { setCvStatus('Purchase cancelled.'); return }
+
+  buying = true
+  ;($('cvGet') as HTMLButtonElement).disabled = true
+  try {
+    setCvStatus('Finding the seller’s current edition…')
+    let tip = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex })
+    if (!tip) { setCvStatus('This seller has no edition available right now — try another link or ask them to mint one.', 'error'); return }
+
+    // Fund check: token + replica + both fees + a little for the miner fee/margin.
+    const needed = tip.terms.creatorFeeSats + tip.terms.holderFeeSats + 2 * tip.tokenSats + 1200
+    const have = (await getSafeUtxos(provider)).reduce((s, u) => s + u.satoshis, 0)
+    if (have < needed) { showFundPrompt(needed, have); return }
+    hideFundPrompt()
+
+    setCvStatus('Buying your copy — replicating the edition…')
+    let bought: Awaited<ReturnType<typeof replicateEdition>> | null = null
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try {
+        bought = await replicateEdition(provider, key, {
+          editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms,
+        })
+        break
+      } catch (e) {
+        if (attempt === 2) throw e
+        // The tip was likely taken by another buyer (double-spend) — re-resolve the seller's new edition and retry.
+        setCvStatus('Another buyer was first — finding the seller’s new edition…')
+        const again = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex })
+        if (!again) throw new Error('the seller’s edition is no longer available')
+        tip = again
+      }
+    }
+    if (!bought) return
+    // The buyer's replica (out[1]) is now ours — track it (with the seller's note, captured at purchase).
+    storeEdition({ txId: bought.replicaOutpoint.txId, outputIndex: bought.replicaOutpoint.outputIndex, lockHex: bought.lockHex },
+      info.tx1Ref, info.name, tip.terms, cvSellerNote ?? undefined)
+    renderTokens()
+    showViewButton(info, true) // you're a holder now — keep a persistent View button on the page
+    setCvStatus(
+      `✅ You own a copy of “${info.name}”! Tx ${short(bought.txId)} — it’s now in your wallet.` +
+      (cvSellerNote ? `\n📝 Seller’s note: ${cvSellerNote}` : ''),
+    )
+    // Reveal the content (decrypts automatically — you're a holder now).
+    if (info.hasContentFile) void onView(info.tx1Ref, info.name)
+  } catch (e) {
+    setCvStatus(`Could not complete the purchase: ${(e as Error).message}`, 'error')
+  } finally {
+    buying = false
+    ;($('cvGet') as HTMLButtonElement).disabled = false
+  }
+}
+
 function init(): void {
   store = new PharLapStore()
   useKey(loadKey())
@@ -541,6 +834,24 @@ function init(): void {
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)
   $('viewerClose').onclick = () => closeViewer()
   $('viewer').onclick = (e) => { if (e.target === $('viewer')) closeViewer() } // click backdrop to close
+
+  // Collection / sales view (shareable links).
+  $('cvWallet').onclick = () => closeCollectionView()
+  $('cvShare').onclick = () => shareCollectionLink()
+  $('cvGet').onclick = () => void onGetCopy()
+  $('cvView').onclick = () => { if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name) }
+  $('cvNoteSave').onclick = () => void onSaveSellerNote()
+  $('cvFundCopy').onclick = () => void navigator.clipboard?.writeText(address)
+  $('cvFundDone').onclick = () => void onGetCopy()
+  window.addEventListener('hashchange', () => {
+    const r = parseHashRoute()
+    if (r) void openCollectionView(r.c, r.h)
+    else closeCollectionView()
+  })
+
+  // If the page was opened via a share link, show the storefront over the wallet.
+  const route = parseHashRoute()
+  if (route) void openCollectionView(route.c, route.h)
 
   void refreshBalance()
 }

@@ -25,6 +25,8 @@ export interface StoredToken {
   creatorPubKeyHashHex?: string
   creatorFeeSats?: number
   holderFeeSats?: number
+  /** Seller's promo note captured at purchase (the note that was current when this copy was bought). */
+  sellerNote?: string
 }
 
 export interface KVStore {

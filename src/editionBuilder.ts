@@ -25,6 +25,7 @@ import type { PrivateKey } from '@bsv/sdk'
 import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
   editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE, parseEditionScript,
+  buildHolderEditionScript,
 } from './covenant.ts'
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
@@ -316,6 +317,10 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   file?: { mimeType: string; fileName: string; bytes: number[] }
   /** Tier-1 encrypt the embedded file (Addendum F). Requires `file`. */
   encrypt?: boolean
+  /** Immutable storefront blurb shown on the collection / sales page (PLAN.md Step 2, D3). */
+  description?: string
+  /** Optional public (unencrypted) cover image — the storefront's face, shown even when content is encrypted. */
+  cover?: { mimeType: string; fileName: string; bytes: number[] }
   feePerKb?: number
 }): Promise<CreateEditionResult> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
@@ -355,9 +360,22 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes! }
     : undefined
 
-  // Fund both txs. TX1 carries any embedded file, so its fee scales with file size; keep a healthy margin.
+  // Immutable storefront record (description + optional public cover image), carried as a TX1 output.
+  const hasStorefront = (params.description != null && params.description.length > 0) || params.cover != null
+  const storefront = hasStorefront
+    ? {
+        description: params.description ?? '',
+        coverMimeType: params.cover?.mimeType,
+        coverFileName: params.cover?.fileName,
+        coverBytes: params.cover?.bytes,
+      }
+    : undefined
+
+  // Fund both txs. TX1 carries any embedded file + cover, so its fee scales with their size; keep a healthy margin.
   const editionBytes = 800
-  const tx1Bytes = 500 + templateLock.toBinary().length + (file ? file.fileBytes.length : 0)
+  const tx1Bytes = 500 + templateLock.toBinary().length
+    + (file ? file.fileBytes.length : 0)
+    + (params.cover ? params.cover.bytes.length : 0)
   const tx2Bytes = 300 + mintCount * editionBytes
   const estFee = Math.ceil(((tx1Bytes + tx2Bytes) * feePerKb) / 1000)
   const target = (1 + mintCount) * tokenSats + estFee + Math.max(1000, Math.ceil(estFee * 0.2))
@@ -365,7 +383,7 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   const funding = await toFundingInputs(provider, selected)
 
   // Build both offline, broadcast only if both succeed (no orphaned template).
-  const t1 = await buildTemplateTx({ key, funding, template, file, outputSats: tokenSats, feePerKb })
+  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, outputSats: tokenSats, feePerKb })
   if (t1.changeVout == null) throw new Error('Insufficient funding: template tx left no change to fund the edition mint.')
   const t2Funding: FundingInput[] = [{
     utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' },
@@ -476,6 +494,52 @@ export async function broadcastV2Probe(provider: WalletProvider, key: PrivateKey
   provider.registerPendingTx(tx.id('hex'), selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
     tx.outputs[0]?.satoshis != null ? { outputIndex: 0, satoshis: tx.outputs[0].satoshis } : undefined)
   return tx.id('hex')
+}
+
+/** WoC script hash for an output: SHA-256(scriptBytes) byte-reversed (Electrum/WoC convention). */
+export function wocScriptHash(scriptBytes: number[]): string {
+  return Utils.toHex(Hash.sha256(scriptBytes).reverse())
+}
+
+export interface ResolvedEdition {
+  txId: string
+  outputIndex: number
+  /** The exact edition locking script (hex) — feeds straight into replicateEdition. */
+  lockHex: string
+  terms: EditionTerms
+  tokenSats: number
+}
+
+/**
+ * Resolve a holder's CURRENT spendable edition of a collection, given the collection's covenant template
+ * (from TX1) and the holder's pubkey — the "sales link" tip resolution (PLAN.md Step 2, D2).
+ *
+ * The holder's edition script is deterministic (buildHolderEditionScript: template + tx1Ref + owner), so
+ * we derive it and ask WoC for its unspent UTXO(s) by script hash — no address-history walk. Returns the
+ * tip to replicate from, or null if the holder currently holds no edition of this collection.
+ */
+export async function resolveHolderEdition(provider: WalletProvider, params: {
+  tx1RefHex: string
+  holderPubKeyHex: string
+  /** The collection's covenant template bytes (hex) — TX1 template.covenantScript. */
+  templateCovenantHex: string
+}): Promise<ResolvedEdition | null> {
+  const tx1Ref = Utils.toArray(params.tx1RefHex, 'hex')
+  const ownerPub = Utils.toArray(params.holderPubKeyHex, 'hex')
+  const templateBytes = Utils.toArray(params.templateCovenantHex, 'hex')
+  const lockBytes = buildHolderEditionScript(templateBytes, tx1Ref, ownerPub)
+  const lockScript = LockingScript.fromHex(Utils.toHex(lockBytes))
+  const ed = parseEditionScript(lockScript)
+  if (ed == null) throw new Error('resolveHolderEdition: reconstructed script is not a valid edition')
+
+  const unspent = await provider.getUnspentByScriptHash(wocScriptHash(lockBytes))
+  if (unspent.length === 0) return null
+  // Any unspent edition of this holder is an interchangeable sale source; prefer a confirmed one.
+  const pick = unspent.find(u => u.satoshis > 0) ?? unspent[0]
+  return {
+    txId: pick.txId, outputIndex: pick.outputIndex, lockHex: Utils.toHex(lockBytes),
+    terms: { ...ed.terms, tokenSats: pick.satoshis }, tokenSats: pick.satoshis,
+  }
 }
 
 export interface IncomingEdition {

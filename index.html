@@ -45,6 +45,30 @@
     .badge { font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:var(--accent2); color:#04122a; padding:1px 6px; border-radius:10px; vertical-align:middle; }
     .warn { border-color:#9e6a03; }
     .warn h2 { color:#e3a008; }
+    .foot { text-align:center; color:var(--muted); font-size:12px; margin:28px 0 8px; }
+    .foot a { color:var(--accent2); }
+    .woc-badge { height:56px; width:auto; opacity:.9; }
+    .woc-badge:hover { opacity:1; }
+    /* Collection / sales view (shareable link landing) */
+    .cview { position:fixed; inset:0; background:var(--bg); overflow:auto; z-index:5; display:flex; justify-content:center; padding:24px 16px 48px; }
+    .cview-box { max-width:560px; width:100%; }
+    .cv-cover { margin-bottom:16px; border-radius:12px; overflow:hidden; background:var(--card); border:1px solid var(--line); }
+    .cv-cover-img { width:100%; display:block; }
+    .cv-cover-ph { font-size:64px; text-align:center; padding:48px 0; color:var(--muted); }
+    .cv-title { font-size:26px; margin:0 0 6px; letter-spacing:.3px; }
+    .cv-badges { margin-bottom:8px; display:flex; gap:6px; flex-wrap:wrap; }
+    .cv-creator { margin-bottom:12px; }
+    .cv-desc { white-space:pre-wrap; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin:0; }
+    .cv-price { margin:16px 0; font-size:16px; }
+    .cv-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .cv-actions button { padding:12px 18px; font-size:15px; }
+    .cv-status { margin-top:12px; color:var(--muted); font-size:13px; min-height:18px; }
+    .cv-status.error { color:#ffb4ae; }
+    .cv-fund { margin-top:14px; padding:14px; border:1px solid #9e6a03; border-radius:8px; background:#1a1206; font-size:14px; }
+    .cv-fund .mono { color:var(--fg); }
+    .cv-note { margin:12px 0; padding:10px 12px; border-left:3px solid var(--accent2); background:#0d1117; border-radius:6px; font-size:14px; white-space:pre-wrap; }
+    .cv-noteedit { margin:12px 0; }
+    .cv-noteedit textarea { min-height:54px; }
   </style>
 </head>
 <body>
@@ -93,6 +117,10 @@
       <div class="row" style="margin-bottom:10px"><button id="btnV2Probe" class="secondary">Test v2 broadcast</button></div>
       <label>Edition collection name</label>
       <input id="edName" placeholder="e.g. My eBook (unlimited editions)" />
+      <label>Description (shown on the sales page — public, immutable)</label>
+      <textarea id="edDescription" placeholder="What is this? What do holders get? (a short blurb buyers see before purchase)"></textarea>
+      <label>Cover image (optional — public storefront art, shown even if the content is encrypted)</label>
+      <input id="edCover" type="file" accept="image/*" />
       <div class="grid2" style="grid-template-columns:1fr 1fr">
         <div><label>Creator fee (sat)</label><input id="edCreatorFee" type="number" min="0" value="5000" /></div>
         <div><label>Holder fee (sat)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>
@@ -133,6 +161,56 @@
       </div>
       <div id="inbox" style="margin-top:12px"></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Messages are delivered on-chain to the recipient's pubkey (encrypted by default). A message can carry text, a file, or a content key — the basis for paid encrypted content.</p>
+    </div>
+
+    <footer class="foot">
+      <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
+        <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
+      </a>
+      <div style="margin-top:8px">PHAR LAP is experimental — use small amounts.</div>
+    </footer>
+  </div>
+
+  <div id="collectionView" class="cview" style="display:none">
+    <div class="cview-box">
+      <div id="cvCover" class="cv-cover"></div>
+      <h1 id="cvTitle" class="cv-title"></h1>
+      <div id="cvBadges" class="cv-badges"></div>
+      <div id="cvCreator" class="mono cv-creator muted"></div>
+      <p id="cvDesc" class="cv-desc"></p>
+      <div id="cvNote" class="cv-note" style="display:none"></div>
+      <div id="cvNoteEdit" class="cv-noteedit" style="display:none">
+        <label>Your seller note (public — promo, bonuses, redemption info; buyers see it)</label>
+        <textarea id="cvNoteText" placeholder="e.g. Bonus: DM me this txid for a signed print 🎁"></textarea>
+        <div class="row" style="margin-top:6px">
+          <button id="cvNoteSave" class="secondary">Publish note</button>
+          <span id="cvNoteStatus" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
+      <div id="cvPrice" class="cv-price"></div>
+      <div class="cv-actions">
+        <button id="cvGet">Get a copy</button>
+        <button id="cvView" class="secondary" style="display:none">View content</button>
+        <button id="cvShare" class="secondary">Share</button>
+        <button id="cvWallet" class="secondary">Open wallet</button>
+      </div>
+      <div id="cvFund" class="cv-fund" style="display:none">
+        <div>Fund your wallet to buy — need <b id="cvFundNeed"></b>, have <span id="cvFundHave" class="muted"></span>.</div>
+        <div style="margin-top:8px">Send a little BSV to your wallet address:</div>
+        <div class="row" style="margin-top:4px">
+          <span id="cvFundAddr" class="mono"></span>
+          <button id="cvFundCopy" class="secondary">Copy</button>
+        </div>
+        <div id="cvFundQr" class="muted" style="font-size:12px;margin-top:6px">QR code coming shortly — for now, copy the address above and send from your phone/wallet.</div>
+        <button id="cvFundDone" style="margin-top:10px">I’ve funded — buy now</button>
+      </div>
+      <div id="cvStatus" class="cv-status"></div>
+      <footer class="foot">
+        <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
+          <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
+        </a>
+        <div style="margin-top:8px">PHAR LAP is experimental — use small amounts.</div>
+      </footer>
     </div>
   </div>
 
