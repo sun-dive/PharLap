@@ -363,6 +363,17 @@ export interface EditionParams extends EditionFields {
   c?: PushTxConstants
 }
 
+/** v2 edition params: percentage split (cBps) instead of fixed fee amounts (Addendum G). */
+export interface EditionV2Params extends EditionFields {
+  tokenSats?: number
+  /** 20-byte hash160 of the immutable creator fee address. */
+  creatorPubKeyHash: number[]
+  /** Creator fee in basis points (0–10000). */
+  cBps: number
+  fieldPubkeyOffset: number
+  c?: PushTxConstants
+}
+
 /** Edition data-field chunks: [P, version, RECORD_EDITION, tx1Ref, ownerPubKey, price(8), stateData]. */
 function editionFieldChunks(f: EditionFields): ScriptChunk[] {
   return [
@@ -410,6 +421,31 @@ export function buildEditionLock(p: Omit<EditionParams, 'fieldPubkeyOffset'>): L
   const probeLen = new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: 1 })).toBinary().length
   const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5
   return new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: varIntSize + O }))
+}
+
+/** v2 edition lock ops: identical shape to v1 but the replicate branch enforces the percentage split. */
+export function editionLockV2Ops(p: EditionV2Params): ScriptChunk[] {
+  const c = p.c ?? pushTxConstants(EDITION_SCOPE)
+  return [
+    ...editionFieldChunks(p),
+    op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_DROP), // 7 fields
+    ...covenantPrefixOps(p.fieldPubkeyOffset, c),
+    pushData([3]), op(OP.OP_ROLL),
+    op(OP.OP_IF),
+    ...transferTailOps({ tokenSats: p.tokenSats }),
+    op(OP.OP_ELSE),
+    ...replicateTailV2Ops({ tokenSats: p.tokenSats, creatorPubKeyHash: p.creatorPubKeyHash, cBps: p.cBps, c }),
+    op(OP.OP_ENDIF),
+  ]
+}
+
+/** Build a v2 edition locking script (computes the owner-pubkey offset like buildEditionLock). */
+export function buildEditionLockV2(p: Omit<EditionV2Params, 'fieldPubkeyOffset'>): LockingScript {
+  const before = [p.prefix ?? [0x50], p.version ?? [0x03], [RECORD_EDITION], p.tx1Ref]
+  const O = before.reduce((s, f) => s + serializedPushLen(f), 0) + 1
+  const probeLen = new LockingScript(editionLockV2Ops({ ...p, fieldPubkeyOffset: 1 })).toBinary().length
+  const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5
+  return new LockingScript(editionLockV2Ops({ ...p, fieldPubkeyOffset: varIntSize + O }))
 }
 
 /**

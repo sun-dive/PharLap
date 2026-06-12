@@ -6,7 +6,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, LockingScript, UnlockingScript, Spend, OP, Hash, type ScriptChunk } from '@bsv/sdk'
 import { pushTxConstants, pushTxPreimage, pushData } from '../src/pushtx.ts'
-import { replicateBranchV2Ops, serializeOutput, p2pkhScript } from '../src/covenant.ts'
+import {
+  replicateBranchV2Ops, buildEditionLockV2, editionReplicateUnlockChunks, EDITION_SCOPE,
+  serializeOutput, p2pkhScript,
+} from '../src/covenant.ts'
 
 const buyer = PrivateKey.fromRandom()
 const op = (code: number): ScriptChunk => ({ op: code })
@@ -93,4 +96,56 @@ test('v2 replicate: rejects redirecting the creator cut to another address', () 
 test('v2 replicate: rejects a replica that does not carry the covenant forward', () => {
   const bogus = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
   assert.throws(() => runReplicateV2({ out1Pub: bogus }))
+})
+
+// --- The v2 tail inside the FULL edition lock (7 data fields incl. a real price field + selector + transfer) ---
+const OWNER_OFFSET = 40
+
+function runEditionV2Replicate(ov: { creatorFee?: number } = {}): boolean {
+  const holder = PrivateKey.fromRandom()
+  const buyerK = PrivateKey.fromRandom()
+  const holderPub = holder.toPublicKey().encode(true) as number[]
+  const buyerPub = buyerK.toPublicKey().encode(true) as number[]
+  const creatorHash = Hash.hash160(PrivateKey.fromRandom().toPublicKey().encode(true) as number[])
+  const tx1Ref = Array.from({ length: 32 }, (_, i) => (i * 5 + 1) & 0xff)
+  const lock = buildEditionLockV2({
+    tx1Ref, ownerPubKey: holderPub, price: u64le(PRICE), stateData: [0xaa, 0xbb, 0xcc],
+    creatorPubKeyHash: creatorHash, cBps: CBPS, tokenSats: 1,
+  })
+  const lockBytes = lock.toBinary()
+  const out1 = [...lockBytes]
+  for (let i = 0; i < 33; i++) out1[OWNER_OFFSET + i] = buyerPub[i] // replica → buyer (price carried verbatim)
+  const changeScript = new P2PKH().lock(buyerK.toAddress()).toBinary()
+
+  const src = new Transaction(); src.addOutput({ lockingScript: lock, satoshis: 1000 })
+  const sp = new Transaction(); sp.version = 2
+  sp.addInput({ sourceTransaction: src, sourceOutputIndex: 0, sequence: 0xffffffff })
+  sp.addOutput({ lockingScript: lock, satoshis: 1 })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(out1), satoshis: 1 })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(creatorHash)), satoshis: ov.creatorFee ?? CREATOR_CUT })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash.hash160(holderPub))), satoshis: RESELLER_CUT })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(changeScript), satoshis: 500 })
+
+  const preimage = pushTxPreimage({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, sourceSatoshis: 1000, transactionVersion: 2,
+    inputIndex: 0, subscript: lock, outputs: sp.outputs, inputSequence: 0xffffffff, lockTime: sp.lockTime,
+    scope: EDITION_SCOPE,
+  })
+  const unlock = editionReplicateUnlockChunks({
+    buyerPubKey: buyerPub, buyerChange: serializeOutput(500, changeScript), preimage,
+  })
+  const interp = new Spend({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, lockingScript: lock, sourceSatoshis: 1000,
+    transactionVersion: 2, otherInputs: [], inputIndex: 0, outputs: sp.outputs,
+    inputSequence: 0xffffffff, lockTime: sp.lockTime, unlockingScript: new UnlockingScript(unlock),
+  })
+  return interp.validate()
+}
+
+test('v2 FULL edition lock: permissionless replicate enforces the computed split (selector → replicate branch)', () => {
+  assert.equal(runEditionV2Replicate(), true)
+})
+
+test('v2 FULL edition lock: rejects short-paying the creator cut', () => {
+  assert.throws(() => runEditionV2Replicate({ creatorFee: CREATOR_CUT - 1 }))
 })
