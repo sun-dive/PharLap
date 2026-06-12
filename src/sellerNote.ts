@@ -16,7 +16,7 @@
  */
 import { Transaction, P2PKH, SatoshisPerKilobyte, PublicKey } from '@bsv/sdk'
 import type { PrivateKey } from '@bsv/sdk'
-import { buildNoteScript, parseNoteScript } from './tokenCodec.ts'
+import { buildNoteScript, parseNoteScript, type NoteFields, type BonusKind } from './tokenCodec.ts'
 import { PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding } from './collectionBuilder.ts'
 import type { WalletProvider } from './walletProvider.ts'
 
@@ -29,13 +29,22 @@ function utf8Len(s: string): number {
   return new TextEncoder().encode(s).length
 }
 
-/** Publish (or overwrite) the seller's note for a collection. Returns the note tx id. */
+/** A resolved seller note (promo text + optional buyer bonus). */
+export interface SellerNote {
+  text: string
+  bonusKind?: BonusKind
+  bonusValue?: string
+}
+
+/** Publish (or overwrite) the seller's note for a collection, with an optional bonus. Returns the note tx id. */
 export async function publishSellerNote(
-  provider: WalletProvider, key: PrivateKey, collectionId: string, text: string,
+  provider: WalletProvider, key: PrivateKey, collectionId: string, note: SellerNote,
 ): Promise<string> {
-  const trimmed = text.trim()
-  if (trimmed.length === 0) throw new Error('note is empty')
+  const trimmed = note.text.trim()
+  const bonusValue = note.bonusValue?.trim()
+  if (trimmed.length === 0 && !bonusValue) throw new Error('note is empty')
   if (utf8Len(trimmed) > MAX_NOTE_BYTES) throw new Error(`note exceeds ${MAX_NOTE_BYTES} bytes`)
+  if (bonusValue && utf8Len(bonusValue) > MAX_NOTE_BYTES) throw new Error(`bonus exceeds ${MAX_NOTE_BYTES} bytes`)
   const authorPub = key.toPublicKey().toString()
 
   const selected = selectFunding(await getSafeUtxos(provider), PHARLAP_OUTPUT_SATS + 500)
@@ -49,7 +58,13 @@ export async function publishSellerNote(
       unlockingScriptTemplate: new P2PKH().unlock(key),
     })
   }
-  tx.addOutput({ lockingScript: buildNoteScript(authorPub, { collectionRef: collectionId, text: trimmed }), satoshis: PHARLAP_OUTPUT_SATS })
+  tx.addOutput({
+    lockingScript: buildNoteScript(authorPub, {
+      collectionRef: collectionId, text: trimmed,
+      ...(bonusValue ? { bonusKind: note.bonusKind, bonusValue } : {}),
+    }),
+    satoshis: PHARLAP_OUTPUT_SATS,
+  })
   tx.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), change: true })
   await tx.fee(new SatoshisPerKilobyte(DEFAULT_FEE_PER_KB))
   await tx.sign()
@@ -65,11 +80,13 @@ export async function publishSellerNote(
  * collection — used for hands-off propagation: when a holder resells, the note attached to the tx that
  * gave them their edition is re-attached to the new sale unless they've published their own.
  */
-export function readNoteFromTx(tx: Transaction, collectionId: string): string | null {
+export function readNoteFromTx(tx: Transaction, collectionId: string): SellerNote | null {
   const want = collectionId.toLowerCase()
   for (const o of tx.outputs) {
     const n = parseNoteScript(o.lockingScript)
-    if (n && n.fields.collectionRef.toLowerCase() === want) return n.fields.text
+    if (n && n.fields.collectionRef.toLowerCase() === want) {
+      return { text: n.fields.text, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue }
+    }
   }
   return null
 }
@@ -77,7 +94,7 @@ export function readNoteFromTx(tx: Transaction, collectionId: string): string | 
 /** The latest note a seller has published for a collection, or null. */
 export async function resolveSellerNote(
   provider: WalletProvider, sellerPubKeyHex: string, collectionId: string,
-): Promise<{ text: string; txId: string } | null> {
+): Promise<(SellerNote & { txId: string }) | null> {
   const sellerAddress = PublicKey.fromString(sellerPubKeyHex).toAddress()
 
   // Candidates: confirmed history (with heights) UNIONed with mempool-aware txids (the just-published
@@ -107,7 +124,7 @@ export async function resolveSellerNote(
     for (const o of tx.outputs) {
       const n = parseNoteScript(o.lockingScript)
       if (n && n.authorPubKeyHex.toLowerCase() === seller && n.fields.collectionRef.toLowerCase() === want) {
-        return { text: n.fields.text, txId }
+        return { text: n.fields.text, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue, txId }
       }
     }
   }

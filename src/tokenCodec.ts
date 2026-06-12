@@ -374,21 +374,33 @@ export function parseStorefrontScript(
 // Published standalone by a seller (discoverable via their address history) and/or carried on a buyer's
 // purchase tx as the notification output. Not part of the edition covenant, so it is freely mutable.
 
+/** Optional bonus a seller attaches to a note, claimable by the buyer. */
+export type BonusKind = 'link' | 'code'
+const BONUS_LINK = 1
+const BONUS_CODE = 2
+
 export interface NoteFields {
   /** Collection id (TX1 txid, 32-byte hex) this note is about. */
   collectionRef: string
   /** The note text (UTF-8). */
   text: string
+  /** Optional buyer bonus: an external link (seller's site delivers it) or a redeemable code. */
+  bonusKind?: BonusKind
+  bonusValue?: string
 }
 
 export function encodeNoteFields(data: NoteFields): number[][] {
-  return [
+  const fields: number[][] = [
     P_PREFIX,
     [P_VERSION],
     [RECORD_NOTE],
     hexToBytes(data.collectionRef),
     utf8ToBytes(data.text),
   ]
+  if (data.bonusKind != null && data.bonusValue != null && data.bonusValue.length > 0) {
+    fields.push([data.bonusKind === 'link' ? BONUS_LINK : BONUS_CODE], utf8ToBytes(data.bonusValue))
+  }
+  return fields
 }
 
 export function decodeNoteFields(fields: number[][]): NoteFields | null {
@@ -397,10 +409,15 @@ export function decodeNoteFields(fields: number[][]): NoteFields | null {
   if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
   if (fields[2].length !== 1 || fields[2][0] !== RECORD_NOTE) return null
   if (fields[3].length !== 32) return null
-  return {
+  const result: NoteFields = {
     collectionRef: bytesToHex(fields[3]),
     text: isEmptyOrZero(fields[4]) ? '' : bytesToUtf8(fields[4]),
   }
+  if (fields.length >= 7 && fields[5].length === 1 && (fields[5][0] === BONUS_LINK || fields[5][0] === BONUS_CODE)) {
+    result.bonusKind = fields[5][0] === BONUS_LINK ? 'link' : 'code'
+    result.bonusValue = bytesToUtf8(fields[6])
+  }
+  return result
 }
 
 /** Build a NOTE PushDrop locking script, locked to the author's public key. */
