@@ -60,6 +60,20 @@ export async function publishSellerNote(
   return txId
 }
 
+/**
+ * Read a note that rode IN on a transaction (the on-chain echo carried by a sale/transfer), for a given
+ * collection — used for hands-off propagation: when a holder resells, the note attached to the tx that
+ * gave them their edition is re-attached to the new sale unless they've published their own.
+ */
+export function readNoteFromTx(tx: Transaction, collectionId: string): string | null {
+  const want = collectionId.toLowerCase()
+  for (const o of tx.outputs) {
+    const n = parseNoteScript(o.lockingScript)
+    if (n && n.fields.collectionRef.toLowerCase() === want) return n.fields.text
+  }
+  return null
+}
+
 /** The latest note a seller has published for a collection, or null. */
 export async function resolveSellerNote(
   provider: WalletProvider, sellerPubKeyHex: string, collectionId: string,

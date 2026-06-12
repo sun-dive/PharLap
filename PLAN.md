@@ -553,10 +553,16 @@ must be mutable*:
   seller's current note; the holder gets an editor on their own page (publish = overwrite-latest). The buyer
   CAPTURES the note at purchase (stored on the edition + shown on the wallet card + post-purchase), and a
   reseller's own page pre-fills the editor with the note they received so they can pass it on in one click.
-  4 codec tests; suite 95/95. DEVIATION from the literal design: the note is delivered via the seller's
-  standalone on-chain published note (resolved by the buyer) + local capture, NOT yet echoed as an extra
-  output on the replicate tx — the covenant already supports a trailing note output (outputs[4+] are appended
-  verbatim), so the on-chain echo + fully hands-off multi-hop propagation remain an available refinement.
+  4 codec tests; suite 95/95.
+  **DONE (on-chain echo + hands-off propagation):** the note now rides as a NOTE output (locked to the
+  buyer/new owner) on the replicate AND transfer txs — a trailing output the covenant appends verbatim, so
+  `covenant.ts` is untouched and the spend still `Spend`-validates (tests assert both the echo and validity).
+  Propagation is a sticky default: a holder's sale carries their own PUBLISHED note if set, else the note that
+  rode in on the edition they hold (`readNoteFromTx` of its source tx), so S→B→C→… flows hands-off until a
+  reseller overwrites it; received editions capture the note (scanIncomingEditions) for wallet display. Not
+  consensus-enforced (the note is deliberately outside the frozen covenant), so a modified client could drop
+  it — the price of keeping it freely overwritable. Mempool-aware resolution (getRecentTxIdsForAddress). +3
+  edition-echo tests; suite 98/98.
 
 **D4 — First-cut scope: (b) full flow.**
 Landing page **+** in-page **"Get a copy"** (auto-create wallet if none → resolve holder's edition tip →

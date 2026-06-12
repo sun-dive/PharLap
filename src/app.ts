@@ -16,7 +16,7 @@ import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, sca
 import { parseEditionScript } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
-import { publishSellerNote, resolveSellerNote } from './sellerNote.ts'
+import { publishSellerNote, resolveSellerNote, readNoteFromTx } from './sellerNote.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
@@ -168,20 +168,29 @@ async function onMintEdition(): Promise<void> {
   }
 }
 
+/** The note to carry when I sell/transfer an edition I hold: my own published note wins, else the note
+ *  that came with this copy (sticky default → hands-off propagation). */
+async function noteToPropagate(t: StoredToken): Promise<string | undefined> {
+  try { const p = await resolveSellerNote(provider, pubKeyHex, t.collectionId); if (p?.text) return p.text } catch { /* best-effort */ }
+  return t.sellerNote
+}
+
 async function onReplicate(t: StoredToken): Promise<void> {
   if (!t.lockHex) { setStatus('Missing edition script; cannot replicate.', 'error'); return }
   setStatus('Replicating edition (permissionless mint)…')
   try {
+    const note = await noteToPropagate(t)
     const r = await replicateEdition(provider, key, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex, terms: termsFromToken(t),
+      noteText: note,
     })
     // The original UTXO is now spent; it was re-created at out[0] (token back to the holder = us, verbatim).
     store.markSent(t.txId, t.outputIndex)
     storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex },
-      t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
-    // The buyer's new replica (out[1]) is also ours in a self-test.
+      t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t), t.sellerNote)
+    // The buyer's new replica (out[1]) is also ours in a self-test — it carries the propagated note.
     storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex },
-      t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
+      t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t), note)
     renderTokens()
     setStatus(`✅ Replicated. Tx ${short(r.txId)} — token returned to holder, replica minted, fees paid.`, 'ok')
   } catch (e) {
@@ -197,9 +206,10 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
   if (!t.lockHex) { setStatus('Missing edition script; cannot transfer.', 'error'); return }
   setStatus('Transferring edition (owner-signed, re-creating covenant)…')
   try {
+    const note = await noteToPropagate(t)
     const r = await transferEdition(provider, key, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex,
-      newOwnerPubKey: Utils.toArray(recipient, 'hex'),
+      newOwnerPubKey: Utils.toArray(recipient, 'hex'), noteText: note,
     })
     store.markSent(t.txId, t.outputIndex)
     renderTokens()
@@ -335,6 +345,7 @@ async function onCheckIncoming(): Promise<void> {
         txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: name,
         kind: 'edition', lockHex: e.lockHex, creatorPubKeyHashHex: Utils.toHex(e.terms.creatorPubKeyHash),
         creatorFeeSats: e.terms.creatorFeeSats, holderFeeSats: e.terms.holderFeeSats,
+        ...(e.sellerNote ? { sellerNote: e.sellerNote } : {}),
       })) edAdded++
       else store.setCollectionName(e.txId, e.outputIndex, name) // backfill the real title on older "Edition" entries
     }
@@ -695,7 +706,15 @@ async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): P
     const note = await resolveSellerNote(provider, sellerPub, info.tx1Ref)
     if (note && note.text) current = note.text
   } catch { /* best-effort — a missing note is normal */ }
-  // Carry-forward: on my own page, if I haven't published a note, offer the one I received when I bought.
+  // Hands-off propagation: if the seller hasn't published their own, use the note that rode in on their
+  // edition (the on-chain echo from when they acquired it).
+  if (current == null && info.covenantHex) {
+    try {
+      const tip = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex })
+      if (tip) current = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref)
+    } catch { /* best-effort */ }
+  }
+  // Carry-forward: on my own page, if nothing resolved, offer the one I captured when I bought.
   if (current == null && isMine) {
     const held = store.active().find(t => t.collectionId === info.tx1Ref && t.sellerNote)
     if (held?.sellerNote) {
@@ -767,12 +786,19 @@ async function onGetCopy(): Promise<void> {
     if (have < needed) { showFundPrompt(needed, have); return }
     hideFundPrompt()
 
+    // The note to carry to my copy: the seller's resolved note, or (fallback) whatever rode in on their edition.
+    let echoNote = cvSellerNote
+    if (!echoNote) {
+      try { echoNote = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref) } catch { /* best-effort */ }
+    }
+
     setCvStatus('Buying your copy — replicating the edition…')
     let bought: Awaited<ReturnType<typeof replicateEdition>> | null = null
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         bought = await replicateEdition(provider, key, {
           editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms,
+          noteText: echoNote ?? undefined,
         })
         break
       } catch (e) {
@@ -785,14 +811,14 @@ async function onGetCopy(): Promise<void> {
       }
     }
     if (!bought) return
-    // The buyer's replica (out[1]) is now ours — track it (with the seller's note, captured at purchase).
+    // The buyer's replica (out[1]) is now ours — track it with the note that rode in on the purchase.
     storeEdition({ txId: bought.replicaOutpoint.txId, outputIndex: bought.replicaOutpoint.outputIndex, lockHex: bought.lockHex },
-      info.tx1Ref, info.name, tip.terms, cvSellerNote ?? undefined)
+      info.tx1Ref, info.name, tip.terms, echoNote ?? undefined)
     renderTokens()
     showViewButton(info, true) // you're a holder now — keep a persistent View button on the page
     setCvStatus(
       `✅ You own a copy of “${info.name}”! Tx ${short(bought.txId)} — it’s now in your wallet.` +
-      (cvSellerNote ? `\n📝 Seller’s note: ${cvSellerNote}` : ''),
+      (echoNote ? `\n📝 Seller’s note: ${echoNote}` : ''),
     )
     // Reveal the content (decrypts automatically — you're a holder now).
     if (info.hasContentFile) void onView(info.tx1Ref, info.name)
