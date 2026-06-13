@@ -162,6 +162,34 @@ test('v2 builder: replicate pays ⌊P·c%⌋ to creator + remainder to reseller,
   assert.equal(spendOk(rep.tx, lock, 1), true)
 })
 
+test('v2 builder: replicate WITH a seller-note echoes a NOTE output to the buyer + bonus, covenant still valid', async () => {
+  const { lock, utxo } = v2Edition()
+  const tx1RefHex = Buffer.from(Array.from({ length: 32 }, (_, i) => (i * 5 + 1) & 0xff)).toString('hex')
+  const buyer = PrivateKey.fromRandom()
+  const rep = await buildReplicateV2Tx({
+    edition: utxo, buyerKey: buyer, funding: [faucet(buyer, 200000)],
+    note: { text: 'v2 bonus 🎁', bonusKind: 'code', bonusValue: 'PHARLAP2026' },
+  })
+  // 4 enforced outputs (token, replica, creator cut, reseller cut) + note + change = 6; covenant input still validates.
+  assert.equal(rep.tx.outputs.length, 6)
+  assert.equal(spendOk(rep.tx, lock, 1), true)
+  // The note + bonus rode in, readable, tied to the collection, locked to the BUYER.
+  const read = readNoteFromTx(rep.tx, tx1RefHex)
+  assert.equal(read?.text, 'v2 bonus 🎁')
+  assert.equal(read?.bonusKind, 'code')
+  assert.equal(read?.bonusValue, 'PHARLAP2026')
+  const noteOut = rep.tx.outputs.find(o => parseNoteScript(o.lockingScript))!
+  assert.equal(parseNoteScript(noteOut.lockingScript)!.authorPubKeyHex, buyer.toPublicKey().toString())
+})
+
+test('v2 builder: replicate WITHOUT a note keeps the 5-output shape (no echo)', async () => {
+  const { utxo } = v2Edition()
+  const buyer = PrivateKey.fromRandom()
+  const rep = await buildReplicateV2Tx({ edition: utxo, buyerKey: buyer, funding: [faucet(buyer, 200000)] })
+  assert.equal(rep.tx.outputs.length, 5)
+  assert.equal(readNoteFromTx(rep.tx, 'ab'.repeat(32)), null)
+})
+
 test('v2 lifecycle: genesis mints a v2 edition → replicate from it enforces the split', async () => {
   const creatorHash = Hash.hash160(pub(PrivateKey.fromRandom()))
   const minter = PrivateKey.fromRandom()
