@@ -19928,7 +19928,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       if (s2) storefront = s2.fields;
       if (parseFileScript(o.lockingScript)) hasContentFile = true;
     }
-    if (!template) throw new Error("not a PHAR LAP collection (no template output in TX1)");
+    if (!template) throw new Error("not a SMART NFTs collection (no template output in TX1)");
     const rules = decodeTokenRules(template.tokenRules);
     let fees = null;
     let isV2 = false, pBps = 0, v2PriceSats = 0;

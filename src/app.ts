@@ -683,7 +683,7 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
     if (s) storefront = s.fields
     if (parseFileScript(o.lockingScript)) hasContentFile = true
   }
-  if (!template) throw new Error('not a PHAR LAP collection (no template output in TX1)')
+  if (!template) throw new Error('not a SMART NFTs collection (no template output in TX1)')
   const rules = decodeTokenRules(template.tokenRules)
   let fees: { publisher: number; holder: number } | null = null
   let isV2 = false, pBps = 0, v2PriceSats = 0
