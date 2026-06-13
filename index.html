@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PHAR LAP — wallet</title>
+  <title>SMART NFTs — wallet</title>
   <style>
     :root { --bg:#0e1116; --card:#171c24; --line:#2a3340; --fg:#e6edf3; --muted:#8b98a8; --accent:#3fb950; --accent2:#388bfd; --err:#f85149; }
     * { box-sizing: border-box; }
@@ -41,6 +41,14 @@
     .tabpanel.is-active { display:block; animation:tabFade .22s ease both; }
     @keyframes tabFade { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
     @media (prefers-reduced-motion:reduce) { .tabpanel.is-active { animation:none; } }
+    /* Help panel */
+    .help h3 { font-size:15px; margin:18px 0 6px; color:var(--fg); text-transform:none; letter-spacing:0; }
+    .help h3:first-child { margin-top:0; }
+    .help p { margin:0 0 10px; line-height:1.55; }
+    .help ol, .help ul { margin:0 0 12px; padding-left:20px; line-height:1.55; }
+    .help li { margin:5px 0; }
+    .help .kv { margin:10px 0; }
+    .help .kv b { color:var(--fg); font-size:13px; margin-bottom:2px; }
     .token { border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:8px; background:#0d1117; }
     .token-name { font-weight:600; margin-bottom:4px; }
     .token .state { color:var(--accent); font-size:12px; margin-top:4px; }
@@ -127,7 +135,7 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>PHAR LAP <small>Peer-to-peer · Hashing · Algorithm · Replication · Ledger · Authentication · Protocol</small></h1>
+    <h1>SMART NFTs <small>powered by <span title="Peer-to-peer · Hashing · Algorithm · Replication · Ledger · Authentication · Protocol">PHAR LAP</span></small></h1>
 
     <div id="status" class="status">Loading…</div>
 
@@ -139,6 +147,7 @@
       <button class="tab" data-tab="editions" role="tab">Publish</button>
       <button class="tab" data-tab="tokens" role="tab">My tokens</button>
       <button class="tab" data-tab="messages" role="tab">Messages</button>
+      <button class="tab" data-tab="help" role="tab">Help</button>
     </nav>
 
     <section class="tabpanel is-active" id="tab-wallet" role="tabpanel">
@@ -250,11 +259,56 @@
     </div>
     </section>
 
+    <section class="tabpanel" id="tab-help" role="tabpanel">
+    <div class="card help">
+      <h3>What is SMART NFTs?</h3>
+      <p>A self-custodial wallet for <b>publishing content as collectible editions on Bitcoin SV</b>. You publish
+      something once; anyone with your link can buy their own copy in a single click. The rules — your publisher
+      fee and the resale split — are enforced by the network itself. There's no account and no server: your
+      wallet lives in this browser, everything else lives on-chain.</p>
+
+      <h3>Quick start</h3>
+      <ol>
+        <li><b>Back up your wallet.</b> In <b>Wallet</b>, copy your <b>WIF</b> (private key) somewhere safe — it restores everything on any device.</li>
+        <li><b>Add a little BSV.</b> Send a small amount to your address (shown in <b>Wallet</b>) — you need it to publish and to buy.</li>
+        <li><b>Publish an edition.</b> In <b>Publish</b>, set a name, cover, description, an optional file, and a price model, then mint.</li>
+        <li><b>Share it.</b> Your edition appears in <b>My tokens</b> — click <b>Sales page</b> to open its public link, then <b>Share</b> it anywhere.</li>
+        <li><b>Get paid.</b> Anyone who opens the link presses <b>Get a copy</b> and owns one instantly; you (the publisher) and the current holder are paid automatically, on-chain.</li>
+      </ol>
+
+      <h3>What each tab does</h3>
+      <ul>
+        <li><b>Wallet</b> — your address, balance, and WIF backup. Restore a wallet (and recover its purchases from chain) on any browser or device.</li>
+        <li><b>Publish</b> — create an edition collection: cover image, description, an optional file (which can be <b>encrypted</b> so only holders can open it), and a pricing model.</li>
+        <li><b>My tokens</b> — everything you hold. Each edition offers <b>Replicate</b> (mint yourself another copy), <b>Transfer</b> (send it to someone), <b>View</b> (open the content), <b>Sales page</b> (your shareable buy link), and <b>Verify</b> (prove it's a genuine edition).</li>
+        <li><b>Messages</b> — send on-chain notes or files to another public key, encrypted by default.</li>
+      </ul>
+
+      <h3>How selling works</h3>
+      <p>Editions are <b>"unlimited mints"</b>: a buyer doesn't take your copy — they mint their <i>own</i> copy from
+      yours, permissionlessly, while you keep yours. Each copy can then be a source for the next buyer. Two price models:</p>
+      <ul>
+        <li><b>Fixed fees</b> — a flat publisher fee + holder fee (in satoshis), paid on every copy.</li>
+        <li><b>Percentage</b> — the publisher takes a fixed % of the sale price; the reseller keeps the rest. The split is computed and enforced by the covenant on every sale.</li>
+      </ul>
+
+      <h3>Backups &amp; recovery</h3>
+      <p>Your only secret is your <b>WIF</b>. If you lose this browser's data, paste the WIF into <b>Wallet → Restore from WIF</b>
+      on any device to rebuild your holdings and purchases straight from the blockchain. <b>If you lose the WIF with no backup, the wallet can't be recovered</b> — so back it up.</p>
+
+      <h3>FAQ</h3>
+      <div class="kv"><b>Do buyers need an account?</b>No — anyone with a funded wallet buys from a link in one click. No sign-up, no server.</div>
+      <div class="kv"><b>What does a copy cost?</b>The price the publisher set, plus a tiny network (miner) fee. The Sales page shows the exact split before you confirm.</div>
+      <div class="kv"><b>Is my file private?</b>Tick <b>Encrypt</b> when publishing and only holders can open it. It's an inconvenience to non-holders, not hard DRM.</div>
+      <div class="kv"><b>Why does it say experimental?</b>The covenant tech is new and runs on real mainnet BSV — use small amounts while it's being proven.</div>
+    </div>
+    </section>
+
     <footer class="foot">
       <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
         <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
       </a>
-      <div style="margin-top:8px">PHAR LAP is experimental — use small amounts.</div>
+      <div style="margin-top:8px">SMART NFTs is experimental — use small amounts. · powered by PHAR LAP</div>
     </footer>
   </div>
 
@@ -262,7 +316,7 @@
     <div class="cv-ambient" aria-hidden="true"></div>
     <div class="cview-box">
       <header class="cv-top">
-        <div class="cv-brand"><span class="cv-brand-mark">⚡</span> PHAR LAP</div>
+        <div class="cv-brand"><span class="cv-brand-mark">⚡</span> SMART NFTs</div>
         <button id="cvWallet" class="cv-ghost">Open wallet</button>
       </header>
 
@@ -324,7 +378,7 @@
         <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
           <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
         </a>
-        <div style="margin-top:8px">PHAR LAP is experimental — use small amounts.</div>
+        <div style="margin-top:8px">SMART NFTs is experimental — use small amounts. · powered by PHAR LAP</div>
       </footer>
     </div>
   </div>
