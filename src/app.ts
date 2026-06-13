@@ -188,7 +188,7 @@ async function onMintEdition(): Promise<void> {
       const cBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
       const price = Math.max(1, parseInt(val('edPrice') || '5000', 10))
       const creatorPubKeyHash = Hash.hash160(key.toPublicKey().encode(true) as number[])
-      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (creator ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat)…`)
+      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (publisher ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat)…`)
       const minted = await createEditionV2(provider, key, { tokenName: name, terms: { creatorPubKeyHash, cBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover })
       for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0 })
       renderTokens()
@@ -211,7 +211,7 @@ async function onMintEdition(): Promise<void> {
 async function onV2SelfTest(): Promise<void> {
   const cBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
   const price = Math.max(1, parseInt(val('edPrice') || '50000', 10))
-  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are creator = holder = buyer). Proceed?`)) return
+  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return
   setStatus('v2 self-test: minting (TX1 template + TX2 v2 genesis)…')
   try {
     const creatorPubKeyHash = key.toPublicKey().toHash() as number[]
@@ -225,7 +225,7 @@ async function onV2SelfTest(): Promise<void> {
     })
     setStatus(
       `✅ v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} · TX2 ${short(minted.tx2Id)} · replicate ${short(r.txId)} ` +
-      `— creator ${r.creatorCut} + reseller ${r.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
+      `— publisher ${r.creatorCut} + reseller ${r.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
       'ok',
     )
     console.log('v2 self-test txids:', { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r.txId, creatorCut: r.creatorCut, resellerCut: r.resellerCut })
@@ -253,7 +253,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
       storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
       storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
       renderTokens()
-      setStatus(`✅ v2 replicated. Tx ${short(r.txId)} — creator ${r.creatorCut} + reseller ${r.resellerCut} sat.`, 'ok')
+      setStatus(`✅ v2 replicated. Tx ${short(r.txId)} — publisher ${r.creatorCut} + reseller ${r.resellerCut} sat.`, 'ok')
       return
     }
     const note = await noteToPropagate(t)
@@ -448,7 +448,7 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
     const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript)
     if (ed) {
       const econ = ed.isV2
-        ? `creator ${(ed.terms.cBps / 100).toFixed(2)}% · price ${ed.priceSats} sat`
+        ? `publisher ${(ed.terms.cBps / 100).toFixed(2)}% · price ${ed.priceSats} sat`
         : `fees ${ed.terms.creatorFeeSats}/${ed.terms.holderFeeSats} sat`
       setStatus(`✅ Valid ${ed.isV2 ? 'v2 ' : ''}edition covenant — collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, 'ok')
       return
@@ -725,9 +725,9 @@ function renderCollectionView(info: CollectionInfo): void {
   $('cvDesc').textContent = info.description || '(no description provided)'
   if (info.isV2) {
     $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sat</b> <span class="muted">` +
-      `(reseller's price; creator takes ${(info.cBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.cBps / 10000)} sat, plus a small network fee)</span>`
+      `(reseller's price; publisher takes ${(info.cBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.cBps / 10000)} sat, plus a small network fee)</span>`
   } else if (info.fees) {
-    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(creator ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`
+    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(publisher ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`
   } else {
     $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
   }
@@ -921,8 +921,8 @@ async function onGetCopy(): Promise<void> {
     const ok = confirm(
       `Buy a copy of “${info.name}” for ${price} sat?\n\n` +
       (tip.isV2
-        ? `creator ${(info.cBps / 100).toFixed(2)}% = ${creatorCut} + reseller ${resellerCut} sat, plus a small network fee.\n`
-        : `creator ${creatorCut} + holder ${resellerCut} sat, plus a small network fee.\n`) +
+        ? `publisher ${(info.cBps / 100).toFixed(2)}% = ${creatorCut} + reseller ${resellerCut} sat, plus a small network fee.\n`
+        : `publisher ${creatorCut} + holder ${resellerCut} sat, plus a small network fee.\n`) +
       `This is an instant, on-chain purchase.`,
     )
     if (!ok) { setCvStatus('Purchase cancelled.'); return }
