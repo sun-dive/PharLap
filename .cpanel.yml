@@ -1,0 +1,19 @@
+---
+# cPanel Git™ Version Control deployment for PHAR LAP.
+#
+# In cPanel → Git Version Control, clone this repo (branch: main) and click "Deploy HEAD Commit".
+# cPanel runs the tasks below to copy the built site into your web root.
+#
+# EDIT DEPLOYPATH below to your account's web root for the chosen domain:
+#   • primary domain  → /home/<cpanel-user>/public_html/
+#   • addon domain    → /home/<cpanel-user>/public_html/<yourdomain.com>/   (or its document root)
+# PHAR LAP runs at the domain ROOT, and all asset paths are relative, so the root works as-is.
+#
+# Note: bundle.js is committed on this (main) branch specifically for this copy step — it is the
+# esbuild output of src/, refreshed on every publish.
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home/CPANEL_USER/public_html/
+    - /bin/cp index.html "$DEPLOYPATH"
+    - /bin/cp bundle.js "$DEPLOYPATH"
+    - /bin/cp -R brand "$DEPLOYPATH"

@@ -12,8 +12,8 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, type EditionTerms } from './editionBuilder.ts'
-import { parseEditionScript } from './covenant.ts'
+import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, createEditionV2, replicateEditionV2, type EditionTerms } from './editionBuilder.ts'
+import { parseEditionAny, parseEditionScriptV2 } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, type SellerNote } from './sellerNote.ts'
@@ -165,17 +165,37 @@ async function onV2Probe(): Promise<void> {
   }
 }
 
+/** Toggle the mint form between fixed-fee (v1) and percentage (v2) inputs based on the pricing-mode select. */
+function syncMintMode(): void {
+  const pct = ($('edMode') as HTMLSelectElement).value === 'percentage'
+  const show = (id: string, on: boolean) => { ($(id) as HTMLElement).style.display = on ? '' : 'none' }
+  show('edFixedFees', !pct); show('edFixedHelp', !pct)
+  show('edPctFees', pct); show('edPctHelp', pct); show('btnV2SelfTest', pct)
+}
+
 async function onMintEdition(): Promise<void> {
   const name = val('edName')
   if (!name) { setStatus('Enter an edition collection name.', 'error'); return }
+  const mode = ($('edMode') as HTMLSelectElement).value
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
-  const terms = ownTerms()
   const description = val('edDescription')
   try {
     const file = await readFile($('edFile') as HTMLInputElement)
     const cover = await readFile($('edCover') as HTMLInputElement)
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
+    if (mode === 'percentage') {
+      const cBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
+      const price = Math.max(1, parseInt(val('edPrice') || '5000', 10))
+      const creatorPubKeyHash = Hash.hash160(key.toPublicKey().encode(true) as number[])
+      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (creator ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat)…`)
+      const minted = await createEditionV2(provider, key, { tokenName: name, terms: { creatorPubKeyHash, cBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover })
+      for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0 })
+      renderTokens()
+      setStatus(`Minted ${minted.editions.length} edition(s). Collection ${short(minted.collectionId)} (TX2 ${short(minted.tx2Id)}). Open a Sales page to share a buy link.`, 'ok')
+      return
+    }
+    const terms = ownTerms()
     setStatus(`Minting ${encrypt ? 'encrypted ' : ''}edition collection (TX1 template + TX2 covenant editions)…`)
     const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt, description, cover })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
@@ -183,6 +203,34 @@ async function onMintEdition(): Promise<void> {
     setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
   } catch (e) {
     setStatus(`Edition mint failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Covenant v2 mainnet self-test: mint a percentage-pricing edition, then permissionlessly replicate it.
+ *  A dev-only tool surfaced when the mint form is in percentage mode; reads the same bps/price inputs. */
+async function onV2SelfTest(): Promise<void> {
+  const cBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
+  const price = Math.max(1, parseInt(val('edPrice') || '50000', 10))
+  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are creator = holder = buyer). Proceed?`)) return
+  setStatus('v2 self-test: minting (TX1 template + TX2 v2 genesis)…')
+  try {
+    const creatorPubKeyHash = key.toPublicKey().toHash() as number[]
+    const minted = await createEditionV2(provider, key, {
+      tokenName: 'v2 mainnet test', terms: { creatorPubKeyHash, cBps }, initialPriceSats: price,
+    })
+    const ed = minted.editions[0]
+    setStatus(`Minted v2 collection ${short(minted.tx1Id)} · edition ${short(ed.txId)}:${ed.outputIndex}. Replicating (computed split)…`)
+    const r = await replicateEditionV2(provider, key, {
+      editionTxId: ed.txId, editionOutputIndex: ed.outputIndex, editionLockHex: ed.lockHex, editionSourceTx: minted.tx2,
+    })
+    setStatus(
+      `✅ v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} · TX2 ${short(minted.tx2Id)} · replicate ${short(r.txId)} ` +
+      `— creator ${r.creatorCut} + reseller ${r.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
+      'ok',
+    )
+    console.log('v2 self-test txids:', { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r.txId, creatorCut: r.creatorCut, resellerCut: r.resellerCut })
+  } catch (e) {
+    setStatus(`v2 self-test failed: ${(e as Error).message}`, 'error')
   }
 }
 
@@ -198,6 +246,16 @@ async function onReplicate(t: StoredToken): Promise<void> {
   if (!t.lockHex) { setStatus('Missing edition script; cannot replicate.', 'error'); return }
   setStatus('Replicating edition (permissionless mint)…')
   try {
+    // v2 (percentage pricing) editions go through the computed-split replicate.
+    if (parseEditionScriptV2(LockingScript.fromHex(t.lockHex)) != null) {
+      const r = await replicateEditionV2(provider, key, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex })
+      store.markSent(t.txId, t.outputIndex) // original spent; token returned to holder at out[0] (new outpoint)
+      storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
+      storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
+      renderTokens()
+      setStatus(`✅ v2 replicated. Tx ${short(r.txId)} — creator ${r.creatorCut} + reseller ${r.resellerCut} sat.`, 'ok')
+      return
+    }
     const note = await noteToPropagate(t)
     const r = await replicateEdition(provider, key, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex, terms: termsFromToken(t),
@@ -387,9 +445,12 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
   try {
     const tx = await provider.getSourceTransaction(txId)
     // Edition covenant outputs are a custom script — verify them structurally (lineage walk is future work).
-    const ed = parseEditionScript(tx.outputs[outputIndex]?.lockingScript)
+    const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript)
     if (ed) {
-      setStatus(`✅ Valid edition covenant — collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, fees ${ed.terms.creatorFeeSats}/${ed.terms.holderFeeSats} sat (structure verified).`, 'ok')
+      const econ = ed.isV2
+        ? `creator ${(ed.terms.cBps / 100).toFixed(2)}% · price ${ed.priceSats} sat`
+        : `fees ${ed.terms.creatorFeeSats}/${ed.terms.holderFeeSats} sat`
+      setStatus(`✅ Valid ${ed.isV2 ? 'v2 ' : ''}edition covenant — collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, 'ok')
       return
     }
     const deps = { getRawTransaction: (id: string) => provider.getSourceTransaction(id) }
@@ -578,6 +639,11 @@ interface CollectionInfo {
   hasContentFile: boolean
   creatorPubKeyHex: string | null
   fees: { creator: number; holder: number } | null
+  /** v2 (percentage pricing): creator basis points + the genesis/reference price (the seller's live price is
+   *  resolved at buy time). */
+  isV2: boolean
+  cBps: number
+  v2PriceSats: number
   /** The collection's covenant template bytes (hex) — lets the buy flow reconstruct a holder's edition. */
   covenantHex: string
 }
@@ -620,11 +686,13 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
   if (!template) throw new Error('not a PHAR LAP collection (no template output in TX1)')
   const rules = decodeTokenRules(template.tokenRules)
   let fees: { creator: number; holder: number } | null = null
+  let isV2 = false, cBps = 0, v2PriceSats = 0
   if (template.covenantScript) {
     try {
-      const ed = parseEditionScript(LockingScript.fromHex(template.covenantScript))
-      if (ed) fees = { creator: ed.terms.creatorFeeSats, holder: ed.terms.holderFeeSats }
-    } catch { /* leave fees null — non-replicable or unparseable covenant */ }
+      const ed = parseEditionAny(LockingScript.fromHex(template.covenantScript))
+      if (ed?.isV2) { isV2 = true; cBps = ed.terms.cBps; v2PriceSats = ed.priceSats }
+      else if (ed) fees = { creator: ed.terms.creatorFeeSats, holder: ed.terms.holderFeeSats }
+    } catch { /* leave null — non-replicable or unparseable covenant */ }
   }
   const cover = storefront?.coverBytes
     ? { mimeType: storefront.coverMimeType ?? 'application/octet-stream', bytes: storefront.coverBytes }
@@ -632,7 +700,7 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
     cover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
-    creatorPubKeyHex, fees, covenantHex: template.covenantScript,
+    creatorPubKeyHex, fees, isV2, cBps, v2PriceSats, covenantHex: template.covenantScript,
   }
 }
 
@@ -655,10 +723,15 @@ function renderCollectionView(info: CollectionInfo): void {
   $('cvBadges').innerHTML = badges.join('')
   $('cvCreator').textContent = info.creatorPubKeyHex ? `by ${short(info.creatorPubKeyHex)}` : ''
   $('cvDesc').textContent = info.description || '(no description provided)'
-  $('cvPrice').innerHTML = info.fees
-    ? `Get your own copy — <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(creator ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`
-    : '<span class="muted">This collection is not a replicable edition.</span>'
-  ;($('cvGet') as HTMLButtonElement).disabled = info.fees == null
+  if (info.isV2) {
+    $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sat</b> <span class="muted">` +
+      `(reseller's price; creator takes ${(info.cBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.cBps / 10000)} sat, plus a small network fee)</span>`
+  } else if (info.fees) {
+    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(creator ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`
+  } else {
+    $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
+  }
+  ;($('cvGet') as HTMLButtonElement).disabled = info.fees == null && !info.isV2
   // Show a "View content" button if this wallet already holds an edition of this collection.
   const holdsIt = store.active().some(t => t.collectionId === info.tx1Ref)
   showViewButton(info, holdsIt)
@@ -830,18 +903,9 @@ let buying = false
 async function onGetCopy(): Promise<void> {
   if (buying || !currentCollection) return
   const { info, holderPubKey } = currentCollection
-  if (!info.fees || !info.covenantHex) { setCvStatus('This collection is not a buyable edition.', 'error'); return }
+  if ((!info.fees && !info.isV2) || !info.covenantHex) { setCvStatus('This collection is not a buyable edition.', 'error'); return }
   const sellerPub = holderPubKey ?? info.creatorPubKeyHex
   if (!sellerPub) { setCvStatus('No seller could be determined for this link.', 'error'); return }
-
-  // Confirm the purchase before spending — show the item and the price (the fixed fees).
-  const price = info.fees.creator + info.fees.holder
-  const ok = confirm(
-    `Buy a copy of “${info.name}” for ${price} sat?\n\n` +
-    `creator ${info.fees.creator} + holder ${info.fees.holder} sat, plus a small network fee.\n` +
-    `This is an instant, on-chain purchase.`,
-  )
-  if (!ok) { setCvStatus('Purchase cancelled.'); return }
 
   buying = true
   ;($('cvGet') as HTMLButtonElement).disabled = true
@@ -850,27 +914,38 @@ async function onGetCopy(): Promise<void> {
     let tip = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex })
     if (!tip) { setCvStatus('This seller has no edition available right now — try another link or ask them to mint one.', 'error'); return }
 
-    // Fund check: token + replica + both fees + a little for the miner fee/margin.
-    const needed = tip.terms.creatorFeeSats + tip.terms.holderFeeSats + 2 * tip.tokenSats + 1200
+    // Price = the seller's actual price (v2: their set price split by %; v1: fixed fees).
+    const creatorCut = tip.isV2 ? Math.floor((tip.priceSats * info.cBps) / 10000) : tip.terms.creatorFeeSats
+    const resellerCut = tip.isV2 ? tip.priceSats - creatorCut : tip.terms.holderFeeSats
+    const price = creatorCut + resellerCut
+    const ok = confirm(
+      `Buy a copy of “${info.name}” for ${price} sat?\n\n` +
+      (tip.isV2
+        ? `creator ${(info.cBps / 100).toFixed(2)}% = ${creatorCut} + reseller ${resellerCut} sat, plus a small network fee.\n`
+        : `creator ${creatorCut} + holder ${resellerCut} sat, plus a small network fee.\n`) +
+      `This is an instant, on-chain purchase.`,
+    )
+    if (!ok) { setCvStatus('Purchase cancelled.'); return }
+
+    // Fund check: price + token + replica sats + a little for the miner fee/margin.
+    const needed = price + 2 * tip.tokenSats + 1200
     const have = (await getSafeUtxos(provider)).reduce((s, u) => s + u.satoshis, 0)
     if (have < needed) { showFundPrompt(needed, have); return }
     hideFundPrompt()
 
-    // The note (promo + bonus) to carry to my copy: the seller's resolved note, or (fallback) whatever rode
-    // in on their edition.
+    // The note (promo + bonus) to carry to my copy: the seller's resolved note, or (fallback) whatever rode in.
     let echoNote: SellerNote | null = cvNote
     if (!echoNote) {
       try { echoNote = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref) } catch { /* best-effort */ }
     }
 
     setCvStatus('Buying your copy — replicating the edition…')
-    let bought: Awaited<ReturnType<typeof replicateEdition>> | null = null
+    let bought: { txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string } | null = null
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
-        bought = await replicateEdition(provider, key, {
-          editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms,
-          note: echoNote ?? undefined,
-        })
+        bought = tip.isV2
+          ? await replicateEditionV2(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex })
+          : await replicateEdition(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? undefined })
         break
       } catch (e) {
         if (attempt === 2) throw e
@@ -912,6 +987,9 @@ function init(): void {
   $('btnMint').onclick = () => void onMint()
   $('btnV2Probe').onclick = () => void onV2Probe()
   $('btnMintEdition').onclick = () => void onMintEdition()
+  $('btnV2SelfTest').onclick = () => void onV2SelfTest()
+  ;($('edMode') as HTMLSelectElement).onchange = syncMintMode
+  syncMintMode()
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()
