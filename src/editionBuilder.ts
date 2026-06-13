@@ -587,7 +587,8 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
 
 // ─── Covenant v2 network wrappers (Addendum G) ──────────────────────
 
-/** Mint a v2 (percentage-pricing) edition collection on-chain: TX1 template + TX2 v2 genesis. */
+/** Mint a v2 (percentage-pricing) edition collection on-chain: TX1 template + TX2 v2 genesis.
+ *  Same feature set as createEdition (file / encryption / storefront cover+description). */
 export async function createEditionV2(provider: WalletProvider, key: PrivateKey, params: {
   tokenName: string
   terms: EditionV2Terms
@@ -595,6 +596,10 @@ export async function createEditionV2(provider: WalletProvider, key: PrivateKey,
   mintCount?: number
   ownerPubKey?: number[]
   stateData?: number[]
+  file?: { mimeType: string; fileName: string; bytes: number[] }
+  encrypt?: boolean
+  description?: string
+  cover?: { mimeType: string; fileName: string; bytes: number[] }
   feePerKb?: number
 }): Promise<CreateEditionResult & { tx2: Transaction }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
@@ -609,19 +614,42 @@ export async function createEditionV2(provider: WalletProvider, key: PrivateKey,
     tx1Ref: new Array(32).fill(0), ownerPubKey: new Array(33).fill(0), price, stateData,
     creatorPubKeyHash: params.terms.creatorPubKeyHash, cBps: params.terms.cBps, tokenSats,
   })
+
+  // Tier-1 encrypt the file: store ciphertext, carry the wrapped content key + keySalt in the template.
+  const encrypt = params.encrypt === true && params.file != null
+  let storedBytes = params.file?.bytes
+  let wrappedKey: number[] | undefined
+  let keySalt: number[] | undefined
+  if (encrypt && params.file != null) {
+    const K = newContentKey()
+    keySalt = newKeySalt()
+    storedBytes = encryptContent(params.file.bytes, K)
+    wrappedKey = wrapContentKey(K, keySalt)
+  }
   const template = {
     tokenName: params.tokenName,
-    tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE, 1),
+    tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0), 1),
     covenantScript: Utils.toHex(templateLock.toBinary()),
+    fileHash: storedBytes != null ? sha256Hex(storedBytes) : undefined,
+    wrappedKey,
+    keySalt,
   }
-  const tx1Bytes = 500 + templateLock.toBinary().length
+  const file = params.file != null
+    ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes! }
+    : undefined
+  const hasStorefront = (params.description != null && params.description.length > 0) || params.cover != null
+  const storefront = hasStorefront
+    ? { description: params.description ?? '', coverMimeType: params.cover?.mimeType, coverFileName: params.cover?.fileName, coverBytes: params.cover?.bytes }
+    : undefined
+
+  const tx1Bytes = 500 + templateLock.toBinary().length + (file ? file.fileBytes.length : 0) + (params.cover ? params.cover.bytes.length : 0)
   const tx2Bytes = 300 + mintCount * 900
   const estFee = Math.ceil(((tx1Bytes + tx2Bytes) * feePerKb) / 1000)
   const target = (1 + mintCount) * tokenSats + estFee + Math.max(1000, Math.ceil(estFee * 0.2))
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding = await toFundingInputs(provider, selected)
 
-  const t1 = await buildTemplateTx({ key, funding, template, outputSats: tokenSats, feePerKb })
+  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, outputSats: tokenSats, feePerKb })
   if (t1.changeVout == null) throw new Error('Insufficient funding: template tx left no change to fund the v2 mint.')
   const t2Funding: FundingInput[] = [{
     utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' }, sourceTx: t1.tx,

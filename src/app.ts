@@ -165,17 +165,37 @@ async function onV2Probe(): Promise<void> {
   }
 }
 
+/** Toggle the mint form between fixed-fee (v1) and percentage (v2) inputs based on the pricing-mode select. */
+function syncMintMode(): void {
+  const pct = ($('edMode') as HTMLSelectElement).value === 'percentage'
+  const show = (id: string, on: boolean) => { ($(id) as HTMLElement).style.display = on ? '' : 'none' }
+  show('edFixedFees', !pct); show('edFixedHelp', !pct)
+  show('edPctFees', pct); show('edPctHelp', pct); show('btnV2SelfTest', pct)
+}
+
 async function onMintEdition(): Promise<void> {
   const name = val('edName')
   if (!name) { setStatus('Enter an edition collection name.', 'error'); return }
+  const mode = ($('edMode') as HTMLSelectElement).value
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
-  const terms = ownTerms()
   const description = val('edDescription')
   try {
     const file = await readFile($('edFile') as HTMLInputElement)
     const cover = await readFile($('edCover') as HTMLInputElement)
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
+    if (mode === 'percentage') {
+      const cBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
+      const price = Math.max(1, parseInt(val('edPrice') || '5000', 10))
+      const creatorPubKeyHash = Hash.hash160(key.toPublicKey().encode(true) as number[])
+      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (creator ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat)…`)
+      const minted = await createEditionV2(provider, key, { tokenName: name, terms: { creatorPubKeyHash, cBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover })
+      for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0 })
+      renderTokens()
+      setStatus(`Minted ${minted.editions.length} edition(s). Collection ${short(minted.collectionId)} (TX2 ${short(minted.tx2Id)}). Open a Sales page to share a buy link.`, 'ok')
+      return
+    }
+    const terms = ownTerms()
     setStatus(`Minting ${encrypt ? 'encrypted ' : ''}edition collection (TX1 template + TX2 covenant editions)…`)
     const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt, description, cover })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
@@ -186,37 +206,11 @@ async function onMintEdition(): Promise<void> {
   }
 }
 
-/** Read the v2 mint inputs (cBps clamped 0–10000, price ≥1, name). */
-function v2MintParams(): { cBps: number; price: number; name: string } {
-  return {
-    cBps: Math.max(0, Math.min(10000, parseInt(val('v2Bps') || '250', 10))),
-    price: Math.max(1, parseInt(val('v2Price') || '5000', 10)),
-    name: val('v2Name') || 'v2 collection',
-  }
-}
-
-/** Mint a v2 (percentage-pricing) edition collection and store the edition (open its Sales page to share). */
-async function onMintV2Collection(): Promise<void> {
-  const { cBps, price, name } = v2MintParams()
-  if (!confirm(`Mint v2 collection “${name}” on MAINNET (spends real BSV).\n\nCreator ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat. Proceed?`)) return
-  setStatus('Minting v2 collection (TX1 template + TX2 v2 genesis)…')
-  try {
-    const creatorPubKeyHash = key.toPublicKey().toHash() as number[]
-    const minted = await createEditionV2(provider, key, { tokenName: name, terms: { creatorPubKeyHash, cBps }, initialPriceSats: price })
-    for (const e of minted.editions) {
-      storeEdition(e, minted.collectionId, name, { creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0 })
-    }
-    renderTokens()
-    setStatus(`✅ Minted v2 collection ${short(minted.collectionId)} (TX2 ${short(minted.tx2Id)}). Open its Sales page to share a buy link.`, 'ok')
-  } catch (e) {
-    setStatus(`v2 mint failed: ${(e as Error).message}`, 'error')
-  }
-}
-
-/** Covenant v2 mainnet self-test: mint a percentage-pricing edition, then permissionlessly replicate it. */
+/** Covenant v2 mainnet self-test: mint a percentage-pricing edition, then permissionlessly replicate it.
+ *  A dev-only tool surfaced when the mint form is in percentage mode; reads the same bps/price inputs. */
 async function onV2SelfTest(): Promise<void> {
-  const cBps = Math.max(0, Math.min(10000, parseInt(val('v2Bps') || '250', 10)))
-  const price = Math.max(1, parseInt(val('v2Price') || '50000', 10))
+  const cBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
+  const price = Math.max(1, parseInt(val('edPrice') || '50000', 10))
   if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are creator = holder = buyer). Proceed?`)) return
   setStatus('v2 self-test: minting (TX1 template + TX2 v2 genesis)…')
   try {
@@ -993,8 +987,9 @@ function init(): void {
   $('btnMint').onclick = () => void onMint()
   $('btnV2Probe').onclick = () => void onV2Probe()
   $('btnMintEdition').onclick = () => void onMintEdition()
-  $('btnMintV2').onclick = () => void onMintV2Collection()
   $('btnV2SelfTest').onclick = () => void onV2SelfTest()
+  ;($('edMode') as HTMLSelectElement).onchange = syncMintMode
+  syncMintMode()
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()

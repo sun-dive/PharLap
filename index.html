@@ -125,35 +125,36 @@
       <textarea id="edDescription" placeholder="What is this? What do holders get? (a short blurb buyers see before purchase)"></textarea>
       <label>Cover image (optional — public storefront art, shown even if the content is encrypted)</label>
       <input id="edCover" type="file" accept="image/*" />
-      <div class="grid2" style="grid-template-columns:1fr 1fr">
+      <label>Pricing model</label>
+      <select id="edMode">
+        <option value="fixed">Fixed fees — creator + holder royalties (sat)</option>
+        <option value="percentage">Percentage — creator % of a reseller-set price (Covenant v2)</option>
+      </select>
+      <div id="edFixedFees" class="grid2" style="grid-template-columns:1fr 1fr">
         <div><label>Creator fee (sat)</label><input id="edCreatorFee" type="number" min="0" value="5000" /></div>
         <div><label>Holder fee (sat)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>
+      </div>
+      <div id="edPctFees" class="grid2" style="grid-template-columns:1fr 1fr;display:none">
+        <div><label>Creator fee (basis points — 250 = 2.5%)</label><input id="edBps" type="number" min="0" max="10000" value="250" /></div>
+        <div><label>Reseller price (sat)</label><input id="edPrice" type="number" min="1" value="5000" /></div>
       </div>
       <label>Editions to mint now</label>
       <input id="edCount" type="number" min="1" value="1" />
       <label>Embed a file (optional — viewable by holders)</label>
       <input id="edFile" type="file" />
       <label class="check"><input id="edEncrypt" type="checkbox" /> Encrypt the file (Tier 1 — holders decrypt; an inconvenience, not DRM)</label>
-      <div class="row" style="margin-top:10px"><button id="btnMintEdition">Mint edition collection</button></div>
-      <p class="muted" style="font-size:12px;margin:8px 0 0">
+      <div class="row" style="margin-top:10px">
+        <button id="btnMintEdition">Mint edition collection</button>
+        <button id="btnV2SelfTest" class="secondary" style="display:none">Self-test (mint + replicate)</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0" id="edFixedHelp">
         Any buyer can later <b>Replicate</b> an edition (returns the token to the holder, mints their own copy,
         pays both fees). <b>Transfer</b> moves it owner-signed, re-creating the covenant.
       </p>
-      <hr style="border:0;border-top:1px solid var(--line);margin:14px 0" />
-      <label>⚡ Covenant v2 — percentage pricing (mainnet)</label>
-      <input id="v2Name" placeholder="v2 collection name" />
-      <div class="grid2" style="grid-template-columns:1fr 1fr">
-        <div><label>Creator fee (basis points, 0–10000 = 0–100%)</label><input id="v2Bps" type="number" min="0" max="10000" value="250" /></div>
-        <div><label>Reseller price (sat)</label><input id="v2Price" type="number" min="1" value="5000" /></div>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <button id="btnMintV2">Mint v2 collection</button>
-        <button id="btnV2SelfTest" class="secondary">Self-test (mint + replicate)</button>
-      </div>
-      <p class="muted" style="font-size:12px;margin:8px 0 0">
-        <b>Mint v2 collection</b> mints an edition you hold — open its <b>Sales page</b> to share a buy link.
-        The covenant computes the split: creator gets ⌊price × bps/10000⌋, reseller the remainder.
-        <b>Self-test</b> mints + immediately replicates (you = creator/holder/buyer).
+      <p class="muted" style="font-size:12px;margin:8px 0 0;display:none" id="edPctHelp">
+        Percentage pricing (Covenant v2): the covenant computes the split on each replicate —
+        creator gets ⌊price × bps/10000⌋, the reseller keeps the remainder. Open an edition's
+        <b>Sales page</b> to share a buy link. <b>Self-test</b> mints + immediately replicates (you = creator/holder/buyer).
       </p>
     </div>
 
