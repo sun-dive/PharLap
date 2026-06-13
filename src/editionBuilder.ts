@@ -25,7 +25,7 @@ import type { PrivateKey } from '@bsv/sdk'
 import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
   editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE, parseEditionScript,
-  buildHolderEditionScript, parseEditionScriptV2, buildEditionLockV2, u64le,
+  buildHolderEditionScript, parseEditionScriptV2, parseEditionAny, buildEditionLockV2, u64le,
 } from './covenant.ts'
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
@@ -748,10 +748,14 @@ export function wocScriptHash(scriptBytes: number[]): string {
 export interface ResolvedEdition {
   txId: string
   outputIndex: number
-  /** The exact edition locking script (hex) — feeds straight into replicateEdition. */
+  /** The exact edition locking script (hex) — feeds straight into replicateEdition / replicateEditionV2. */
   lockHex: string
   terms: EditionTerms
   tokenSats: number
+  /** True if a v2 (percentage-pricing) edition — caller dispatches to replicateEditionV2. */
+  isV2: boolean
+  /** v2 only: the reseller's price (sats); 0 for v1. */
+  priceSats: number
 }
 
 /**
@@ -773,7 +777,7 @@ export async function resolveHolderEdition(provider: WalletProvider, params: {
   const templateBytes = Utils.toArray(params.templateCovenantHex, 'hex')
   const lockBytes = buildHolderEditionScript(templateBytes, tx1Ref, ownerPub)
   const lockScript = LockingScript.fromHex(Utils.toHex(lockBytes))
-  const ed = parseEditionScript(lockScript)
+  const ed = parseEditionAny(lockScript)
   if (ed == null) throw new Error('resolveHolderEdition: reconstructed script is not a valid edition')
 
   const unspent = await provider.getUnspentByScriptHash(wocScriptHash(lockBytes))
@@ -782,7 +786,8 @@ export async function resolveHolderEdition(provider: WalletProvider, params: {
   const pick = unspent.find(u => u.satoshis > 0) ?? unspent[0]
   return {
     txId: pick.txId, outputIndex: pick.outputIndex, lockHex: Utils.toHex(lockBytes),
-    terms: { ...ed.terms, tokenSats: pick.satoshis }, tokenSats: pick.satoshis,
+    terms: { creatorPubKeyHash: ed.terms.creatorPubKeyHash, creatorFeeSats: ed.terms.creatorFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: pick.satoshis },
+    tokenSats: pick.satoshis, isV2: ed.isV2, priceSats: ed.priceSats,
   }
 }
 
@@ -792,6 +797,10 @@ export interface IncomingEdition {
   lockHex: string
   tx1RefHex: string
   terms: EditionTerms
+  /** True if a v2 (percentage-pricing) edition. */
+  isV2: boolean
+  /** v2 only: the reseller's price (sats). */
+  priceSats: number
   /** Seller-note (promo + optional bonus) that rode in on the carrying tx (on-chain echo), if any. */
   sellerNote?: SellerNote
   /** Block height of the acquiring tx (0/undefined = unconfirmed) — for ordering recovered holdings. */
@@ -820,7 +829,7 @@ export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: 
     let tx: Transaction
     try { tx = await provider.getSourceTransaction(txId) } catch { continue }
     for (const o of tx.outputs) {
-      const ed = parseEditionScript(o.lockingScript)
+      const ed = parseEditionAny(o.lockingScript)
       if (ed == null || ed.ownerPubKeyHex.toLowerCase() !== mine) continue
       scripts.set(Utils.toHex(o.lockingScript.toBinary()), ed.tx1RefHex)
     }
@@ -833,7 +842,7 @@ export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: 
     const lockBytes = Utils.toArray(lockHex, 'hex')
     let unspent: Utxo[]
     try { unspent = await provider.getUnspentByScriptHash(wocScriptHash(lockBytes)) } catch { continue }
-    const ed = parseEditionScript(LockingScript.fromHex(lockHex))
+    const ed = parseEditionAny(LockingScript.fromHex(lockHex))
     if (ed == null) continue
     for (const u of unspent) {
       const key = `${u.txId}:${u.outputIndex}`
@@ -843,7 +852,8 @@ export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: 
       try { note = readNoteFromTx(await provider.getSourceTransaction(u.txId), tx1RefHex) } catch { /* best-effort */ }
       found.push({
         txId: u.txId, outputIndex: u.outputIndex, lockHex, tx1RefHex,
-        terms: { ...ed.terms, tokenSats: u.satoshis ?? PHARLAP_OUTPUT_SATS },
+        terms: { creatorPubKeyHash: ed.terms.creatorPubKeyHash, creatorFeeSats: ed.terms.creatorFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: u.satoshis ?? PHARLAP_OUTPUT_SATS },
+        isV2: ed.isV2, priceSats: ed.priceSats,
         ...(note ? { sellerNote: note } : {}),
         ...(u.height ? { height: u.height } : {}),
       })

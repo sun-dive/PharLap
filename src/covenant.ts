@@ -621,6 +621,38 @@ export function parseEditionScriptV2(script: LockingScript): ParsedEditionV2 | n
   }
 }
 
+export interface ParsedEditionAny {
+  tx1RefHex: string
+  ownerPubKeyHex: string
+  /** v2 only: the reseller's set price (sats); 0 for v1. */
+  priceSats: number
+  stateDataHex: string
+  /** True if a v2 (percentage-pricing) edition. */
+  isV2: boolean
+  /** Unified terms: fixed fees for v1 (cBps=0), or cBps for v2 (fee amounts 0). */
+  terms: { creatorPubKeyHash: number[]; creatorFeeSats: number; holderFeeSats: number; cBps: number }
+}
+
+/** Parse an edition covenant of EITHER version (v2 first, then v1). Lets callers handle both transparently. */
+export function parseEditionAny(script: LockingScript): ParsedEditionAny | null {
+  const v2 = parseEditionScriptV2(script)
+  if (v2 != null) {
+    return {
+      tx1RefHex: v2.tx1RefHex, ownerPubKeyHex: v2.ownerPubKeyHex, priceSats: v2.priceSats,
+      stateDataHex: v2.stateDataHex, isV2: true,
+      terms: { creatorPubKeyHash: v2.terms.creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0, cBps: v2.terms.cBps },
+    }
+  }
+  const v1 = parseEditionScript(script)
+  if (v1 != null) {
+    return {
+      tx1RefHex: v1.tx1RefHex, ownerPubKeyHex: v1.ownerPubKeyHex, priceSats: 0,
+      stateDataHex: v1.stateDataHex, isV2: false, terms: { ...v1.terms, cBps: 0 },
+    }
+  }
+  return null
+}
+
 /** Unlock for a permissionless replicate (no signature): [ buyerChange, buyerPub, OP_0, preimage ]. */
 export function editionReplicateUnlockChunks(p: {
   buyerPubKey: number[]; buyerChange: number[]; preimage: number[]
