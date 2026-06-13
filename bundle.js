@@ -19421,7 +19421,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const cBps = Math.max(0, Math.min(1e4, parseInt(val("edBps") || "250", 10)));
         const price = Math.max(1, parseInt(val("edPrice") || "5000", 10));
         const creatorPubKeyHash = Hash_exports.hash160(key.toPublicKey().encode(true));
-        setStatus(`Minting ${encrypt ? "encrypted " : ""}percentage-pricing collection (creator ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat)\u2026`);
+        setStatus(`Minting ${encrypt ? "encrypted " : ""}percentage-pricing collection (publisher ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat)\u2026`);
         const minted = await createEditionV2(provider, key, { tokenName: name, terms: { creatorPubKeyHash, cBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover });
         for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0 });
         renderTokens();
@@ -19443,7 +19443,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const price = Math.max(1, parseInt(val("edPrice") || "50000", 10));
     if (!confirm(`MAINNET v2 self-test \u2014 spends real BSV.
 
-Mint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are creator = holder = buyer). Proceed?`)) return;
+Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return;
     setStatus("v2 self-test: minting (TX1 template + TX2 v2 genesis)\u2026");
     try {
       const creatorPubKeyHash = key.toPublicKey().toHash();
@@ -19461,7 +19461,7 @@ Mint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${
         editionSourceTx: minted.tx2
       });
       setStatus(
-        `\u2705 v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} \xB7 TX2 ${short(minted.tx2Id)} \xB7 replicate ${short(r2.txId)} \u2014 creator ${r2.creatorCut} + reseller ${r2.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
+        `\u2705 v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} \xB7 TX2 ${short(minted.tx2Id)} \xB7 replicate ${short(r2.txId)} \u2014 publisher ${r2.creatorCut} + reseller ${r2.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
         "ok"
       );
       console.log("v2 self-test txids:", { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r2.txId, creatorCut: r2.creatorCut, resellerCut: r2.resellerCut });
@@ -19491,7 +19491,7 @@ Mint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${
         storeEdition({ txId: r3.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         storeEdition({ txId: r3.replicaOutpoint.txId, outputIndex: r3.replicaOutpoint.outputIndex, lockHex: r3.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         renderTokens();
-        setStatus(`\u2705 v2 replicated. Tx ${short(r3.txId)} \u2014 creator ${r3.creatorCut} + reseller ${r3.resellerCut} sat.`, "ok");
+        setStatus(`\u2705 v2 replicated. Tx ${short(r3.txId)} \u2014 publisher ${r3.creatorCut} + reseller ${r3.resellerCut} sat.`, "ok");
         return;
       }
       const note = await noteToPropagate(t);
@@ -19704,7 +19704,7 @@ Mint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${
       const tx = await provider.getSourceTransaction(txId);
       const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript);
       if (ed) {
-        const econ = ed.isV2 ? `creator ${(ed.terms.cBps / 100).toFixed(2)}% \xB7 price ${ed.priceSats} sat` : `fees ${ed.terms.creatorFeeSats}/${ed.terms.holderFeeSats} sat`;
+        const econ = ed.isV2 ? `publisher ${(ed.terms.cBps / 100).toFixed(2)}% \xB7 price ${ed.priceSats} sat` : `fees ${ed.terms.creatorFeeSats}/${ed.terms.holderFeeSats} sat`;
         setStatus(`\u2705 Valid ${ed.isV2 ? "v2 " : ""}edition covenant \u2014 collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, "ok");
         return;
       }
@@ -19975,9 +19975,9 @@ Mint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${
     $("cvCreator").textContent = info.creatorPubKeyHex ? `by ${short(info.creatorPubKeyHex)}` : "";
     $("cvDesc").textContent = info.description || "(no description provided)";
     if (info.isV2) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sat</b> <span class="muted">(reseller's price; creator takes ${(info.cBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.cBps / 1e4)} sat, plus a small network fee)</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sat</b> <span class="muted">(reseller's price; publisher takes ${(info.cBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.cBps / 1e4)} sat, plus a small network fee)</span>`;
     } else if (info.fees) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(creator ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(publisher ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`;
     } else {
       $("cvPrice").innerHTML = '<span class="muted">This collection is not a replicable edition.</span>';
     }
@@ -20192,8 +20192,8 @@ Mint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${
       const ok = confirm(
         `Buy a copy of \u201C${info.name}\u201D for ${price} sat?
 
-` + (tip.isV2 ? `creator ${(info.cBps / 100).toFixed(2)}% = ${creatorCut} + reseller ${resellerCut} sat, plus a small network fee.
-` : `creator ${creatorCut} + holder ${resellerCut} sat, plus a small network fee.
+` + (tip.isV2 ? `publisher ${(info.cBps / 100).toFixed(2)}% = ${creatorCut} + reseller ${resellerCut} sat, plus a small network fee.
+` : `publisher ${creatorCut} + holder ${resellerCut} sat, plus a small network fee.
 `) + `This is an instant, on-chain purchase.`
       );
       if (!ok) {

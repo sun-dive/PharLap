@@ -136,7 +136,7 @@
       <!-- Plain-token "Mint" tab hidden for the first-time-user UI (Editions is the single mint path).
            The #tab-mint panel below is kept in the DOM so btnMint wiring stays intact — re-add this
            button to surface it again. -->
-      <button class="tab" data-tab="editions" role="tab">Editions</button>
+      <button class="tab" data-tab="editions" role="tab">Publish</button>
       <button class="tab" data-tab="tokens" role="tab">My tokens</button>
       <button class="tab" data-tab="messages" role="tab">Messages</button>
     </nav>
@@ -190,15 +190,15 @@
       <input id="edCover" type="file" accept="image/*" />
       <label>Pricing model</label>
       <select id="edMode">
-        <option value="fixed">Fixed fees — creator + holder royalties (sat)</option>
-        <option value="percentage">Percentage — creator % of a reseller-set price (Covenant v2)</option>
+        <option value="fixed">Fixed fees — publisher + holder royalties (sat)</option>
+        <option value="percentage">Percentage — publisher % of a reseller-set price (Covenant v2)</option>
       </select>
       <div id="edFixedFees" class="grid2" style="grid-template-columns:1fr 1fr">
-        <div><label>Creator fee (sat)</label><input id="edCreatorFee" type="number" min="0" value="5000" /></div>
+        <div><label>Publisher fee (sat)</label><input id="edCreatorFee" type="number" min="0" value="5000" /></div>
         <div><label>Holder fee (sat)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>
       </div>
       <div id="edPctFees" class="grid2" style="grid-template-columns:1fr 1fr;display:none">
-        <div><label>Creator fee (basis points — 250 = 2.5%)</label><input id="edBps" type="number" min="0" max="10000" value="250" /></div>
+        <div><label>Publisher fee (basis points — 250 = 2.5%)</label><input id="edBps" type="number" min="0" max="10000" value="250" /></div>
         <div><label>Reseller price (sat)</label><input id="edPrice" type="number" min="1" value="5000" /></div>
       </div>
       <label>Editions to mint now</label>
@@ -216,8 +216,8 @@
       </p>
       <p class="muted" style="font-size:12px;margin:8px 0 0;display:none" id="edPctHelp">
         Percentage pricing (Covenant v2): the covenant computes the split on each replicate —
-        creator gets ⌊price × bps/10000⌋, the reseller keeps the remainder. Open an edition's
-        <b>Sales page</b> to share a buy link. <b>Self-test</b> mints + immediately replicates (you = creator/holder/buyer).
+        publisher gets ⌊price × bps/10000⌋, the reseller keeps the remainder. Open an edition's
+        <b>Sales page</b> to share a buy link. <b>Self-test</b> mints + immediately replicates (you = publisher/holder/buyer).
       </p>
     </div>
     </section>
