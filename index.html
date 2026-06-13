@@ -44,6 +44,8 @@
     /* Help panel */
     .help h3 { font-size:15px; margin:18px 0 6px; color:var(--fg); text-transform:none; letter-spacing:0; }
     .help h3:first-child { margin-top:0; }
+    .help h4 { font-size:14px; margin:16px 0 2px; color:var(--fg); }
+    .help .help-sub { margin:0 0 6px; color:var(--muted); font-size:12.5px; }
     .help p { margin:0 0 10px; line-height:1.55; }
     .help ol, .help ul { margin:0 0 12px; padding-left:20px; line-height:1.55; }
     .help li { margin:5px 0; }
@@ -276,13 +278,49 @@
         <li><b>Get paid.</b> Anyone who opens the link presses <b>Get a copy</b> and owns one instantly; you (the publisher) and the current holder are paid automatically, on-chain.</li>
       </ol>
 
-      <h3>What each tab does</h3>
+      <h3>Using each tab</h3>
+
+      <h4>💰 Wallet</h4>
+      <p class="help-sub">Your keys, balance, and backup.</p>
+      <ol>
+        <li><b>Check your balance</b> — click <b>Refresh balance</b>.</li>
+        <li><b>Receive BSV</b> — send funds to your <b>Address</b> (you need a little to publish or buy).</li>
+        <li><b>Share your identity</b> — <b>Copy public key</b> to give to anyone sending you tokens or messages.</li>
+        <li><b>Back up</b> — copy your <b>WIF</b> and store it safely. It is the only thing that can restore this wallet.</li>
+        <li><b>Restore / recover</b> — paste a WIF into <b>Restore from WIF</b> → <b>Restore</b>; your holdings and purchases rebuild from chain.</li>
+        <li><b>New wallet</b> — makes a fresh key (back up the current WIF first — it gets replaced).</li>
+      </ol>
+
+      <h4>📤 Publish</h4>
+      <p class="help-sub">Create editions of your content for anyone to buy.</p>
+      <ol>
+        <li>First time only: click <b>Test v2 broadcast</b> to confirm the network accepts the covenant transaction type.</li>
+        <li>Enter a <b>collection name</b> and <b>description</b>, and add a <b>cover image</b> (what buyers see).</li>
+        <li>Pick a <b>pricing model</b>: <b>Fixed fees</b> (flat publisher + holder fee in sats), or <b>Percentage</b> (publisher takes a % of a reseller-set price).</li>
+        <li>Set how many <b>editions to mint now</b>, and optionally <b>embed a file</b> — tick <b>Encrypt</b> to make it holders-only.</li>
+        <li>Click <b>Mint edition collection</b> (needs a little BSV). Your new editions appear in <b>My tokens</b>.</li>
+      </ol>
+
+      <h4>🎴 My tokens</h4>
+      <p class="help-sub">Everything you hold, and what you can do with each item.</p>
       <ul>
-        <li><b>Wallet</b> — your address, balance, and WIF backup. Restore a wallet (and recover its purchases from chain) on any browser or device.</li>
-        <li><b>Publish</b> — create an edition collection: cover image, description, an optional file (which can be <b>encrypted</b> so only holders can open it), and a pricing model.</li>
-        <li><b>My tokens</b> — everything you hold. Each edition offers <b>Replicate</b> (mint yourself another copy), <b>Transfer</b> (send it to someone), <b>View</b> (open the content), <b>Sales page</b> (your shareable buy link), and <b>Verify</b> (prove it's a genuine edition).</li>
-        <li><b>Messages</b> — send on-chain notes or files to another public key, encrypted by default.</li>
+        <li><b>Sell / share</b> — click <b>Sales page</b> on an edition to open its public buy link, then <b>Share</b> it anywhere.</li>
+        <li><b>Replicate</b> — mint yourself another copy of an edition.</li>
+        <li><b>Transfer / Send</b> — paste the recipient's <b>public key</b> at the top, then <b>Transfer</b> (editions) or <b>Send</b> (plain tokens) to hand it over.</li>
+        <li><b>View</b> — open the embedded content (decrypts automatically if you're a holder).</li>
+        <li><b>Verify</b> — prove on-chain that an item is a genuine edition of its collection.</li>
+        <li><b>Check incoming / recover</b> — scan the chain for items sent to you, or rebuild your holdings after restoring a WIF.</li>
       </ul>
+
+      <h4>✉️ Messages</h4>
+      <p class="help-sub">Send on-chain notes or files to another person's public key.</p>
+      <ol>
+        <li>Paste the <b>recipient's public key</b>.</li>
+        <li>Write your <b>message</b> and optionally <b>attach a file</b>.</li>
+        <li>Leave <b>Encrypt to the recipient</b> ticked for a private, authenticated message.</li>
+        <li>Click <b>Send message</b> — it's delivered on-chain to their key.</li>
+        <li>Click <b>Check messages</b> to read messages others have sent you.</li>
+      </ol>
 
       <h3>How selling works</h3>
       <p>Editions are <b>"unlimited mints"</b>: a buyer doesn't take your copy — they mint their <i>own</i> copy from
