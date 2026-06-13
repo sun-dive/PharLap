@@ -11,8 +11,8 @@ import {
   newContentKey, newKeySalt, encryptContent, decryptContent, wrapContentKey, unwrapContentKey, contentHash,
 } from '../src/contentCrypto.ts'
 
-const creator = PrivateKey.fromRandom()
-const creatorPub = creator.toPublicKey().toString()
+const publisher = PrivateKey.fromRandom()
+const publisherPub = publisher.toPublicKey().toString()
 const plainFile = Array.from({ length: 1234 }, (_, i) => (i * 9 + 5) & 0xff)
 
 function encryptedTemplate(ciphertext: number[], wrappedKey: number[], keySalt: number[]): TemplateFields {
@@ -30,7 +30,7 @@ test('encrypted template: wrappedKey + keySalt + encrypted flag round-trip throu
   const K = newContentKey(); const keySalt = newKeySalt()
   const ciphertext = encryptContent(plainFile, K)
   const wrappedKey = wrapContentKey(K, keySalt)
-  const parsed = parseTemplateScript(buildTemplateScript(creatorPub, encryptedTemplate(ciphertext, wrappedKey, keySalt)))
+  const parsed = parseTemplateScript(buildTemplateScript(publisherPub, encryptedTemplate(ciphertext, wrappedKey, keySalt)))
   assert.ok(parsed)
   assert.deepEqual(parsed!.fields.wrappedKey, wrappedKey)
   assert.deepEqual(parsed!.fields.keySalt, keySalt)
@@ -45,8 +45,8 @@ test('encrypted content: full viewer path — parse template + FILE, verify hash
   const fileFields: FileFields = { mimeType: 'application/pdf', fileName: 'book.pdf', fileBytes: ciphertext }
 
   // Round-trip through the on-chain scripts, then run exactly what onView does.
-  const t = parseTemplateScript(buildTemplateScript(creatorPub, encryptedTemplate(ciphertext, wrappedKey, keySalt)))!
-  const f = parseFileScript(buildFileScript(creatorPub, fileFields))!
+  const t = parseTemplateScript(buildTemplateScript(publisherPub, encryptedTemplate(ciphertext, wrappedKey, keySalt)))!
+  const f = parseFileScript(buildFileScript(publisherPub, fileFields))!
 
   assert.equal(t.fields.fileHash, Utils.toHex(Hash.sha256(f.fields.fileBytes))) // ciphertext bound to collection
   assert.equal(decodeTokenRules(t.fields.tokenRules).isEncrypted, true)
@@ -59,7 +59,7 @@ test('plain (unencrypted) template carries no wrappedKey and isEncrypted=false',
   const template: TemplateFields = {
     tokenName: 'Open collection', tokenRules: encodeTokenRules(1, 0, 0, 1), covenantScript: '', fileHash: 'ab'.repeat(32),
   }
-  const t = parseTemplateScript(buildTemplateScript(creatorPub, template))!
+  const t = parseTemplateScript(buildTemplateScript(publisherPub, template))!
   assert.equal(t.fields.wrappedKey, undefined)
   assert.equal(t.fields.keySalt, undefined)
   assert.equal(decodeTokenRules(t.fields.tokenRules).isEncrypted, false)

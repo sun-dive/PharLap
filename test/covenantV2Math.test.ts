@@ -35,22 +35,22 @@ function valid(lockChunks: ScriptChunk[], unlockChunks: ScriptChunk[]): boolean 
   } catch { return false }
 }
 
-/** Compute ⌊P × cBps / 10000⌋ as the covenant will, leaving the 8-byte LE value on the stack. */
-function creatorCutOps(cBps: number): ScriptChunk[] {
-  return [op(OP.OP_BIN2NUM), pushData(numLE(cBps)), op(OP.OP_MUL), pushData(numLE(10000)), op(OP.OP_DIV)]
+/** Compute ⌊P × pBps / 10000⌋ as the covenant will, leaving the 8-byte LE value on the stack. */
+function publisherCutOps(pBps: number): ScriptChunk[] {
+  return [op(OP.OP_BIN2NUM), pushData(numLE(pBps)), op(OP.OP_MUL), pushData(numLE(10000)), op(OP.OP_DIV)]
 }
 
-test('percentage fee math: ⌊P × cBps / 10000⌋ → 8-byte LE value', () => {
-  // P=12345 sat, c=2.5% (cBps=250) → ⌊308.625⌋ = 308.
+test('percentage fee math: ⌊P × pBps / 10000⌋ → 8-byte LE value', () => {
+  // P=12345 sat, c=2.5% (pBps=250) → ⌊308.625⌋ = 308.
   const ok = valid(
-    [...creatorCutOps(250), op(OP.OP_8), op(OP.OP_NUM2BIN), pushData(u64le(308)), op(OP.OP_EQUAL)],
+    [...publisherCutOps(250), op(OP.OP_8), op(OP.OP_NUM2BIN), pushData(u64le(308)), op(OP.OP_EQUAL)],
     [pushData(u64le(12345))],
   )
   assert.equal(ok, true)
 })
 
-test('reseller remainder: P − ⌊P × cBps / 10000⌋ → 8-byte LE value', () => {
-  // P=12345, creatorCut=308 → reseller=12037.
+test('reseller remainder: P − ⌊P × pBps / 10000⌋ → 8-byte LE value', () => {
+  // P=12345, publisherCut=308 → reseller=12037.
   const ok = valid(
     [op(OP.OP_BIN2NUM), op(OP.OP_DUP), pushData(numLE(250)), op(OP.OP_MUL), pushData(numLE(10000)), op(OP.OP_DIV),
       op(OP.OP_SUB), op(OP.OP_8), op(OP.OP_NUM2BIN), pushData(u64le(12037)), op(OP.OP_EQUAL)],
@@ -76,7 +76,7 @@ test('a large in-band price stays exact (BSV big-int math, no overflow)', () => 
   // 1000 BSV = 100,000,000,000 sat at 5% → 5,000,000,000 (a 5-byte script number).
   const P = 100_000_000_000, expected = 5_000_000_000
   const ok = valid(
-    [...creatorCutOps(500), op(OP.OP_8), op(OP.OP_NUM2BIN), pushData(u64le(expected)), op(OP.OP_EQUAL)],
+    [...publisherCutOps(500), op(OP.OP_8), op(OP.OP_NUM2BIN), pushData(u64le(expected)), op(OP.OP_EQUAL)],
     [pushData(u64le(P))],
   )
   assert.equal(ok, true)

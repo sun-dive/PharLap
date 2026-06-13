@@ -4,7 +4,7 @@
  *
  * A collection is created with two transactions (PLAN.md Addendum C):
  *   TX1 (template): a PushDrop TEMPLATE output (+ optional FILE output) committing all
- *        immutable collection data, locked to the creator and kept unspent. TX1's txid is
+ *        immutable collection data, locked to the publisher and kept unspent. TX1's txid is
  *        the Collection ID.
  *   TX2 (genesis):  PushDrop TOKEN outputs that reference TX1 by txid, locked to the owner.
  *
@@ -93,7 +93,7 @@ export async function buildTemplateTx(opts: {
   feePerKb?: number
 }): Promise<TemplateTxResult> {
   const sats = opts.outputSats ?? PHARLAP_OUTPUT_SATS
-  const creatorPub = opts.key.toPublicKey().toString()
+  const publisherPub = opts.key.toPublicKey().toString()
   const address = opts.key.toAddress()
   const tx = new Transaction()
 
@@ -105,17 +105,17 @@ export async function buildTemplateTx(opts: {
     })
   }
 
-  tx.addOutput({ lockingScript: buildTemplateScript(creatorPub, opts.template), satoshis: sats })
+  tx.addOutput({ lockingScript: buildTemplateScript(publisherPub, opts.template), satoshis: sats })
   const templateVout = 0
   let fileVout: number | null = null
   if (opts.file) {
     fileVout = tx.outputs.length
-    tx.addOutput({ lockingScript: buildFileScript(creatorPub, opts.file), satoshis: sats })
+    tx.addOutput({ lockingScript: buildFileScript(publisherPub, opts.file), satoshis: sats })
   }
   let storefrontVout: number | null = null
   if (opts.storefront) {
     storefrontVout = tx.outputs.length
-    tx.addOutput({ lockingScript: buildStorefrontScript(creatorPub, opts.storefront), satoshis: sats })
+    tx.addOutput({ lockingScript: buildStorefrontScript(publisherPub, opts.storefront), satoshis: sats })
   }
 
   const changeVout = tx.outputs.length

@@ -2,7 +2,7 @@
  * Phase 3 — collection genesis builder tests (offline).
  *
  *  - buildTemplateTx produces a TX1 with a TEMPLATE output (+ optional FILE output) locked to
- *    the creator, parseable back to the same fields.
+ *    the publisher, parseable back to the same fields.
  *  - buildGenesisTx produces TX2 token outputs referencing TX1's txid, locked to the owner.
  *  - the TX1 -> TX2 funding chain is spendable (Spend-validated).
  *  - getSafeUtxos quarantines ≤1-sat outputs; selectFunding covers the target / throws.
@@ -44,11 +44,11 @@ const TEMPLATE = {
   covenantScript: '',
 }
 
-test('buildTemplateTx: TX1 has a parseable TEMPLATE output locked to the creator', async () => {
+test('buildTemplateTx: TX1 has a parseable TEMPLATE output locked to the publisher', async () => {
   const t1 = await buildTemplateTx({ key: KEY, funding: [makeFunding(100_000)], template: TEMPLATE })
   const parsed = parseTemplateScript(t1.tx.outputs[t1.templateVout].lockingScript)
   assert.ok(parsed, 'template output did not parse')
-  assert.equal(parsed.creatorPubKeyHex, PUB)
+  assert.equal(parsed.publisherPubKeyHex, PUB)
   assert.equal(parsed.fields.tokenName, 'PHAR LAP Editions')
   assert.equal(decodeTokenRules(parsed.fields.tokenRules).isUnlimited, true)
   assert.equal(t1.tx.outputs[t1.templateVout].satoshis, PHARLAP_OUTPUT_SATS)

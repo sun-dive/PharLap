@@ -11,7 +11,7 @@ import {
 } from '../src/covenant.ts'
 
 const OWNER_OFFSET = 40 // P(2)+ver(2)+record(2)+tx1Ref(33)+pushOpcode(1) — owner pubkey data offset in the script
-const CREATOR_FEE = 5000
+const PUBLISHER_FEE = 5000
 const HOLDER_FEE = 1000
 const TOKEN_SATS = 1
 
@@ -20,14 +20,14 @@ function pub(k: PrivateKey) { return k.toPublicKey().encode(true) as number[] }
 
 function makeEdition() {
   const holder = pk()
-  const creatorHash = Hash.hash160(pub(pk()))
+  const publisherHash = Hash.hash160(pub(pk()))
   const tx1Ref = Array.from({ length: 32 }, (_, i) => (i * 5 + 1) & 0xff)
   const stateData = [0xaa, 0xbb, 0xcc]
   const lock = buildEditionLock({
     tx1Ref, ownerPubKey: pub(holder), stateData,
-    creatorPubKeyHash: creatorHash, creatorFeeSats: CREATOR_FEE, holderFeeSats: HOLDER_FEE, tokenSats: TOKEN_SATS,
+    publisherPubKeyHash: publisherHash, publisherFeeSats: PUBLISHER_FEE, holderFeeSats: HOLDER_FEE, tokenSats: TOKEN_SATS,
   })
-  return { holder, creatorHash, lock, lockBytes: lock.toBinary() }
+  return { holder, publisherHash, lock, lockBytes: lock.toBinary() }
 }
 
 // Swap the 33-byte owner pubkey in a copy of the edition script.
@@ -43,25 +43,25 @@ test('edition: owner pubkey sits at the expected script offset', () => {
 })
 
 test('edition: parseEditionScript recovers fields + terms from the covenant', () => {
-  const { lock, holder, creatorHash } = makeEdition()
+  const { lock, holder, publisherHash } = makeEdition()
   const parsed = parseEditionScript(lock)
   assert.ok(parsed)
   assert.equal(parsed!.ownerPubKeyHex, Buffer.from(pub(holder)).toString('hex'))
-  assert.deepEqual(parsed!.terms.creatorPubKeyHash, creatorHash)
-  assert.equal(parsed!.terms.creatorFeeSats, CREATOR_FEE)
+  assert.deepEqual(parsed!.terms.publisherPubKeyHash, publisherHash)
+  assert.equal(parsed!.terms.publisherFeeSats, PUBLISHER_FEE)
   assert.equal(parsed!.terms.holderFeeSats, HOLDER_FEE)
   // A plain P2PKH script is not an edition.
   assert.equal(parseEditionScript(new P2PKH().lock(holder.toAddress())), null)
 })
 
 test('edition REPLICATE: buyer mints a replica, returns the token, pays both fees', () => {
-  const { holder, creatorHash, lock, lockBytes } = makeEdition()
+  const { holder, publisherHash, lock, lockBytes } = makeEdition()
   const buyer = pk()
   const changeScript = new P2PKH().lock(buyer.toAddress()).toBinary()
   const outputs = [
     { script: lockBytes, sats: TOKEN_SATS },                                  // [0] token → holder (verbatim)
     { script: withOwner(lockBytes, pub(buyer)), sats: TOKEN_SATS },           // [1] replica → buyer
-    { script: p2pkhScript(creatorHash), sats: CREATOR_FEE },                  // [2] creator fee
+    { script: p2pkhScript(publisherHash), sats: PUBLISHER_FEE },                  // [2] publisher fee
     { script: p2pkhScript(Hash.hash160(pub(holder))), sats: HOLDER_FEE },     // [3] holder fee
     { script: changeScript, sats: 500 },                                      // [4] buyer change
   ]

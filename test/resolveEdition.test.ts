@@ -8,14 +8,14 @@ import { PrivateKey, Utils, LockingScript } from '@bsv/sdk'
 import { buildEditionLock, buildHolderEditionScript, parseEditionScript } from '../src/covenant.ts'
 import { wocScriptHash } from '../src/editionBuilder.ts'
 
-const creator = PrivateKey.fromRandom()
+const publisher = PrivateKey.fromRandom()
 const holder = PrivateKey.fromRandom()
-const creatorPubKeyHash = creator.toPublicKey().toHash() as number[]
+const publisherPubKeyHash = publisher.toPublicKey().toHash() as number[]
 const tx1Ref = Array.from({ length: 32 }, (_, i) => (i * 7 + 11) & 0xff)
 const ownerPub = holder.toPublicKey().encode(true) as number[]
 const stateData = Utils.toArray('0118416e2065426f6f6b00', 'hex') // a non-empty immutable storefront-ish blob
 
-const terms = { creatorPubKeyHash, creatorFeeSats: 5000, holderFeeSats: 1000, tokenSats: 1 }
+const terms = { publisherPubKeyHash, publisherFeeSats: 5000, holderFeeSats: 1000, tokenSats: 1 }
 
 test('buildHolderEditionScript reproduces a real edition script byte-for-byte', () => {
   // The TX1 covenant TEMPLATE: identity zeroed, everything else (stateData, fees, tokenSats) real.
@@ -40,7 +40,7 @@ test('the reconstructed script parses back to the right collection, owner, and t
   assert.ok(ed)
   assert.equal(ed!.tx1RefHex, Utils.toHex(tx1Ref))
   assert.equal(ed!.ownerPubKeyHex, Utils.toHex(ownerPub))
-  assert.equal(ed!.terms.creatorFeeSats, 5000)
+  assert.equal(ed!.terms.publisherFeeSats, 5000)
   assert.equal(ed!.terms.holderFeeSats, 1000)
 })
 

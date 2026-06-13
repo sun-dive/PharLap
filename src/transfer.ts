@@ -38,8 +38,8 @@ export interface TransferTxResult {
   txId: string
   recipientVout: number
   notifyVout: number | null
-  /** Index of the optional 1-sat creator-notification output (collection-tracking), or null. */
-  creatorNotifyVout: number | null
+  /** Index of the optional 1-sat publisher-notification output (collection-tracking), or null. */
+  publisherNotifyVout: number | null
   changeVout: number | null
   changeSats: number
   tokenFields: TokenFields
@@ -56,13 +56,13 @@ export async function buildTransferTx(opts: {
   /** Add a 1-sat P2PKH notification output to the recipient's address. Default true. */
   notify?: boolean
   /**
-   * Add a 1-sat P2PKH notification to the creator's address so the creator can track the
-   * current holder (RESTRICTION_TRACK_TRANSFERS / Addendum E). Requires creatorPubKeyHex.
+   * Add a 1-sat P2PKH notification to the publisher's address so the publisher can track the
+   * current holder (RESTRICTION_TRACK_TRANSFERS / Addendum E). Requires publisherPubKeyHex.
    * Off by default — private unless the collection opts into tracking.
    */
-  notifyCreator?: boolean
-  /** Creator's public key (the TX1 template lock key); required when notifyCreator is set. */
-  creatorPubKeyHex?: string
+  notifyPublisher?: boolean
+  /** Publisher's public key (the TX1 template lock key); required when notifyPublisher is set. */
+  publisherPubKeyHex?: string
   outputSats?: number
   feePerKb?: number
 }): Promise<TransferTxResult> {
@@ -106,15 +106,15 @@ export async function buildTransferTx(opts: {
     tx.addOutput({ lockingScript: new P2PKH().lock(recipientAddress), satoshis: 1 })
   }
 
-  // Optional: 1-sat P2PKH notification to the creator (collection transfer-tracking).
-  let creatorNotifyVout: number | null = null
-  if (opts.notifyCreator) {
-    if (opts.creatorPubKeyHex == null) {
-      throw new Error('buildTransferTx: notifyCreator requires creatorPubKeyHex')
+  // Optional: 1-sat P2PKH notification to the publisher (collection transfer-tracking).
+  let publisherNotifyVout: number | null = null
+  if (opts.notifyPublisher) {
+    if (opts.publisherPubKeyHex == null) {
+      throw new Error('buildTransferTx: notifyPublisher requires publisherPubKeyHex')
     }
-    const creatorAddress = PublicKey.fromString(opts.creatorPubKeyHex).toAddress()
-    creatorNotifyVout = tx.outputs.length
-    tx.addOutput({ lockingScript: new P2PKH().lock(creatorAddress), satoshis: 1 })
+    const publisherAddress = PublicKey.fromString(opts.publisherPubKeyHex).toAddress()
+    publisherNotifyVout = tx.outputs.length
+    tx.addOutput({ lockingScript: new P2PKH().lock(publisherAddress), satoshis: 1 })
   }
 
   const changeVout = tx.outputs.length
@@ -129,7 +129,7 @@ export async function buildTransferTx(opts: {
     txId: tx.id('hex'),
     recipientVout,
     notifyVout,
-    creatorNotifyVout,
+    publisherNotifyVout,
     changeVout: changeSats > 0 ? changeVout : null,
     changeSats,
     tokenFields,
@@ -145,8 +145,8 @@ export async function createTransfer(
     recipientPubKeyHex: string
     newStateData?: string
     notify?: boolean
-    notifyCreator?: boolean
-    creatorPubKeyHex?: string
+    notifyPublisher?: boolean
+    publisherPubKeyHex?: string
     outputSats?: number
     feePerKb?: number
   },
@@ -167,8 +167,8 @@ export async function createTransfer(
     funding,
     newStateData: opts.newStateData,
     notify: opts.notify,
-    notifyCreator: opts.notifyCreator,
-    creatorPubKeyHex: opts.creatorPubKeyHex,
+    notifyPublisher: opts.notifyPublisher,
+    publisherPubKeyHex: opts.publisherPubKeyHex,
     outputSats: opts.outputSats,
     feePerKb: opts.feePerKb,
   })

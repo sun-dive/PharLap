@@ -9,7 +9,7 @@ import {
   replicateBranchOps, serializeOutput, p2pkhScript,
 } from '../src/covenant.ts'
 
-const creator = PrivateKey.fromRandom()
+const publisher = PrivateKey.fromRandom()
 const buyer = PrivateKey.fromRandom()
 
 // Build a spend of an L1-covenant output with the given actual outputs, and the spender's supplied
@@ -42,9 +42,9 @@ function runCovenant(opts: {
 }
 
 test('L1: enforces a fixed output prefix; spender appends free change', () => {
-  const feeScript = new P2PKH().lock(creator.toAddress()).toBinary()
+  const feeScript = new P2PKH().lock(publisher.toAddress()).toBinary()
   const changeScript = new P2PKH().lock(buyer.toAddress()).toBinary()
-  const enforced = serializeOutput(1000, feeScript)       // out[0] forced: 1000 sats to creator
+  const enforced = serializeOutput(1000, feeScript)       // out[0] forced: 1000 sats to publisher
   const spenderOut = serializeOutput(500, changeScript)   // out[1] spender's own change
   assert.equal(runCovenant({
     enforcedPrefixBytes: enforced,
@@ -54,9 +54,9 @@ test('L1: enforces a fixed output prefix; spender appends free change', () => {
 })
 
 test('L1: rejects when the enforced output amount is altered', () => {
-  const feeScript = new P2PKH().lock(creator.toAddress()).toBinary()
+  const feeScript = new P2PKH().lock(publisher.toAddress()).toBinary()
   const changeScript = new P2PKH().lock(buyer.toAddress()).toBinary()
-  const enforced = serializeOutput(1000, feeScript)       // covenant demands 1000 to creator
+  const enforced = serializeOutput(1000, feeScript)       // covenant demands 1000 to publisher
   const spenderOut = serializeOutput(500, changeScript)
   assert.throws(() => runCovenant({
     enforcedPrefixBytes: enforced,
@@ -66,7 +66,7 @@ test('L1: rejects when the enforced output amount is altered', () => {
 })
 
 test('L1: rejects when the enforced output script is altered', () => {
-  const feeScript = new P2PKH().lock(creator.toAddress()).toBinary()
+  const feeScript = new P2PKH().lock(publisher.toAddress()).toBinary()
   const attackerScript = new P2PKH().lock(buyer.toAddress()).toBinary() // buyer tries to redirect the fee
   const enforced = serializeOutput(1000, feeScript)
   const spenderOut = serializeOutput(500, attackerScript)
@@ -173,31 +173,31 @@ test('L3: rejects an output that keeps the old pubkey (no real swap)', () => {
   assert.throws(() => runSwap(lock.toBinary()))
 })
 
-// --- L4: full Addendum-A replicate branch (token + replica + creator fee + holder fee + change) ---
+// --- L4: full Addendum-A replicate branch (token + replica + publisher fee + holder fee + change) ---
 const L4_PUBKEY_OFFSET = 1 // test layout: leading `0x21 <holderPub>` push, data at byte 1
-const CREATOR_FEE = 5000
+const PUBLISHER_FEE = 5000
 const HOLDER_FEE = 1000
 
-function buildL4Lock(F: number, holderPub: number[], creatorHash: number[]) {
+function buildL4Lock(F: number, holderPub: number[], publisherHash: number[]) {
   return new LockingScript([
     { op: holderPub.length, data: holderPub }, { op: OP.OP_DROP },
     ...replicateBranchOps({
-      fieldPubkeyOffset: F, tokenSats: 1, creatorPubKeyHash: creatorHash,
-      creatorFeeSats: CREATOR_FEE, holderFeeSats: HOLDER_FEE, c: pushTxConstants(),
+      fieldPubkeyOffset: F, tokenSats: 1, publisherPubKeyHash: publisherHash,
+      publisherFeeSats: PUBLISHER_FEE, holderFeeSats: HOLDER_FEE, c: pushTxConstants(),
     }),
   ])
 }
-function l4FieldOffset(holderPub: number[], creatorHash: number[]): number {
-  const len = buildL4Lock(0, holderPub, creatorHash).toBinary().length
+function l4FieldOffset(holderPub: number[], publisherHash: number[]): number {
+  const len = buildL4Lock(0, holderPub, publisherHash).toBinary().length
   return (len < 253 ? 1 : len < 65536 ? 3 : 5) + L4_PUBKEY_OFFSET
 }
 
-interface L4Override { creatorFee?: number; holderFee?: number; out1Pub?: number[]; creatorHash?: number[] }
+interface L4Override { publisherFee?: number; holderFee?: number; out1Pub?: number[]; publisherHash?: number[] }
 function runReplicate(ov: L4Override = {}): boolean {
   const holderPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
   const buyerPub = PrivateKey.fromRandom().toPublicKey().encode(true) as number[]
-  const creatorHash = Hash.hash160(PrivateKey.fromRandom().toPublicKey().encode(true) as number[])
-  const lock = buildL4Lock(l4FieldOffset(holderPub, creatorHash), holderPub, creatorHash)
+  const publisherHash = Hash.hash160(PrivateKey.fromRandom().toPublicKey().encode(true) as number[])
+  const lock = buildL4Lock(l4FieldOffset(holderPub, publisherHash), holderPub, publisherHash)
   const lockBytes = lock.toBinary()
 
   // Build the four enforced outputs (+ change) the covenant expects, applying any attacker overrides.
@@ -205,7 +205,7 @@ function runReplicate(ov: L4Override = {}): boolean {
   const out1 = [...lockBytes]                              // replica to buyer (pubkey swapped)
   const rep = ov.out1Pub ?? buyerPub
   for (let i = 0; i < 33; i++) out1[L4_PUBKEY_OFFSET + i] = rep[i]
-  const creatorScript = p2pkhScript(ov.creatorHash ?? creatorHash)
+  const publisherScript = p2pkhScript(ov.publisherHash ?? publisherHash)
   const holderScript = p2pkhScript(Hash.hash160(holderPub))
   const changeScript = new P2PKH().lock(buyer.toAddress()).toBinary()
 
@@ -214,7 +214,7 @@ function runReplicate(ov: L4Override = {}): boolean {
   sp.addInput({ sourceTransaction: src, sourceOutputIndex: 0, sequence: 0xffffffff })
   sp.addOutput({ lockingScript: LockingScript.fromBinary(out0), satoshis: 1 })
   sp.addOutput({ lockingScript: LockingScript.fromBinary(out1), satoshis: 1 })
-  sp.addOutput({ lockingScript: LockingScript.fromBinary(creatorScript), satoshis: ov.creatorFee ?? CREATOR_FEE })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(publisherScript), satoshis: ov.publisherFee ?? PUBLISHER_FEE })
   sp.addOutput({ lockingScript: LockingScript.fromBinary(holderScript), satoshis: ov.holderFee ?? HOLDER_FEE })
   sp.addOutput({ lockingScript: LockingScript.fromBinary(changeScript), satoshis: 500 })
 
@@ -234,21 +234,21 @@ function runReplicate(ov: L4Override = {}): boolean {
   return interp.validate()
 }
 
-test('L4: valid replicate — token, replica, creator fee, holder fee, change', () => {
+test('L4: valid replicate — token, replica, publisher fee, holder fee, change', () => {
   assert.equal(runReplicate(), true)
 })
 
-test('L4: rejects short-paying the creator fee', () => {
-  assert.throws(() => runReplicate({ creatorFee: CREATOR_FEE - 1 }))
+test('L4: rejects short-paying the publisher fee', () => {
+  assert.throws(() => runReplicate({ publisherFee: PUBLISHER_FEE - 1 }))
 })
 
 test('L4: rejects short-paying the holder fee', () => {
   assert.throws(() => runReplicate({ holderFee: HOLDER_FEE - 1 }))
 })
 
-test('L4: rejects redirecting the creator fee to another address', () => {
+test('L4: rejects redirecting the publisher fee to another address', () => {
   const attacker = Hash.hash160(PrivateKey.fromRandom().toPublicKey().encode(true) as number[])
-  assert.throws(() => runReplicate({ creatorHash: attacker }))
+  assert.throws(() => runReplicate({ publisherHash: attacker }))
 })
 
 test('L4: rejects a replica that does not carry the covenant forward', () => {

@@ -11,37 +11,37 @@ import {
 } from '../src/tokenCodec.ts'
 import { buildEditionLock, parseEditionScript } from '../src/covenant.ts'
 
-const creator = PrivateKey.fromRandom()
-const creatorPub = creator.toPublicKey().toString()
-const creatorPubKeyHash = creator.toPublicKey().toHash() as number[]
+const publisher = PrivateKey.fromRandom()
+const publisherPub = publisher.toPublicKey().toString()
+const publisherPubKeyHash = publisher.toPublicKey().toHash() as number[]
 const coverBytes = Array.from({ length: 300 }, (_, i) => (i * 5 + 1) & 0xff)
 
 // Mirror of app.ts loadCollection's extraction loop over tx1.outputs.
 function extract(outputs: LockingScript[]) {
-  let template, creatorPubKeyHex: string | null = null, storefront, hasContentFile = false
+  let template, publisherPubKeyHex: string | null = null, storefront, hasContentFile = false
   for (const o of outputs) {
-    const t = parseTemplateScript(o); if (t) { template = t.fields; creatorPubKeyHex = t.creatorPubKeyHex }
+    const t = parseTemplateScript(o); if (t) { template = t.fields; publisherPubKeyHex = t.publisherPubKeyHex }
     const s = parseStorefrontScript(o); if (s) storefront = s.fields
     if (parseFileScript(o)) hasContentFile = true
   }
   if (!template) throw new Error('no template')
   const rules = decodeTokenRules(template.tokenRules)
-  let fees: { creator: number; holder: number } | null = null
+  let fees: { publisher: number; holder: number } | null = null
   if (template.covenantScript) {
     const ed = parseEditionScript(LockingScript.fromHex(template.covenantScript))
-    if (ed) fees = { creator: ed.terms.creatorFeeSats, holder: ed.terms.holderFeeSats }
+    if (ed) fees = { publisher: ed.terms.publisherFeeSats, holder: ed.terms.holderFeeSats }
   }
   return {
     name: template.tokenName, description: storefront?.description ?? '',
     cover: storefront?.coverBytes ?? null, encrypted: rules.isEncrypted,
-    replicable: rules.isReplicable, hasContentFile, creatorPubKeyHex, fees,
+    replicable: rules.isReplicable, hasContentFile, publisherPubKeyHex, fees,
   }
 }
 
 test('sales page reads name, description, cover, fees, and lock state from TX1 outputs', () => {
   const templateLock = buildEditionLock({
     tx1Ref: new Array(32).fill(0), ownerPubKey: new Array(33).fill(0), stateData: [],
-    creatorPubKeyHash, creatorFeeSats: 5000, holderFeeSats: 1000, tokenSats: 1,
+    publisherPubKeyHash, publisherFeeSats: 5000, holderFeeSats: 1000, tokenSats: 1,
   })
   const template = {
     tokenName: 'Secret eBook (unlimited editions)',
@@ -50,8 +50,8 @@ test('sales page reads name, description, cover, fees, and lock state from TX1 o
     fileHash: 'ab'.repeat(32),
   }
   const outputs = [
-    buildTemplateScript(creatorPub, template),
-    buildStorefrontScript(creatorPub, {
+    buildTemplateScript(publisherPub, template),
+    buildStorefrontScript(publisherPub, {
       description: 'A tokenized eBook. Holders unlock the full PDF.',
       coverMimeType: 'image/png', coverFileName: 'cover.png', coverBytes,
     }),
@@ -63,8 +63,8 @@ test('sales page reads name, description, cover, fees, and lock state from TX1 o
   assert.deepEqual(info.cover, coverBytes)
   assert.equal(info.encrypted, true)
   assert.equal(info.replicable, true)
-  assert.deepEqual(info.fees, { creator: 5000, holder: 1000 })
-  assert.equal(info.creatorPubKeyHex, creatorPub)
+  assert.deepEqual(info.fees, { publisher: 5000, holder: 1000 })
+  assert.equal(info.publisherPubKeyHex, publisherPub)
 })
 
 test('sales page handles a collection with no storefront output (description empty, no cover)', () => {
@@ -74,7 +74,7 @@ test('sales page handles a collection with no storefront output (description emp
     covenantScript: '',
     fileHash: 'cd'.repeat(32),
   }
-  const info = extract([buildTemplateScript(creatorPub, template)])
+  const info = extract([buildTemplateScript(publisherPub, template)])
   assert.equal(info.name, 'Plain collection')
   assert.equal(info.description, '')
   assert.equal(info.cover, null)

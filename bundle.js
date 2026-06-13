@@ -16870,6 +16870,16 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function outpointKey(t) {
     return `${t.txId}:${t.outputIndex}`;
   }
+  function migrateLegacyKeys(t) {
+    const legacy = t;
+    if (t.publisherPubKeyHashHex === void 0 && legacy.creatorPubKeyHashHex !== void 0) {
+      t.publisherPubKeyHashHex = legacy.creatorPubKeyHashHex;
+    }
+    if (t.publisherFeeSats === void 0 && legacy.creatorFeeSats !== void 0) {
+      t.publisherFeeSats = legacy.creatorFeeSats;
+    }
+    return t;
+  }
   var PharLapStore = class {
     constructor(kv) {
       const fallback = globalThis.localStorage;
@@ -16883,7 +16893,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       if (raw == null || raw === "") return [];
       try {
         const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
+        return Array.isArray(parsed) ? parsed.map(migrateLegacyKeys) : [];
       } catch {
         return [];
       }
@@ -16910,8 +16920,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         addedAt: token.addedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
         kind: token.kind,
         lockHex: token.lockHex,
-        creatorPubKeyHashHex: token.creatorPubKeyHashHex,
-        creatorFeeSats: token.creatorFeeSats,
+        publisherPubKeyHashHex: token.publisherPubKeyHashHex,
+        publisherFeeSats: token.publisherFeeSats,
         holderFeeSats: token.holderFeeSats
       });
       this.write(tokens);
@@ -17169,15 +17179,15 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     return result;
   }
-  function buildTemplateScript(creatorPubKeyHex, data) {
-    return lock(creatorPubKeyHex, encodeTemplateFields(data));
+  function buildTemplateScript(publisherPubKeyHex, data) {
+    return lock(publisherPubKeyHex, encodeTemplateFields(data));
   }
   function parseTemplateScript(script) {
     const d = decode(script);
     if (d == null) return null;
     const fields = decodeTemplateFields(d.fields);
     if (fields == null) return null;
-    return { creatorPubKeyHex: d.pubKeyHex, fields };
+    return { publisherPubKeyHex: d.pubKeyHex, fields };
   }
   function encodeFileFields(data) {
     return [
@@ -17200,15 +17210,15 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       fileBytes: fields[5]
     };
   }
-  function buildFileScript(creatorPubKeyHex, data) {
-    return lock(creatorPubKeyHex, encodeFileFields(data));
+  function buildFileScript(publisherPubKeyHex, data) {
+    return lock(publisherPubKeyHex, encodeFileFields(data));
   }
   function parseFileScript(script) {
     const d = decode(script);
     if (d == null) return null;
     const fields = decodeFileFields(d.fields);
     if (fields == null) return null;
-    return { creatorPubKeyHex: d.pubKeyHex, fields };
+    return { publisherPubKeyHex: d.pubKeyHex, fields };
   }
   function encodeStorefrontFields(data) {
     return [
@@ -17234,15 +17244,15 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       coverBytes: hasCover ? fields[6] : void 0
     };
   }
-  function buildStorefrontScript(creatorPubKeyHex, data) {
-    return lock(creatorPubKeyHex, encodeStorefrontFields(data));
+  function buildStorefrontScript(publisherPubKeyHex, data) {
+    return lock(publisherPubKeyHex, encodeStorefrontFields(data));
   }
   function parseStorefrontScript(script) {
     const d = decode(script);
     if (d == null) return null;
     const fields = decodeStorefrontFields(d.fields);
     if (fields == null) return null;
-    return { creatorPubKeyHex: d.pubKeyHex, fields };
+    return { publisherPubKeyHex: d.pubKeyHex, fields };
   }
   var BONUS_LINK = 1;
   var BONUS_CODE = 2;
@@ -17335,7 +17345,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   async function buildTemplateTx(opts) {
     const sats = opts.outputSats ?? PHARLAP_OUTPUT_SATS;
-    const creatorPub = opts.key.toPublicKey().toString();
+    const publisherPub = opts.key.toPublicKey().toString();
     const address2 = opts.key.toAddress();
     const tx = new Transaction();
     for (const f2 of opts.funding) {
@@ -17345,17 +17355,17 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         unlockingScriptTemplate: new P2PKH().unlock(opts.key)
       });
     }
-    tx.addOutput({ lockingScript: buildTemplateScript(creatorPub, opts.template), satoshis: sats });
+    tx.addOutput({ lockingScript: buildTemplateScript(publisherPub, opts.template), satoshis: sats });
     const templateVout = 0;
     let fileVout = null;
     if (opts.file) {
       fileVout = tx.outputs.length;
-      tx.addOutput({ lockingScript: buildFileScript(creatorPub, opts.file), satoshis: sats });
+      tx.addOutput({ lockingScript: buildFileScript(publisherPub, opts.file), satoshis: sats });
     }
     let storefrontVout = null;
     if (opts.storefront) {
       storefrontVout = tx.outputs.length;
-      tx.addOutput({ lockingScript: buildStorefrontScript(creatorPub, opts.storefront), satoshis: sats });
+      tx.addOutput({ lockingScript: buildStorefrontScript(publisherPub, opts.storefront), satoshis: sats });
     }
     const changeVout = tx.outputs.length;
     tx.addOutput({ lockingScript: new P2PKH().lock(address2), change: true });
@@ -17656,7 +17666,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function replicateTailOps(p) {
     const VALUE1 = u64le(p.tokenSats ?? 1);
-    const OUT2 = serializeOutput(p.creatorFeeSats, p2pkhScript(p.creatorPubKeyHash));
+    const OUT2 = serializeOutput(p.publisherFeeSats, p2pkhScript(p.publisherPubKeyHash));
     const C3pre = [...u64le(p.holderFeeSats), 25, 118, 169, 20];
     const C3suf = [136, 172];
     return [
@@ -17686,7 +17696,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       // out0 ‖ out1
       pushData(OUT2),
       op2(OP_default.OP_CAT),
-      // ‖ out2 (creator fee, constant)
+      // ‖ out2 (publisher fee, constant)
       pushData(C3pre),
       op2(OP_default.OP_CAT),
       pushData([2]),
@@ -17754,7 +17764,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function replicateTailV2Ops(p) {
     const VALUE1 = u64le(p.tokenSats ?? 1);
-    const CREATOR_P2PKH = [25, ...p2pkhScript(p.creatorPubKeyHash)];
+    const PUBLISHER_P2PKH = [25, ...p2pkhScript(p.publisherPubKeyHash)];
     const RESELLER_PRE = [25, 118, 169, 20];
     const RESELLER_SUF = [136, 172];
     return [
@@ -17793,24 +17803,24 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       op2(OP_default.OP_DROP),
       op2(OP_default.OP_BIN2NUM),
       // [.., out0out1, P]
-      // creatorCut = ⌊P×cBps/10000⌋ ; resellerCut = P − creatorCut
+      // publisherCut = ⌊P×pBps/10000⌋ ; resellerCut = P − publisherCut
       op2(OP_default.OP_DUP),
-      pushData(numLE(p.cBps)),
+      pushData(numLE(p.pBps)),
       op2(OP_default.OP_MUL),
       pushData(numLE(1e4)),
       op2(OP_default.OP_DIV),
       op2(OP_default.OP_TUCK),
       op2(OP_default.OP_SUB),
-      // [.., out0out1, creatorCut, resellerCut]
+      // [.., out0out1, publisherCut, resellerCut]
       op2(OP_default.OP_8),
       op2(OP_default.OP_NUM2BIN),
       // resellerCut → 8-byte LE
       op2(OP_default.OP_SWAP),
       op2(OP_default.OP_8),
       op2(OP_default.OP_NUM2BIN),
-      // [.., out0out1, resellerCut8, creatorCut8]
-      // out2 = creatorCut8 ‖ CREATOR_P2PKH ; prepend out0out1
-      pushData(CREATOR_P2PKH),
+      // [.., out0out1, resellerCut8, publisherCut8]
+      // out2 = publisherCut8 ‖ PUBLISHER_P2PKH ; prepend out0out1
+      pushData(PUBLISHER_P2PKH),
       op2(OP_default.OP_CAT),
       // [.., out0out1, resellerCut8, out2]
       pushData([2]),
@@ -17910,7 +17920,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       op2(OP_default.OP_IF),
       ...transferTailOps({ tokenSats: p.tokenSats }),
       op2(OP_default.OP_ELSE),
-      ...replicateTailV2Ops({ tokenSats: p.tokenSats, creatorPubKeyHash: p.creatorPubKeyHash, cBps: p.cBps, c }),
+      ...replicateTailV2Ops({ tokenSats: p.tokenSats, publisherPubKeyHash: p.publisherPubKeyHash, pBps: p.pBps, c }),
       op2(OP_default.OP_ENDIF)
     ];
   }
@@ -17971,26 +17981,26 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (ownerPub == null || ownerPub.length !== 33) return null;
     if (price == null || price.length !== 8) return null;
     if (ch[7].op !== OP_default.OP_2DROP || ch[8].op !== OP_default.OP_2DROP || ch[9].op !== OP_default.OP_2DROP || ch[10].op !== OP_default.OP_DROP) return null;
-    let creatorFeeSats = 0, holderFeeSats = 0;
-    let creatorPubKeyHash = null;
+    let publisherFeeSats = 0, holderFeeSats = 0;
+    let publisherPubKeyHash = null;
     const isP2pkhValue = (d) => d[8] === 25 && d[9] === 118 && d[10] === 169 && d[11] === 20;
     for (const c of ch) {
       const d = chunkBytes(c);
       if (d == null) continue;
       if (d.length === 34 && isP2pkhValue(d)) {
-        creatorFeeSats = leToNum(d.slice(0, 8));
-        creatorPubKeyHash = d.slice(12, 32);
+        publisherFeeSats = leToNum(d.slice(0, 8));
+        publisherPubKeyHash = d.slice(12, 32);
       } else if (d.length === 12 && isP2pkhValue(d)) {
         holderFeeSats = leToNum(d.slice(0, 8));
       }
     }
-    if (creatorPubKeyHash == null) return null;
+    if (publisherPubKeyHash == null) return null;
     return {
       tx1RefHex: utils_exports.toHex(tx1Ref),
       ownerPubKeyHex: utils_exports.toHex(ownerPub),
       priceSats: leToNum(price),
       stateDataHex: utils_exports.toHex(stateData),
-      terms: { creatorPubKeyHash, creatorFeeSats, holderFeeSats }
+      terms: { publisherPubKeyHash, publisherFeeSats, holderFeeSats }
     };
   }
   function parseEditionScriptV2(script) {
@@ -18010,26 +18020,26 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (ownerPub == null || ownerPub.length !== 33) return null;
     if (price == null || price.length !== 8) return null;
     if (ch[7].op !== OP_default.OP_2DROP || ch[8].op !== OP_default.OP_2DROP || ch[9].op !== OP_default.OP_2DROP || ch[10].op !== OP_default.OP_DROP) return null;
-    let creatorPubKeyHash = null;
-    let cBps = null;
+    let publisherPubKeyHash = null;
+    let pBps = null;
     for (let i = 0; i < ch.length; i++) {
       const d = chunkBytes(ch[i]);
       if (d != null && d.length === 26 && d[0] === 25 && d[1] === 118 && d[2] === 169 && d[3] === 20 && d[24] === 136 && d[25] === 172) {
-        creatorPubKeyHash = d.slice(4, 24);
+        publisherPubKeyHash = d.slice(4, 24);
       }
       if (ch[i + 1]?.op === OP_default.OP_MUL && ch[i + 3]?.op === OP_default.OP_DIV) {
         const tenK = chunkBytes(ch[i + 2]);
         const cb = chunkBytes(ch[i]);
-        if (tenK != null && tenK.length === 2 && tenK[0] === 16 && tenK[1] === 39 && cb != null) cBps = leToNum(cb);
+        if (tenK != null && tenK.length === 2 && tenK[0] === 16 && tenK[1] === 39 && cb != null) pBps = leToNum(cb);
       }
     }
-    if (creatorPubKeyHash == null || cBps == null) return null;
+    if (publisherPubKeyHash == null || pBps == null) return null;
     return {
       tx1RefHex: utils_exports.toHex(tx1Ref),
       ownerPubKeyHex: utils_exports.toHex(ownerPub),
       priceSats: leToNum(price),
       stateDataHex: utils_exports.toHex(stateData),
-      terms: { creatorPubKeyHash, cBps }
+      terms: { publisherPubKeyHash, pBps }
     };
   }
   function parseEditionAny(script) {
@@ -18041,7 +18051,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         priceSats: v2.priceSats,
         stateDataHex: v2.stateDataHex,
         isV2: true,
-        terms: { creatorPubKeyHash: v2.terms.creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0, cBps: v2.terms.cBps }
+        terms: { publisherPubKeyHash: v2.terms.publisherPubKeyHash, publisherFeeSats: 0, holderFeeSats: 0, pBps: v2.terms.pBps }
       };
     }
     const v1 = parseEditionScript(script);
@@ -18052,7 +18062,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         priceSats: 0,
         stateDataHex: v1.stateDataHex,
         isV2: false,
-        terms: { ...v1.terms, cBps: 0 }
+        terms: { ...v1.terms, pBps: 0 }
       };
     }
     return null;
@@ -18205,8 +18215,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         tx1Ref,
         ownerPubKey: ownerPub,
         stateData: opts.stateData ?? [],
-        creatorPubKeyHash: opts.terms.creatorPubKeyHash,
-        creatorFeeSats: opts.terms.creatorFeeSats,
+        publisherPubKeyHash: opts.terms.publisherPubKeyHash,
+        publisherFeeSats: opts.terms.publisherFeeSats,
         holderFeeSats: opts.terms.holderFeeSats,
         tokenSats
       });
@@ -18242,8 +18252,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         ownerPubKey: ownerPub,
         price,
         stateData: opts.stateData ?? [],
-        creatorPubKeyHash: opts.terms.creatorPubKeyHash,
-        cBps: opts.terms.cBps,
+        publisherPubKeyHash: opts.terms.publisherPubKeyHash,
+        pBps: opts.terms.pBps,
         tokenSats
       });
       editionVouts.push(tx.outputs.length);
@@ -18345,7 +18355,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     tx.addOutput({ lockingScript: lock2, satoshis: tokenSats });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats });
-    tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(opts.terms.creatorPubKeyHash)), satoshis: opts.terms.creatorFeeSats });
+    tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(opts.terms.publisherPubKeyHash)), satoshis: opts.terms.publisherFeeSats });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash_exports.hash160(holderPub))), satoshis: opts.terms.holderFeeSats });
     if (opts.note && tx1RefHex != null && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
       tx.addOutput({
@@ -18372,8 +18382,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (parsed == null) throw new Error("buildReplicateV2Tx: not a v2 edition covenant");
     const holderPub = editionOwnerPubKey(opts.edition.lockBytes);
     const buyerPub = pubKeyBytes(opts.buyerKey);
-    const creatorCut = Math.floor(parsed.priceSats * parsed.terms.cBps / 1e4);
-    const resellerCut = parsed.priceSats - creatorCut;
+    const publisherCut = Math.floor(parsed.priceSats * parsed.terms.pBps / 1e4);
+    const resellerCut = parsed.priceSats - publisherCut;
     const tx = new Transaction();
     tx.version = 2;
     tx.addInput({
@@ -18391,7 +18401,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     tx.addOutput({ lockingScript: lock2, satoshis: tokenSats });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats });
-    tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(parsed.terms.creatorPubKeyHash)), satoshis: creatorCut });
+    tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(parsed.terms.publisherPubKeyHash)), satoshis: publisherCut });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash_exports.hash160(holderPub))), satoshis: resellerCut });
     if (opts.note && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
       tx.addOutput({
@@ -18415,7 +18425,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       holderTokenVout: 0,
       replicaVout: 1,
       changeVout: changeSats > 0 ? changeVout : null,
-      creatorCut,
+      publisherCut,
       resellerCut
     };
   }
@@ -18477,8 +18487,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       tx1Ref: new Array(32).fill(0),
       ownerPubKey: new Array(33).fill(0),
       stateData,
-      creatorPubKeyHash: params.terms.creatorPubKeyHash,
-      creatorFeeSats: params.terms.creatorFeeSats,
+      publisherPubKeyHash: params.terms.publisherPubKeyHash,
+      publisherFeeSats: params.terms.publisherFeeSats,
       holderFeeSats: params.terms.holderFeeSats,
       tokenSats
     });
@@ -18567,7 +18577,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     };
     const noteSats = params.note ? tokenSats : 0;
     const estFee = Math.ceil(1500 * feePerKb / 1e3);
-    const target = 2 * tokenSats + noteSats + params.terms.creatorFeeSats + params.terms.holderFeeSats + estFee + 1e3;
+    const target = 2 * tokenSats + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1e3;
     const selected = selectFunding(await getSafeUtxos(provider2), target);
     const funding = await toFundingInputs(provider2, selected);
     const rep = await buildReplicateTx({ edition, terms: params.terms, buyerKey, funding, note: params.note, feePerKb });
@@ -18598,8 +18608,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       ownerPubKey: new Array(33).fill(0),
       price,
       stateData,
-      creatorPubKeyHash: params.terms.creatorPubKeyHash,
-      cBps: params.terms.cBps,
+      publisherPubKeyHash: params.terms.publisherPubKeyHash,
+      pBps: params.terms.pBps,
       tokenSats
     });
     const encrypt = params.encrypt === true && params.file != null;
@@ -18698,7 +18708,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       txId: rep.txId,
       replicaOutpoint: { txId: rep.txId, outputIndex: rep.replicaVout },
       lockHex: utils_exports.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary()),
-      creatorCut: rep.creatorCut,
+      publisherCut: rep.publisherCut,
       resellerCut: rep.resellerCut
     };
   }
@@ -18779,7 +18789,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       txId: pick.txId,
       outputIndex: pick.outputIndex,
       lockHex: utils_exports.toHex(lockBytes),
-      terms: { creatorPubKeyHash: ed.terms.creatorPubKeyHash, creatorFeeSats: ed.terms.creatorFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: pick.satoshis },
+      terms: { publisherPubKeyHash: ed.terms.publisherPubKeyHash, publisherFeeSats: ed.terms.publisherFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: pick.satoshis },
       tokenSats: pick.satoshis,
       isV2: ed.isV2,
       priceSats: ed.priceSats
@@ -18836,7 +18846,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           outputIndex: u.outputIndex,
           lockHex,
           tx1RefHex,
-          terms: { creatorPubKeyHash: ed.terms.creatorPubKeyHash, creatorFeeSats: ed.terms.creatorFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: u.satoshis ?? PHARLAP_OUTPUT_SATS },
+          terms: { publisherPubKeyHash: ed.terms.publisherPubKeyHash, publisherFeeSats: ed.terms.publisherFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: u.satoshis ?? PHARLAP_OUTPUT_SATS },
           isV2: ed.isV2,
           priceSats: ed.priceSats,
           ...note ? { sellerNote: note } : {},
@@ -18880,14 +18890,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       notifyVout = tx.outputs.length;
       tx.addOutput({ lockingScript: new P2PKH().lock(recipientAddress), satoshis: 1 });
     }
-    let creatorNotifyVout = null;
-    if (opts.notifyCreator) {
-      if (opts.creatorPubKeyHex == null) {
-        throw new Error("buildTransferTx: notifyCreator requires creatorPubKeyHex");
+    let publisherNotifyVout = null;
+    if (opts.notifyPublisher) {
+      if (opts.publisherPubKeyHex == null) {
+        throw new Error("buildTransferTx: notifyPublisher requires publisherPubKeyHex");
       }
-      const creatorAddress = PublicKey.fromString(opts.creatorPubKeyHex).toAddress();
-      creatorNotifyVout = tx.outputs.length;
-      tx.addOutput({ lockingScript: new P2PKH().lock(creatorAddress), satoshis: 1 });
+      const publisherAddress = PublicKey.fromString(opts.publisherPubKeyHex).toAddress();
+      publisherNotifyVout = tx.outputs.length;
+      tx.addOutput({ lockingScript: new P2PKH().lock(publisherAddress), satoshis: 1 });
     }
     const changeVout = tx.outputs.length;
     tx.addOutput({ lockingScript: new P2PKH().lock(address2), change: true });
@@ -18899,7 +18909,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       txId: tx.id("hex"),
       recipientVout,
       notifyVout,
-      creatorNotifyVout,
+      publisherNotifyVout,
       changeVout: changeSats > 0 ? changeVout : null,
       changeSats,
       tokenFields
@@ -18920,8 +18930,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       funding,
       newStateData: opts.newStateData,
       notify: opts.notify,
-      notifyCreator: opts.notifyCreator,
-      creatorPubKeyHex: opts.creatorPubKeyHex,
+      notifyPublisher: opts.notifyPublisher,
+      publisherPubKeyHex: opts.publisherPubKeyHex,
       outputSats: opts.outputSats,
       feePerKb: opts.feePerKb
     });
@@ -19349,16 +19359,16 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function ownTerms() {
     return {
-      creatorPubKeyHash: Hash_exports.hash160(key.toPublicKey().encode(true)),
-      creatorFeeSats: Math.max(0, parseInt(val("edCreatorFee") || "0", 10)),
+      publisherPubKeyHash: Hash_exports.hash160(key.toPublicKey().encode(true)),
+      publisherFeeSats: Math.max(0, parseInt(val("edPublisherFee") || "0", 10)),
       holderFeeSats: Math.max(0, parseInt(val("edHolderFee") || "0", 10)),
       tokenSats: 1
     };
   }
   function termsFromToken(t) {
     return {
-      creatorPubKeyHash: utils_exports.toArray(t.creatorPubKeyHashHex ?? "", "hex"),
-      creatorFeeSats: t.creatorFeeSats ?? 0,
+      publisherPubKeyHash: utils_exports.toArray(t.publisherPubKeyHashHex ?? "", "hex"),
+      publisherFeeSats: t.publisherFeeSats ?? 0,
       holderFeeSats: t.holderFeeSats ?? 0,
       tokenSats: 1
     };
@@ -19372,8 +19382,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       collectionName: name,
       kind: "edition",
       lockHex: o.lockHex,
-      creatorPubKeyHashHex: utils_exports.toHex(terms.creatorPubKeyHash),
-      creatorFeeSats: terms.creatorFeeSats,
+      publisherPubKeyHashHex: utils_exports.toHex(terms.publisherPubKeyHash),
+      publisherFeeSats: terms.publisherFeeSats,
       holderFeeSats: terms.holderFeeSats,
       ...note?.text ? { sellerNote: note.text } : {},
       ...note?.bonusValue ? { bonusKind: note.bonusKind, bonusValue: note.bonusValue } : {}
@@ -19418,12 +19428,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         return;
       }
       if (mode === "percentage") {
-        const cBps = Math.max(0, Math.min(1e4, parseInt(val("edBps") || "250", 10)));
+        const pBps = Math.max(0, Math.min(1e4, parseInt(val("edBps") || "250", 10)));
         const price = Math.max(1, parseInt(val("edPrice") || "5000", 10));
-        const creatorPubKeyHash = Hash_exports.hash160(key.toPublicKey().encode(true));
-        setStatus(`Minting ${encrypt ? "encrypted " : ""}percentage-pricing collection (publisher ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat)\u2026`);
-        const minted = await createEditionV2(provider, key, { tokenName: name, terms: { creatorPubKeyHash, cBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover });
-        for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0 });
+        const publisherPubKeyHash = Hash_exports.hash160(key.toPublicKey().encode(true));
+        setStatus(`Minting ${encrypt ? "encrypted " : ""}percentage-pricing collection (publisher ${(pBps / 100).toFixed(2)}%, reseller price ${price} sat)\u2026`);
+        const minted = await createEditionV2(provider, key, { tokenName: name, terms: { publisherPubKeyHash, pBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover });
+        for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { publisherPubKeyHash, publisherFeeSats: 0, holderFeeSats: 0 });
         renderTokens();
         setStatus(`Minted ${minted.editions.length} edition(s). Collection ${short(minted.collectionId)} (TX2 ${short(minted.tx2Id)}). Open a Sales page to share a buy link.`, "ok");
         return;
@@ -19439,17 +19449,17 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
   }
   async function onV2SelfTest() {
-    const cBps = Math.max(0, Math.min(1e4, parseInt(val("edBps") || "250", 10)));
+    const pBps = Math.max(0, Math.min(1e4, parseInt(val("edBps") || "250", 10)));
     const price = Math.max(1, parseInt(val("edPrice") || "50000", 10));
     if (!confirm(`MAINNET v2 self-test \u2014 spends real BSV.
 
-Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return;
+Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return;
     setStatus("v2 self-test: minting (TX1 template + TX2 v2 genesis)\u2026");
     try {
-      const creatorPubKeyHash = key.toPublicKey().toHash();
+      const publisherPubKeyHash = key.toPublicKey().toHash();
       const minted = await createEditionV2(provider, key, {
         tokenName: "v2 mainnet test",
-        terms: { creatorPubKeyHash, cBps },
+        terms: { publisherPubKeyHash, pBps },
         initialPriceSats: price
       });
       const ed = minted.editions[0];
@@ -19461,10 +19471,10 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
         editionSourceTx: minted.tx2
       });
       setStatus(
-        `\u2705 v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} \xB7 TX2 ${short(minted.tx2Id)} \xB7 replicate ${short(r2.txId)} \u2014 publisher ${r2.creatorCut} + reseller ${r2.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
+        `\u2705 v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} \xB7 TX2 ${short(minted.tx2Id)} \xB7 replicate ${short(r2.txId)} \u2014 publisher ${r2.publisherCut} + reseller ${r2.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
         "ok"
       );
-      console.log("v2 self-test txids:", { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r2.txId, creatorCut: r2.creatorCut, resellerCut: r2.resellerCut });
+      console.log("v2 self-test txids:", { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r2.txId, publisherCut: r2.publisherCut, resellerCut: r2.resellerCut });
     } catch (e) {
       setStatus(`v2 self-test failed: ${e.message}`, "error");
     }
@@ -19491,7 +19501,7 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
         storeEdition({ txId: r3.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         storeEdition({ txId: r3.replicaOutpoint.txId, outputIndex: r3.replicaOutpoint.outputIndex, lockHex: r3.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         renderTokens();
-        setStatus(`\u2705 v2 replicated. Tx ${short(r3.txId)} \u2014 publisher ${r3.creatorCut} + reseller ${r3.resellerCut} sat.`, "ok");
+        setStatus(`\u2705 v2 replicated. Tx ${short(r3.txId)} \u2014 publisher ${r3.publisherCut} + reseller ${r3.resellerCut} sat.`, "ok");
         return;
       }
       const note = await noteToPropagate(t);
@@ -19679,8 +19689,8 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
           collectionName: name,
           kind: "edition",
           lockHex: e.lockHex,
-          creatorPubKeyHashHex: utils_exports.toHex(e.terms.creatorPubKeyHash),
-          creatorFeeSats: e.terms.creatorFeeSats,
+          publisherPubKeyHashHex: utils_exports.toHex(e.terms.publisherPubKeyHash),
+          publisherFeeSats: e.terms.publisherFeeSats,
           holderFeeSats: e.terms.holderFeeSats,
           ...e.sellerNote?.text ? { sellerNote: e.sellerNote.text } : {},
           ...e.sellerNote?.bonusValue ? { bonusKind: e.sellerNote.bonusKind, bonusValue: e.sellerNote.bonusValue } : {},
@@ -19704,7 +19714,7 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
       const tx = await provider.getSourceTransaction(txId);
       const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript);
       if (ed) {
-        const econ = ed.isV2 ? `publisher ${(ed.terms.cBps / 100).toFixed(2)}% \xB7 price ${ed.priceSats} sat` : `fees ${ed.terms.creatorFeeSats}/${ed.terms.holderFeeSats} sat`;
+        const econ = ed.isV2 ? `publisher ${(ed.terms.pBps / 100).toFixed(2)}% \xB7 price ${ed.priceSats} sat` : `fees ${ed.terms.publisherFeeSats}/${ed.terms.holderFeeSats} sat`;
         setStatus(`\u2705 Valid ${ed.isV2 ? "v2 " : ""}edition covenant \u2014 collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, "ok");
         return;
       }
@@ -19905,14 +19915,14 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
   async function loadCollection(tx1Ref) {
     const tx1 = await provider.getSourceTransaction(tx1Ref);
     let template;
-    let creatorPubKeyHex = null;
+    let publisherPubKeyHex = null;
     let storefront = null;
     let hasContentFile = false;
     for (const o of tx1.outputs) {
       const t = parseTemplateScript(o.lockingScript);
       if (t) {
         template = t.fields;
-        creatorPubKeyHex = t.creatorPubKeyHex;
+        publisherPubKeyHex = t.publisherPubKeyHex;
       }
       const s2 = parseStorefrontScript(o.lockingScript);
       if (s2) storefront = s2.fields;
@@ -19921,15 +19931,15 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
     if (!template) throw new Error("not a PHAR LAP collection (no template output in TX1)");
     const rules = decodeTokenRules(template.tokenRules);
     let fees = null;
-    let isV2 = false, cBps = 0, v2PriceSats = 0;
+    let isV2 = false, pBps = 0, v2PriceSats = 0;
     if (template.covenantScript) {
       try {
         const ed = parseEditionAny(LockingScript.fromHex(template.covenantScript));
         if (ed?.isV2) {
           isV2 = true;
-          cBps = ed.terms.cBps;
+          pBps = ed.terms.pBps;
           v2PriceSats = ed.priceSats;
-        } else if (ed) fees = { creator: ed.terms.creatorFeeSats, holder: ed.terms.holderFeeSats };
+        } else if (ed) fees = { publisher: ed.terms.publisherFeeSats, holder: ed.terms.holderFeeSats };
       } catch {
       }
     }
@@ -19942,10 +19952,10 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
       encrypted: rules.isEncrypted,
       replicable: rules.isReplicable,
       hasContentFile,
-      creatorPubKeyHex,
+      publisherPubKeyHex,
       fees,
       isV2,
-      cBps,
+      pBps,
       v2PriceSats,
       covenantHex: template.covenantScript
     };
@@ -19972,12 +19982,12 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
     if (info.encrypted) badges.push('<span class="badge" style="background:#9e6a03;color:#1a1206">\u{1F512} Holders only</span>');
     else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">\u{1F4CE} Embedded file</span>');
     $("cvBadges").innerHTML = badges.join("");
-    $("cvCreator").textContent = info.creatorPubKeyHex ? `by ${short(info.creatorPubKeyHex)}` : "";
+    $("cvPublisher").textContent = info.publisherPubKeyHex ? `by ${short(info.publisherPubKeyHex)}` : "";
     $("cvDesc").textContent = info.description || "(no description provided)";
     if (info.isV2) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sat</b> <span class="muted">(reseller's price; publisher takes ${(info.cBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.cBps / 1e4)} sat, plus a small network fee)</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sat</b> <span class="muted">(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sat, plus a small network fee)</span>`;
     } else if (info.fees) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(publisher ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.publisher + info.fees.holder} sat</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee)</span>`;
     } else {
       $("cvPrice").innerHTML = '<span class="muted">This collection is not a replicable edition.</span>';
     }
@@ -20002,7 +20012,7 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
     $("cvTitle").textContent = "Loading\u2026";
     $("cvCover").innerHTML = "";
     $("cvBadges").innerHTML = "";
-    $("cvCreator").textContent = "";
+    $("cvPublisher").textContent = "";
     $("cvDesc").textContent = "";
     $("cvPrice").innerHTML = "";
     setCvStatus("Loading collection from the chain\u2026");
@@ -20011,7 +20021,7 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
       currentCollection = { info, holderPubKey };
       renderCollectionView(info);
       setCvStatus("");
-      void loadSellerNote(info, holderPubKey ?? info.creatorPubKeyHex);
+      void loadSellerNote(info, holderPubKey ?? info.publisherPubKeyHex);
     } catch (e) {
       currentCollection = null;
       $("cvTitle").textContent = "Collection not found";
@@ -20172,7 +20182,7 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
       setCvStatus("This collection is not a buyable edition.", "error");
       return;
     }
-    const sellerPub = holderPubKey ?? info.creatorPubKeyHex;
+    const sellerPub = holderPubKey ?? info.publisherPubKeyHex;
     if (!sellerPub) {
       setCvStatus("No seller could be determined for this link.", "error");
       return;
@@ -20186,14 +20196,14 @@ Mint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price 
         setCvStatus("This seller has no edition available right now \u2014 try another link or ask them to mint one.", "error");
         return;
       }
-      const creatorCut = tip.isV2 ? Math.floor(tip.priceSats * info.cBps / 1e4) : tip.terms.creatorFeeSats;
-      const resellerCut = tip.isV2 ? tip.priceSats - creatorCut : tip.terms.holderFeeSats;
-      const price = creatorCut + resellerCut;
+      const publisherCut = tip.isV2 ? Math.floor(tip.priceSats * info.pBps / 1e4) : tip.terms.publisherFeeSats;
+      const resellerCut = tip.isV2 ? tip.priceSats - publisherCut : tip.terms.holderFeeSats;
+      const price = publisherCut + resellerCut;
       const ok = confirm(
         `Buy a copy of \u201C${info.name}\u201D for ${price} sat?
 
-` + (tip.isV2 ? `publisher ${(info.cBps / 100).toFixed(2)}% = ${creatorCut} + reseller ${resellerCut} sat, plus a small network fee.
-` : `publisher ${creatorCut} + holder ${resellerCut} sat, plus a small network fee.
+` + (tip.isV2 ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut} + reseller ${resellerCut} sat, plus a small network fee.
+` : `publisher ${publisherCut} + holder ${resellerCut} sat, plus a small network fee.
 `) + `This is an instant, on-chain purchase.`
       );
       if (!ok) {

@@ -128,8 +128,8 @@ async function onMint(): Promise<void> {
 // ─── editions (experimental covenant) ──────────────────────────────
 function ownTerms(): EditionTerms {
   return {
-    creatorPubKeyHash: Hash.hash160(key.toPublicKey().encode(true) as number[]),
-    creatorFeeSats: Math.max(0, parseInt(val('edCreatorFee') || '0', 10)),
+    publisherPubKeyHash: Hash.hash160(key.toPublicKey().encode(true) as number[]),
+    publisherFeeSats: Math.max(0, parseInt(val('edPublisherFee') || '0', 10)),
     holderFeeSats: Math.max(0, parseInt(val('edHolderFee') || '0', 10)),
     tokenSats: 1,
   }
@@ -137,8 +137,8 @@ function ownTerms(): EditionTerms {
 
 function termsFromToken(t: StoredToken): EditionTerms {
   return {
-    creatorPubKeyHash: Utils.toArray(t.creatorPubKeyHashHex ?? '', 'hex'),
-    creatorFeeSats: t.creatorFeeSats ?? 0,
+    publisherPubKeyHash: Utils.toArray(t.publisherPubKeyHashHex ?? '', 'hex'),
+    publisherFeeSats: t.publisherFeeSats ?? 0,
     holderFeeSats: t.holderFeeSats ?? 0,
     tokenSats: 1,
   }
@@ -147,8 +147,8 @@ function termsFromToken(t: StoredToken): EditionTerms {
 function storeEdition(o: { txId: string; outputIndex: number; lockHex: string }, collectionId: string, name: string, terms: EditionTerms, note?: SellerNote | null): void {
   store.add({
     txId: o.txId, outputIndex: o.outputIndex, collectionId, stateData: '', collectionName: name,
-    kind: 'edition', lockHex: o.lockHex, creatorPubKeyHashHex: Utils.toHex(terms.creatorPubKeyHash),
-    creatorFeeSats: terms.creatorFeeSats, holderFeeSats: terms.holderFeeSats,
+    kind: 'edition', lockHex: o.lockHex, publisherPubKeyHashHex: Utils.toHex(terms.publisherPubKeyHash),
+    publisherFeeSats: terms.publisherFeeSats, holderFeeSats: terms.holderFeeSats,
     ...(note?.text ? { sellerNote: note.text } : {}),
     ...(note?.bonusValue ? { bonusKind: note.bonusKind, bonusValue: note.bonusValue } : {}),
   })
@@ -185,12 +185,12 @@ async function onMintEdition(): Promise<void> {
     const cover = await readFile($('edCover') as HTMLInputElement)
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
     if (mode === 'percentage') {
-      const cBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
+      const pBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
       const price = Math.max(1, parseInt(val('edPrice') || '5000', 10))
-      const creatorPubKeyHash = Hash.hash160(key.toPublicKey().encode(true) as number[])
-      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (publisher ${(cBps / 100).toFixed(2)}%, reseller price ${price} sat)…`)
-      const minted = await createEditionV2(provider, key, { tokenName: name, terms: { creatorPubKeyHash, cBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover })
-      for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0 })
+      const publisherPubKeyHash = Hash.hash160(key.toPublicKey().encode(true) as number[])
+      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (publisher ${(pBps / 100).toFixed(2)}%, reseller price ${price} sat)…`)
+      const minted = await createEditionV2(provider, key, { tokenName: name, terms: { publisherPubKeyHash, pBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover })
+      for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { publisherPubKeyHash, publisherFeeSats: 0, holderFeeSats: 0 })
       renderTokens()
       setStatus(`Minted ${minted.editions.length} edition(s). Collection ${short(minted.collectionId)} (TX2 ${short(minted.tx2Id)}). Open a Sales page to share a buy link.`, 'ok')
       return
@@ -209,14 +209,14 @@ async function onMintEdition(): Promise<void> {
 /** Covenant v2 mainnet self-test: mint a percentage-pricing edition, then permissionlessly replicate it.
  *  A dev-only tool surfaced when the mint form is in percentage mode; reads the same bps/price inputs. */
 async function onV2SelfTest(): Promise<void> {
-  const cBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
+  const pBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
   const price = Math.max(1, parseInt(val('edPrice') || '50000', 10))
-  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (publisher ${(cBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return
+  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return
   setStatus('v2 self-test: minting (TX1 template + TX2 v2 genesis)…')
   try {
-    const creatorPubKeyHash = key.toPublicKey().toHash() as number[]
+    const publisherPubKeyHash = key.toPublicKey().toHash() as number[]
     const minted = await createEditionV2(provider, key, {
-      tokenName: 'v2 mainnet test', terms: { creatorPubKeyHash, cBps }, initialPriceSats: price,
+      tokenName: 'v2 mainnet test', terms: { publisherPubKeyHash, pBps }, initialPriceSats: price,
     })
     const ed = minted.editions[0]
     setStatus(`Minted v2 collection ${short(minted.tx1Id)} · edition ${short(ed.txId)}:${ed.outputIndex}. Replicating (computed split)…`)
@@ -225,10 +225,10 @@ async function onV2SelfTest(): Promise<void> {
     })
     setStatus(
       `✅ v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} · TX2 ${short(minted.tx2Id)} · replicate ${short(r.txId)} ` +
-      `— publisher ${r.creatorCut} + reseller ${r.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
+      `— publisher ${r.publisherCut} + reseller ${r.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
       'ok',
     )
-    console.log('v2 self-test txids:', { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r.txId, creatorCut: r.creatorCut, resellerCut: r.resellerCut })
+    console.log('v2 self-test txids:', { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r.txId, publisherCut: r.publisherCut, resellerCut: r.resellerCut })
   } catch (e) {
     setStatus(`v2 self-test failed: ${(e as Error).message}`, 'error')
   }
@@ -253,7 +253,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
       storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
       storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
       renderTokens()
-      setStatus(`✅ v2 replicated. Tx ${short(r.txId)} — publisher ${r.creatorCut} + reseller ${r.resellerCut} sat.`, 'ok')
+      setStatus(`✅ v2 replicated. Tx ${short(r.txId)} — publisher ${r.publisherCut} + reseller ${r.resellerCut} sat.`, 'ok')
       return
     }
     const note = await noteToPropagate(t)
@@ -421,8 +421,8 @@ async function onCheckIncoming(): Promise<void> {
       const name = await resolveCollectionName(e.tx1RefHex)
       if (store.add({
         txId: e.txId, outputIndex: e.outputIndex, collectionId: e.tx1RefHex, stateData: '', collectionName: name,
-        kind: 'edition', lockHex: e.lockHex, creatorPubKeyHashHex: Utils.toHex(e.terms.creatorPubKeyHash),
-        creatorFeeSats: e.terms.creatorFeeSats, holderFeeSats: e.terms.holderFeeSats,
+        kind: 'edition', lockHex: e.lockHex, publisherPubKeyHashHex: Utils.toHex(e.terms.publisherPubKeyHash),
+        publisherFeeSats: e.terms.publisherFeeSats, holderFeeSats: e.terms.holderFeeSats,
         ...(e.sellerNote?.text ? { sellerNote: e.sellerNote.text } : {}),
         ...(e.sellerNote?.bonusValue ? { bonusKind: e.sellerNote.bonusKind, bonusValue: e.sellerNote.bonusValue } : {}),
         ...(e.height ? { heightHint: e.height } : {}),
@@ -448,8 +448,8 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
     const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript)
     if (ed) {
       const econ = ed.isV2
-        ? `publisher ${(ed.terms.cBps / 100).toFixed(2)}% · price ${ed.priceSats} sat`
-        : `fees ${ed.terms.creatorFeeSats}/${ed.terms.holderFeeSats} sat`
+        ? `publisher ${(ed.terms.pBps / 100).toFixed(2)}% · price ${ed.priceSats} sat`
+        : `fees ${ed.terms.publisherFeeSats}/${ed.terms.holderFeeSats} sat`
       setStatus(`✅ Valid ${ed.isV2 ? 'v2 ' : ''}edition covenant — collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, 'ok')
       return
     }
@@ -637,12 +637,12 @@ interface CollectionInfo {
   encrypted: boolean
   replicable: boolean
   hasContentFile: boolean
-  creatorPubKeyHex: string | null
-  fees: { creator: number; holder: number } | null
-  /** v2 (percentage pricing): creator basis points + the genesis/reference price (the seller's live price is
+  publisherPubKeyHex: string | null
+  fees: { publisher: number; holder: number } | null
+  /** v2 (percentage pricing): publisher basis points + the genesis/reference price (the seller's live price is
    *  resolved at buy time). */
   isV2: boolean
-  cBps: number
+  pBps: number
   v2PriceSats: number
   /** The collection's covenant template bytes (hex) — lets the buy flow reconstruct a holder's edition. */
   covenantHex: string
@@ -673,25 +673,25 @@ function parseHashRoute(): { c: string; h: string | null } | null {
 async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
   const tx1 = await provider.getSourceTransaction(tx1Ref)
   let template: TemplateFields | undefined
-  let creatorPubKeyHex: string | null = null
+  let publisherPubKeyHex: string | null = null
   let storefront: { description: string; coverMimeType?: string; coverBytes?: number[] } | null = null
   let hasContentFile = false
   for (const o of tx1.outputs) {
     const t = parseTemplateScript(o.lockingScript)
-    if (t) { template = t.fields; creatorPubKeyHex = t.creatorPubKeyHex }
+    if (t) { template = t.fields; publisherPubKeyHex = t.publisherPubKeyHex }
     const s = parseStorefrontScript(o.lockingScript)
     if (s) storefront = s.fields
     if (parseFileScript(o.lockingScript)) hasContentFile = true
   }
   if (!template) throw new Error('not a PHAR LAP collection (no template output in TX1)')
   const rules = decodeTokenRules(template.tokenRules)
-  let fees: { creator: number; holder: number } | null = null
-  let isV2 = false, cBps = 0, v2PriceSats = 0
+  let fees: { publisher: number; holder: number } | null = null
+  let isV2 = false, pBps = 0, v2PriceSats = 0
   if (template.covenantScript) {
     try {
       const ed = parseEditionAny(LockingScript.fromHex(template.covenantScript))
-      if (ed?.isV2) { isV2 = true; cBps = ed.terms.cBps; v2PriceSats = ed.priceSats }
-      else if (ed) fees = { creator: ed.terms.creatorFeeSats, holder: ed.terms.holderFeeSats }
+      if (ed?.isV2) { isV2 = true; pBps = ed.terms.pBps; v2PriceSats = ed.priceSats }
+      else if (ed) fees = { publisher: ed.terms.publisherFeeSats, holder: ed.terms.holderFeeSats }
     } catch { /* leave null — non-replicable or unparseable covenant */ }
   }
   const cover = storefront?.coverBytes
@@ -700,7 +700,7 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
     cover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
-    creatorPubKeyHex, fees, isV2, cBps, v2PriceSats, covenantHex: template.covenantScript,
+    publisherPubKeyHex, fees, isV2, pBps, v2PriceSats, covenantHex: template.covenantScript,
   }
 }
 
@@ -721,13 +721,13 @@ function renderCollectionView(info: CollectionInfo): void {
   if (info.encrypted) badges.push('<span class="badge" style="background:#9e6a03;color:#1a1206">🔒 Holders only</span>')
   else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">📎 Embedded file</span>')
   $('cvBadges').innerHTML = badges.join('')
-  $('cvCreator').textContent = info.creatorPubKeyHex ? `by ${short(info.creatorPubKeyHex)}` : ''
+  $('cvPublisher').textContent = info.publisherPubKeyHex ? `by ${short(info.publisherPubKeyHex)}` : ''
   $('cvDesc').textContent = info.description || '(no description provided)'
   if (info.isV2) {
     $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sat</b> <span class="muted">` +
-      `(reseller's price; publisher takes ${(info.cBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.cBps / 10000)} sat, plus a small network fee)</span>`
+      `(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sat, plus a small network fee)</span>`
   } else if (info.fees) {
-    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.creator + info.fees.holder} sat</b> <span class="muted">(publisher ${info.fees.creator} + holder ${info.fees.holder}, plus a small network fee)</span>`
+    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.publisher + info.fees.holder} sat</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee)</span>`
   } else {
     $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
   }
@@ -755,7 +755,7 @@ async function openCollectionView(tx1Ref: string, holderPubKey: string | null): 
   $('cvTitle').textContent = 'Loading…'
   $('cvCover').innerHTML = ''
   $('cvBadges').innerHTML = ''
-  $('cvCreator').textContent = ''
+  $('cvPublisher').textContent = ''
   $('cvDesc').textContent = ''
   $('cvPrice').innerHTML = ''
   setCvStatus('Loading collection from the chain…')
@@ -765,7 +765,7 @@ async function openCollectionView(tx1Ref: string, holderPubKey: string | null): 
     renderCollectionView(info)
     setCvStatus('')
     // Resolve the seller's current promo note (async, best-effort) for the link's seller.
-    void loadSellerNote(info, holderPubKey ?? info.creatorPubKeyHex)
+    void loadSellerNote(info, holderPubKey ?? info.publisherPubKeyHex)
   } catch (e) {
     currentCollection = null
     $('cvTitle').textContent = 'Collection not found'
@@ -904,7 +904,7 @@ async function onGetCopy(): Promise<void> {
   if (buying || !currentCollection) return
   const { info, holderPubKey } = currentCollection
   if ((!info.fees && !info.isV2) || !info.covenantHex) { setCvStatus('This collection is not a buyable edition.', 'error'); return }
-  const sellerPub = holderPubKey ?? info.creatorPubKeyHex
+  const sellerPub = holderPubKey ?? info.publisherPubKeyHex
   if (!sellerPub) { setCvStatus('No seller could be determined for this link.', 'error'); return }
 
   buying = true
@@ -915,14 +915,14 @@ async function onGetCopy(): Promise<void> {
     if (!tip) { setCvStatus('This seller has no edition available right now — try another link or ask them to mint one.', 'error'); return }
 
     // Price = the seller's actual price (v2: their set price split by %; v1: fixed fees).
-    const creatorCut = tip.isV2 ? Math.floor((tip.priceSats * info.cBps) / 10000) : tip.terms.creatorFeeSats
-    const resellerCut = tip.isV2 ? tip.priceSats - creatorCut : tip.terms.holderFeeSats
-    const price = creatorCut + resellerCut
+    const publisherCut = tip.isV2 ? Math.floor((tip.priceSats * info.pBps) / 10000) : tip.terms.publisherFeeSats
+    const resellerCut = tip.isV2 ? tip.priceSats - publisherCut : tip.terms.holderFeeSats
+    const price = publisherCut + resellerCut
     const ok = confirm(
       `Buy a copy of “${info.name}” for ${price} sat?\n\n` +
       (tip.isV2
-        ? `publisher ${(info.cBps / 100).toFixed(2)}% = ${creatorCut} + reseller ${resellerCut} sat, plus a small network fee.\n`
-        : `publisher ${creatorCut} + holder ${resellerCut} sat, plus a small network fee.\n`) +
+        ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut} + reseller ${resellerCut} sat, plus a small network fee.\n`
+        : `publisher ${publisherCut} + holder ${resellerCut} sat, plus a small network fee.\n`) +
       `This is an instant, on-chain purchase.`,
     )
     if (!ok) { setCvStatus('Purchase cancelled.'); return }

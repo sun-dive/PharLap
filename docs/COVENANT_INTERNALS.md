@@ -254,7 +254,7 @@ outputs and compares:
 ```
 out0 = value ‖ pre ‖ ownerPub ‖ suffix        token returned to holder (verbatim)
 out1 = value ‖ pre ‖ buyerPub ‖ suffix        replica to buyer (owner swapped)
-out2 = serializeOutput(creatorFee, P2PKH(creatorHash))   creator fee  (a CONSTANT in the script: OUT2)
+out2 = serializeOutput(publisherFee, P2PKH(publisherHash))   publisher fee  (a CONSTANT in the script: OUT2)
 out3 = u64le(holderFee) ‖ 0x19 76 a9 14 ‖ HASH160(ownerPub) ‖ 88 ac   holder fee (built in-script)
 expected = out0 ‖ out1 ‖ out2 ‖ out3 ‖ change ;  assert HASH256(expected) == hashOutputs
 ```
@@ -284,7 +284,7 @@ Returns `{ tx1RefHex, ownerPubKeyHex, stateDataHex, terms }` or `null`. Reads th
 `chunks[0..5]`, checks `OP_2DROP×3` at `chunks[6..8]`, and recovers the economic **terms straight from the
 covenant body** (so a recipient needs no out-of-band metadata): it scans for the `OUT2` constant (a 34-byte
 push) and `C3pre` (a 12-byte push), both identifiable by the P2PKH signature `0x19 0x76 0xa9 0x14` at byte
-offset 8 → `creatorFee`/`creatorPubKeyHash` from OUT2, `holderFee` from C3pre.
+offset 8 → `publisherFee`/`publisherPubKeyHash` from OUT2, `holderFee` from C3pre.
 
 ---
 
@@ -315,7 +315,7 @@ The templates serialize the spender's "change region" (`tx.outputs.slice(enforce
 
 - **`buildEditionGenesisTx`** — funding (P2PKH) → edition covenant output(s) + change.
 - **`buildReplicateTx`** — `[in0 = holder edition via replicateUnlockTemplate] [in1+ = buyer funding]` →
-  `[0] token→holder (verbatim) [1] replica→buyer (swapEditionOwner) [2] creator fee [3] holder fee
+  `[0] token→holder (verbatim) [1] replica→buyer (swapEditionOwner) [2] publisher fee [3] holder fee
   [4+] change]`. `enforcedOutputCount = 4`.
 - **`buildEditionTransferTx`** — `[in0 = edition via transferUnlockTemplate] [in1+ = funding]` →
   `[0] token→newOwner (swapEditionOwner) [1] 1-sat P2PKH notification to newOwner's address [2] change]`.
@@ -346,7 +346,7 @@ pubkey surgery, operating at `EDITION_OWNER_SCRIPT_OFFSET = 40`.
 - **Adding/removing an enforced output** (e.g. a second fee): update *three* places in lockstep —
   `replicateTailOps`/`transferTailOps` output construction, **every** `OP_PICK`/`OP_ROLL` depth after the
   change (hand-trace!), and the builder's `enforcedOutputCount`. Then Spend-validate.
-- **Changing fees / the creator address**: they live as constants (`OUT2`, `C3pre`) in the tail **and** are
+- **Changing fees / the publisher address**: they live as constants (`OUT2`, `C3pre`) in the tail **and** are
   parsed by `parseEditionScript` via the `19 76 a9 14` signature — keep them P2PKH-serialized and parseable.
 - **Changing the sighash scope**: update `EDITION_SCOPE` and `pushTxConstants(scope)` consistently; the
   preimage offsets in §4.1 are scope-independent, so they don't change.
@@ -403,7 +403,7 @@ script that runs each stage (reverse → hash→num → s-derive → DER assembl
 | `hashOutputs` in preimage | bytes `[len−40, len−8)` |
 | `scriptCode` field in preimage | bytes `[104, len−52)` (incl. its varint) |
 | Record type | `RECORD_EDITION = 0x05` |
-| Replicate selector / outputs | `OP_0`; out `[0]`token `[1]`replica `[2]`creatorFee `[3]`holderFee `[4+]`change |
+| Replicate selector / outputs | `OP_0`; out `[0]`token `[1]`replica `[2]`publisherFee `[3]`holderFee `[4+]`change |
 | Transfer selector / outputs | `OP_1`; out `[0]`token→newOwner `[1]`notification `[2+]`change |
 | Must-stay-minimal | the in-script **signature DER** (Chronicle does NOT relax it) |
 | Validation oracle | `@bsv/sdk` `Spend` with `transactionVersion: 2` |

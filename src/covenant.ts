@@ -13,7 +13,7 @@
  *   L1 — enforce a fixed-bytes output prefix + spender-supplied trailing outputs.  ← this file
  *   L2 — reconstruct the "token returned to holder" output from the script's own bytes (quine).
  *   L3 — reconstruct the buyer's replica output (same covenant, buyer's pubkey substituted).
- *   L4 — creator-fee + holder-fee P2PKH outputs (Addendum A edition-mint layout).
+ *   L4 — publisher-fee + holder-fee P2PKH outputs (Addendum A edition-mint layout).
  *   L5 — transfer/replicate branching + wiring into tokenCodec/collectionBuilder.
  */
 import { OP, LockingScript, Utils, type ScriptChunk } from '@bsv/sdk'
@@ -141,10 +141,10 @@ export interface ReplicateParams {
   fieldPubkeyOffset: number
   /** Satoshis on the token (and replica) outputs. Default 1. */
   tokenSats?: number
-  /** 20-byte hash160 of the immutable creator address (fee recipient). */
-  creatorPubKeyHash: number[]
+  /** 20-byte hash160 of the immutable publisher address (fee recipient). */
+  publisherPubKeyHash: number[]
   /** Fixed fees (sats). */
-  creatorFeeSats: number
+  publisherFeeSats: number
   holderFeeSats: number
   c?: PushTxConstants
 }
@@ -153,7 +153,7 @@ export interface ReplicateParams {
  * L4 — Addendum A "unlimited mints" replicate branch. Permissionlessly enforces (no holder signature):
  *   out[0] token returned to the holder  (covenant re-created verbatim — same owner)
  *   out[1] replica to the buyer          (covenant re-created with owner = buyer pubkey)
- *   out[2] creator fee                   (P2PKH to the immutable creator address, fixed sats)
+ *   out[2] publisher fee                   (P2PKH to the immutable publisher address, fixed sats)
  *   out[3] holder fee                    (P2PKH to the current holder, derived in-script from the owner pubkey)
  *   out[4+] buyer change                 (spender-supplied)
  *
@@ -183,13 +183,13 @@ export function covenantPrefixOps(fieldPubkeyOffset: number, c: PushTxConstants 
 /**
  * Replicate tail (Addendum A). Stack on entry: [ buyerChange, buyerPub, pre, ownerPub, suffix ],
  * alt = [ hashOutputs ]. Enforces out[0] token→holder (verbatim), out[1] replica→buyer (owner swapped),
- * out[2] creator fee, out[3] holder fee, out[4+] buyerChange. Leaves a boolean.
+ * out[2] publisher fee, out[3] holder fee, out[4+] buyerChange. Leaves a boolean.
  */
 export function replicateTailOps(p: {
-  tokenSats?: number; creatorPubKeyHash: number[]; creatorFeeSats: number; holderFeeSats: number
+  tokenSats?: number; publisherPubKeyHash: number[]; publisherFeeSats: number; holderFeeSats: number
 }): ScriptChunk[] {
   const VALUE1 = u64le(p.tokenSats ?? 1)
-  const OUT2 = serializeOutput(p.creatorFeeSats, p2pkhScript(p.creatorPubKeyHash)) // constant
+  const OUT2 = serializeOutput(p.publisherFeeSats, p2pkhScript(p.publisherPubKeyHash)) // constant
   const C3pre = [...u64le(p.holderFeeSats), 0x19, 0x76, 0xa9, 0x14] // value ‖ varint(25) ‖ OP_DUP OP_HASH160 PUSH20
   const C3suf = [0x88, 0xac]                                        // OP_EQUALVERIFY OP_CHECKSIG
   return [
@@ -204,7 +204,7 @@ export function replicateTailOps(p: {
     pushData([5]), op(OP.OP_PICK), op(OP.OP_CAT),
     pushData([2]), op(OP.OP_PICK), op(OP.OP_CAT),
     op(OP.OP_CAT),                                              // out0 ‖ out1
-    pushData(OUT2), op(OP.OP_CAT),                              // ‖ out2 (creator fee, constant)
+    pushData(OUT2), op(OP.OP_CAT),                              // ‖ out2 (publisher fee, constant)
     pushData(C3pre), op(OP.OP_CAT),
     pushData([2]), op(OP.OP_PICK), op(OP.OP_HASH160), op(OP.OP_CAT), // ‖ HASH160(ownerPub)
     pushData(C3suf), op(OP.OP_CAT),                            // → out3 (holder fee)
@@ -249,10 +249,10 @@ export function replicateBranchOps(p: ReplicateParams): ScriptChunk[] {
 
 export interface ReplicateV2Params {
   tokenSats?: number
-  /** 20-byte hash160 of the immutable creator fee address. */
-  creatorPubKeyHash: number[]
-  /** Creator fee in BASIS POINTS (0–10000): creatorCut = ⌊P × cBps / 10000⌋. */
-  cBps: number
+  /** 20-byte hash160 of the immutable publisher fee address. */
+  publisherPubKeyHash: number[]
+  /** Publisher fee in BASIS POINTS (0–10000): publisherCut = ⌊P × pBps / 10000⌋. */
+  pBps: number
   c?: PushTxConstants
 }
 
@@ -260,14 +260,14 @@ export interface ReplicateV2Params {
  * v2 replicate tail. Stack on entry: [ buyerChange, buyerPub, pre, ownerPub, suffix ], alt = [ hashOutputs ].
  * Reads the price P from the edition's price field (the first field in `suffix`) and enforces:
  *   out[0] token→holder (verbatim)   out[1] replica→buyer (owner swapped, price carried verbatim)
- *   out[2] = ⌊P×cBps/10000⌋  → creator P2PKH (baked hash)
- *   out[3] = P − creatorCut   → reseller P2PKH (hash160 of the owner pubkey)
+ *   out[2] = ⌊P×pBps/10000⌋  → publisher P2PKH (baked hash)
+ *   out[3] = P − publisherCut   → reseller P2PKH (hash160 of the owner pubkey)
  *   out[4+] buyerChange
- * cBps (≤10000) guarantees creatorCut ≤ P, so resellerCut ≥ 0. Reseller absorbs integer-division dust.
+ * pBps (≤10000) guarantees publisherCut ≤ P, so resellerCut ≥ 0. Reseller absorbs integer-division dust.
  */
 export function replicateTailV2Ops(p: ReplicateV2Params): ScriptChunk[] {
   const VALUE1 = u64le(p.tokenSats ?? 1)
-  const CREATOR_P2PKH = [0x19, ...p2pkhScript(p.creatorPubKeyHash)] // varint(25) ‖ 25-byte P2PKH (value computed)
+  const PUBLISHER_P2PKH = [0x19, ...p2pkhScript(p.publisherPubKeyHash)] // varint(25) ‖ 25-byte P2PKH (value computed)
   const RESELLER_PRE = [0x19, 0x76, 0xa9, 0x14]                     // varint(25) ‖ OP_DUP OP_HASH160 PUSH20
   const RESELLER_SUF = [0x88, 0xac]                                 // OP_EQUALVERIFY OP_CHECKSIG
   return [
@@ -287,13 +287,13 @@ export function replicateTailV2Ops(p: ReplicateV2Params): ScriptChunk[] {
     pushData([1]), op(OP.OP_SPLIT), op(OP.OP_NIP),
     pushData([8]), op(OP.OP_SPLIT), op(OP.OP_DROP),
     op(OP.OP_BIN2NUM),                                              // [.., out0out1, P]
-    // creatorCut = ⌊P×cBps/10000⌋ ; resellerCut = P − creatorCut
-    op(OP.OP_DUP), pushData(numLE(p.cBps)), op(OP.OP_MUL), pushData(numLE(10000)), op(OP.OP_DIV),
-    op(OP.OP_TUCK), op(OP.OP_SUB),                                  // [.., out0out1, creatorCut, resellerCut]
+    // publisherCut = ⌊P×pBps/10000⌋ ; resellerCut = P − publisherCut
+    op(OP.OP_DUP), pushData(numLE(p.pBps)), op(OP.OP_MUL), pushData(numLE(10000)), op(OP.OP_DIV),
+    op(OP.OP_TUCK), op(OP.OP_SUB),                                  // [.., out0out1, publisherCut, resellerCut]
     op(OP.OP_8), op(OP.OP_NUM2BIN),                                 // resellerCut → 8-byte LE
-    op(OP.OP_SWAP), op(OP.OP_8), op(OP.OP_NUM2BIN),                 // [.., out0out1, resellerCut8, creatorCut8]
-    // out2 = creatorCut8 ‖ CREATOR_P2PKH ; prepend out0out1
-    pushData(CREATOR_P2PKH), op(OP.OP_CAT),                         // [.., out0out1, resellerCut8, out2]
+    op(OP.OP_SWAP), op(OP.OP_8), op(OP.OP_NUM2BIN),                 // [.., out0out1, resellerCut8, publisherCut8]
+    // out2 = publisherCut8 ‖ PUBLISHER_P2PKH ; prepend out0out1
+    pushData(PUBLISHER_P2PKH), op(OP.OP_CAT),                         // [.., out0out1, resellerCut8, out2]
     pushData([2]), op(OP.OP_ROLL), op(OP.OP_SWAP), op(OP.OP_CAT),   // out0out1‖out2   [.., resellerCut8, out012]
     // out3 = resellerCut8 ‖ RESELLER_PRE ‖ HASH160(ownerPub) ‖ RESELLER_SUF ; append
     op(OP.OP_SWAP), op(OP.OP_CAT),                                  // out012‖resellerCut8
@@ -354,22 +354,22 @@ export function editionPriceField(price?: number[]): number[] {
 
 export interface EditionParams extends EditionFields {
   tokenSats?: number
-  /** 20-byte hash160 of the immutable creator fee address. */
-  creatorPubKeyHash: number[]
-  creatorFeeSats: number
+  /** 20-byte hash160 of the immutable publisher fee address. */
+  publisherPubKeyHash: number[]
+  publisherFeeSats: number
   holderFeeSats: number
   /** Offset of the owner pubkey within the scriptCode field (use buildEditionLock to compute it). */
   fieldPubkeyOffset: number
   c?: PushTxConstants
 }
 
-/** v2 edition params: percentage split (cBps) instead of fixed fee amounts (Addendum G). */
+/** v2 edition params: percentage split (pBps) instead of fixed fee amounts (Addendum G). */
 export interface EditionV2Params extends EditionFields {
   tokenSats?: number
-  /** 20-byte hash160 of the immutable creator fee address. */
-  creatorPubKeyHash: number[]
-  /** Creator fee in basis points (0–10000). */
-  cBps: number
+  /** 20-byte hash160 of the immutable publisher fee address. */
+  publisherPubKeyHash: number[]
+  /** Publisher fee in basis points (0–10000). */
+  pBps: number
   fieldPubkeyOffset: number
   c?: PushTxConstants
 }
@@ -434,7 +434,7 @@ export function editionLockV2Ops(p: EditionV2Params): ScriptChunk[] {
     op(OP.OP_IF),
     ...transferTailOps({ tokenSats: p.tokenSats }),
     op(OP.OP_ELSE),
-    ...replicateTailV2Ops({ tokenSats: p.tokenSats, creatorPubKeyHash: p.creatorPubKeyHash, cBps: p.cBps, c }),
+    ...replicateTailV2Ops({ tokenSats: p.tokenSats, publisherPubKeyHash: p.publisherPubKeyHash, pBps: p.pBps, c }),
     op(OP.OP_ENDIF),
   ]
 }
@@ -516,7 +516,7 @@ export interface ParsedEdition {
   priceSats: number
   stateDataHex: string
   /** Economic terms recovered from the covenant body (no out-of-band data needed). */
-  terms: { creatorPubKeyHash: number[]; creatorFeeSats: number; holderFeeSats: number }
+  terms: { publisherPubKeyHash: number[]; publisherFeeSats: number; holderFeeSats: number }
 }
 
 function chunkBytes(c: ScriptChunk): number[] | null {
@@ -535,7 +535,7 @@ function leToNum(b: number[]): number {
 /**
  * Parse an edition covenant locking script into its data fields + economic terms, or null if the
  * script is not a PHAR LAP edition. The terms are recovered from the covenant body itself (the
- * creator-fee and holder-fee output constants), so a recipient can replicate/transfer with no
+ * publisher-fee and holder-fee output constants), so a recipient can replicate/transfer with no
  * out-of-band metadata. Structural parse only — lineage/authenticity is a separate verify step.
  */
 export function parseEditionScript(script: LockingScript): ParsedEdition | null {
@@ -551,21 +551,21 @@ export function parseEditionScript(script: LockingScript): ParsedEdition | null 
   if (ownerPub == null || ownerPub.length !== 33) return null
   if (price == null || price.length !== 8) return null
   if (ch[7].op !== OP.OP_2DROP || ch[8].op !== OP.OP_2DROP || ch[9].op !== OP.OP_2DROP || ch[10].op !== OP.OP_DROP) return null
-  // Recover fees/creator from the OUT2 (34B) and C3pre (12B) constants — both carry the P2PKH
+  // Recover fees/publisher from the OUT2 (34B) and C3pre (12B) constants — both carry the P2PKH
   // signature 0x19 0x76 0xa9 0x14 (varint(25) ‖ OP_DUP OP_HASH160 PUSH20) at offset 8.
-  let creatorFeeSats = 0, holderFeeSats = 0
-  let creatorPubKeyHash: number[] | null = null
+  let publisherFeeSats = 0, holderFeeSats = 0
+  let publisherPubKeyHash: number[] | null = null
   const isP2pkhValue = (d: number[]) => d[8] === 0x19 && d[9] === 0x76 && d[10] === 0xa9 && d[11] === 0x14
   for (const c of ch) {
     const d = chunkBytes(c)
     if (d == null) continue
-    if (d.length === 34 && isP2pkhValue(d)) { creatorFeeSats = leToNum(d.slice(0, 8)); creatorPubKeyHash = d.slice(12, 32) }
+    if (d.length === 34 && isP2pkhValue(d)) { publisherFeeSats = leToNum(d.slice(0, 8)); publisherPubKeyHash = d.slice(12, 32) }
     else if (d.length === 12 && isP2pkhValue(d)) { holderFeeSats = leToNum(d.slice(0, 8)) }
   }
-  if (creatorPubKeyHash == null) return null
+  if (publisherPubKeyHash == null) return null
   return {
     tx1RefHex: Utils.toHex(tx1Ref), ownerPubKeyHex: Utils.toHex(ownerPub), priceSats: leToNum(price),
-    stateDataHex: Utils.toHex(stateData), terms: { creatorPubKeyHash, creatorFeeSats, holderFeeSats },
+    stateDataHex: Utils.toHex(stateData), terms: { publisherPubKeyHash, publisherFeeSats, holderFeeSats },
   }
 }
 
@@ -575,14 +575,14 @@ export interface ParsedEditionV2 {
   /** The reseller's set price (sats). */
   priceSats: number
   stateDataHex: string
-  /** v2 terms recovered from the covenant body: creator address + fee basis points (no fixed amounts). */
-  terms: { creatorPubKeyHash: number[]; cBps: number }
+  /** v2 terms recovered from the covenant body: publisher address + fee basis points (no fixed amounts). */
+  terms: { publisherPubKeyHash: number[]; pBps: number }
 }
 
 /**
  * Parse a v2 (percentage-pricing) edition covenant. A v2 lock bakes NO fixed fee amounts — instead a 26-byte
- * creator-P2PKH constant (`19 76 a9 14 ‖ hash(20) ‖ 88 ac`) and the `<cBps> OP_MUL <10000> OP_DIV` split
- * pattern — so we recover the creator hash + cBps from those. Version byte = 0x04. Returns null if not a v2
+ * publisher-P2PKH constant (`19 76 a9 14 ‖ hash(20) ‖ 88 ac`) and the `<pBps> OP_MUL <10000> OP_DIV` split
+ * pattern — so we recover the publisher hash + pBps from those. Version byte = 0x04. Returns null if not a v2
  * edition (use parseEditionScript for v1).
  */
 export function parseEditionScriptV2(script: LockingScript): ParsedEditionV2 | null {
@@ -599,25 +599,25 @@ export function parseEditionScriptV2(script: LockingScript): ParsedEditionV2 | n
   if (price == null || price.length !== 8) return null
   if (ch[7].op !== OP.OP_2DROP || ch[8].op !== OP.OP_2DROP || ch[9].op !== OP.OP_2DROP || ch[10].op !== OP.OP_DROP) return null
 
-  let creatorPubKeyHash: number[] | null = null
-  let cBps: number | null = null
+  let publisherPubKeyHash: number[] | null = null
+  let pBps: number | null = null
   for (let i = 0; i < ch.length; i++) {
     const d = chunkBytes(ch[i])
-    // creator P2PKH constant: 19 76 a9 14 <hash20> 88 ac (26 bytes)
+    // publisher P2PKH constant: 19 76 a9 14 <hash20> 88 ac (26 bytes)
     if (d != null && d.length === 26 && d[0] === 0x19 && d[1] === 0x76 && d[2] === 0xa9 && d[3] === 0x14 && d[24] === 0x88 && d[25] === 0xac) {
-      creatorPubKeyHash = d.slice(4, 24)
+      publisherPubKeyHash = d.slice(4, 24)
     }
-    // split pattern: <cBps> OP_MUL <10000=10 27> OP_DIV
+    // split pattern: <pBps> OP_MUL <10000=10 27> OP_DIV
     if (ch[i + 1]?.op === OP.OP_MUL && ch[i + 3]?.op === OP.OP_DIV) {
       const tenK = chunkBytes(ch[i + 2])
       const cb = chunkBytes(ch[i])
-      if (tenK != null && tenK.length === 2 && tenK[0] === 0x10 && tenK[1] === 0x27 && cb != null) cBps = leToNum(cb)
+      if (tenK != null && tenK.length === 2 && tenK[0] === 0x10 && tenK[1] === 0x27 && cb != null) pBps = leToNum(cb)
     }
   }
-  if (creatorPubKeyHash == null || cBps == null) return null
+  if (publisherPubKeyHash == null || pBps == null) return null
   return {
     tx1RefHex: Utils.toHex(tx1Ref), ownerPubKeyHex: Utils.toHex(ownerPub), priceSats: leToNum(price),
-    stateDataHex: Utils.toHex(stateData), terms: { creatorPubKeyHash, cBps },
+    stateDataHex: Utils.toHex(stateData), terms: { publisherPubKeyHash, pBps },
   }
 }
 
@@ -629,8 +629,8 @@ export interface ParsedEditionAny {
   stateDataHex: string
   /** True if a v2 (percentage-pricing) edition. */
   isV2: boolean
-  /** Unified terms: fixed fees for v1 (cBps=0), or cBps for v2 (fee amounts 0). */
-  terms: { creatorPubKeyHash: number[]; creatorFeeSats: number; holderFeeSats: number; cBps: number }
+  /** Unified terms: fixed fees for v1 (pBps=0), or pBps for v2 (fee amounts 0). */
+  terms: { publisherPubKeyHash: number[]; publisherFeeSats: number; holderFeeSats: number; pBps: number }
 }
 
 /** Parse an edition covenant of EITHER version (v2 first, then v1). Lets callers handle both transparently. */
@@ -640,14 +640,14 @@ export function parseEditionAny(script: LockingScript): ParsedEditionAny | null 
     return {
       tx1RefHex: v2.tx1RefHex, ownerPubKeyHex: v2.ownerPubKeyHex, priceSats: v2.priceSats,
       stateDataHex: v2.stateDataHex, isV2: true,
-      terms: { creatorPubKeyHash: v2.terms.creatorPubKeyHash, creatorFeeSats: 0, holderFeeSats: 0, cBps: v2.terms.cBps },
+      terms: { publisherPubKeyHash: v2.terms.publisherPubKeyHash, publisherFeeSats: 0, holderFeeSats: 0, pBps: v2.terms.pBps },
     }
   }
   const v1 = parseEditionScript(script)
   if (v1 != null) {
     return {
       tx1RefHex: v1.tx1RefHex, ownerPubKeyHex: v1.ownerPubKeyHex, priceSats: 0,
-      stateDataHex: v1.stateDataHex, isV2: false, terms: { ...v1.terms, cBps: 0 },
+      stateDataHex: v1.stateDataHex, isV2: false, terms: { ...v1.terms, pBps: 0 },
     }
   }
   return null

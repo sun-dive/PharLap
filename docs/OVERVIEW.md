@@ -16,9 +16,9 @@ It is built around two ideas that make it different from a typical token wallet:
 1. **The data lives in a spendable output (PushDrop), not an OP_RETURN.** OP_RETURN data can be pruned
    by miners; a PushDrop output stays in the live UTXO set, so the token — and any embedded file — is
    permanent.
-2. **"Unlimited mints" editions.** A creator can publish content that *any buyer can clone for
+2. **"Unlimited mints" editions.** A publisher can release content that *any buyer can clone for
    themselves*, permissionlessly, paying a fixed fee — enforced by the miners, with no action from the
-   creator or current holder. This is the headline feature, and it is powered by a hand-rolled
+   publisher or current holder. This is the headline feature, and it is powered by a hand-rolled
    **covenant** (a script that constrains how it may be spent).
 
 ---
@@ -54,7 +54,7 @@ TX1 (verified by standard SPV / Merkle proofs, fetched on demand).
 
 ## The "unlimited mints" model
 
-A creator mints an edition and announces it. The edition token sits in a holder's wallet. Then:
+A publisher mints an edition and announces it. The edition token sits in a holder's wallet. Then:
 
 ```
 A buyer clicks "Replicate" on an edition they found:
@@ -62,7 +62,7 @@ A buyer clicks "Replicate" on an edition they found:
   INPUTS                            OUTPUTS  (fixed by the covenant — miners enforce them)
   ┌─ holder's edition  (1 sat) ──┐  ┌─ [0] token returned to the holder      (same edition)
   └─ buyer's funding ────────────┘  ├─ [1] a new replica for the buyer       (same collection)
-                                    ├─ [2] creator fee   → creator's address
+                                    ├─ [2] publisher fee   → publisher's address
                                     ├─ [3] holder fee    → holder's address
                                     └─ [4] change        → buyer
 
@@ -76,7 +76,7 @@ The result:
 
 - **Every holder is automatically a paid distribution point.** A buyer clones from whoever they found,
   and that copy can itself be cloned — the covenant rides forward into every replica.
-- **Fees are fixed forever** at mint time and split between the original creator and the current holder.
+- **Fees are fixed forever** at mint time and split between the original publisher and the current holder.
 - **Ordinary transfers stay free** — royalties are only charged on replication.
 
 The honest limit: because there is no indexer, the *total number of copies ever minted* is not
@@ -101,7 +101,7 @@ external smart-contract toolchain — and runs under BSV's post-Chronicle (versi
 | Action | What it does |
 |---|---|
 | **Mint collection** | Create a fixed-supply collection (+ optional file). |
-| **Mint edition collection** | Create an unlimited-mints collection with fixed creator/holder fees (+ optional file, which can be **encrypted** for holders). |
+| **Mint edition collection** | Create an unlimited-mints collection with fixed publisher/holder fees (+ optional file, which can be **encrypted** for holders). |
 | **Replicate** | Permissionlessly mint your own copy of an edition (pays the fees). |
 | **Sales page / Share** | Open a collection's public storefront and copy a postable link to it. |
 | **Get a copy** | Buy an edition in one click from a sales link (resolve → fund → replicate → reveal). |
@@ -155,7 +155,7 @@ served entirely from the same client-side page (no backend):
 ```
 
 The storefront shows a **cover image**, title, description, the lock state (e.g. "🔒 holders only"), and
-the price (creator + holder fee). A stranger can press **"Get a copy"** and own one in a single click:
+the price (publisher + holder fee). A stranger can press **"Get a copy"** and own one in a single click:
 
 1. the page **resolves the holder's current edition** deterministically (by script hash — no indexer);
 2. it **funds-checks** the visitor's wallet (auto-created on first use; shows an address to top up if needed);

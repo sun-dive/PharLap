@@ -5,9 +5,9 @@
  * Editions are the "unlimited mints" covenant tokens (Addendum A), kept SEPARATE from the plain
  * collectionBuilder so the mainnet-validated plain-token path stays untouched. Three operations:
  *
- *   GENESIS   — mint edition covenant output(s) from a collection (tx1Ref), funded by the creator.
+ *   GENESIS   — mint edition covenant output(s) from a collection (tx1Ref), funded by the publisher.
  *   REPLICATE — anyone permissionlessly mints a copy: spends a holder edition UTXO via the replicate
- *               branch (+ funding) → token back to holder, replica to buyer, creator fee, holder fee,
+ *               branch (+ funding) → token back to holder, replica to buyer, publisher fee, holder fee,
  *               change. No holder signature.
  *   TRANSFER  — the owner moves the token, re-creating the covenant for a new owner (owner-signed).
  *
@@ -37,9 +37,9 @@ import type { WalletProvider, Utxo } from './walletProvider.ts'
 
 /** Common economic parameters of an edition collection (fixed forever at genesis). */
 export interface EditionTerms {
-  /** 20-byte hash160 of the immutable creator fee address. */
-  creatorPubKeyHash: number[]
-  creatorFeeSats: number
+  /** 20-byte hash160 of the immutable publisher fee address. */
+  publisherPubKeyHash: number[]
+  publisherFeeSats: number
   holderFeeSats: number
   tokenSats?: number
 }
@@ -88,7 +88,7 @@ export async function buildEditionGenesisTx(opts: {
   for (let i = 0; i < (opts.mintCount ?? 1); i++) {
     const lock = buildEditionLock({
       tx1Ref, ownerPubKey: ownerPub, stateData: opts.stateData ?? [],
-      creatorPubKeyHash: opts.terms.creatorPubKeyHash, creatorFeeSats: opts.terms.creatorFeeSats,
+      publisherPubKeyHash: opts.terms.publisherPubKeyHash, publisherFeeSats: opts.terms.publisherFeeSats,
       holderFeeSats: opts.terms.holderFeeSats, tokenSats,
     })
     editionVouts.push(tx.outputs.length)
@@ -104,12 +104,12 @@ export async function buildEditionGenesisTx(opts: {
   return { tx, txId: tx.id('hex'), editionVouts, changeVout: changeSats > 0 ? changeVout : null, changeSats }
 }
 
-/** Covenant v2 economic terms: a percentage split (cBps), no fixed fee amounts. */
+/** Covenant v2 economic terms: a percentage split (pBps), no fixed fee amounts. */
 export interface EditionV2Terms {
-  /** 20-byte hash160 of the immutable creator fee address. */
-  creatorPubKeyHash: number[]
-  /** Creator fee in basis points (0–10000). */
-  cBps: number
+  /** 20-byte hash160 of the immutable publisher fee address. */
+  publisherPubKeyHash: number[]
+  /** Publisher fee in basis points (0–10000). */
+  pBps: number
   tokenSats?: number
 }
 
@@ -145,7 +145,7 @@ export async function buildEditionGenesisV2Tx(opts: {
   for (let i = 0; i < (opts.mintCount ?? 1); i++) {
     const lock = buildEditionLockV2({
       tx1Ref, ownerPubKey: ownerPub, price, stateData: opts.stateData ?? [],
-      creatorPubKeyHash: opts.terms.creatorPubKeyHash, cBps: opts.terms.cBps, tokenSats,
+      publisherPubKeyHash: opts.terms.publisherPubKeyHash, pBps: opts.terms.pBps, tokenSats,
     })
     editionVouts.push(tx.outputs.length)
     tx.addOutput({ lockingScript: lock, satoshis: tokenSats })
@@ -285,7 +285,7 @@ export async function buildReplicateTx(opts: {
   // Enforced outputs (order fixed by the covenant), then buyer change.
   tx.addOutput({ lockingScript: lock, satoshis: tokenSats })                                                  // [0] token → holder (verbatim)
   tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats }) // [1] replica → buyer
-  tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(opts.terms.creatorPubKeyHash)), satoshis: opts.terms.creatorFeeSats }) // [2] creator fee
+  tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(opts.terms.publisherPubKeyHash)), satoshis: opts.terms.publisherFeeSats }) // [2] publisher fee
   tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash.hash160(holderPub))), satoshis: opts.terms.holderFeeSats })       // [3] holder fee
   // [4] (optional) seller-note echo, locked to the buyer — a spender-supplied trailing output the covenant
   // appends verbatim (no covenant change). Carries the note + bonus to the buyer + to their future buyers.
@@ -309,7 +309,7 @@ export async function buildReplicateTx(opts: {
 
 /**
  * Covenant v2 replicate (Addendum G): the buyer pays the COMPUTED percentage split of the reseller's price.
- * Reads the price + cBps + creator hash straight from the edition's own v2 lock, so the out[2]/out[3] amounts
+ * Reads the price + pBps + publisher hash straight from the edition's own v2 lock, so the out[2]/out[3] amounts
  * this builds are exactly what the covenant recomputes and enforces. out[0]/out[1]/note/change are unchanged.
  */
 export async function buildReplicateV2Tx(opts: {
@@ -319,15 +319,15 @@ export async function buildReplicateV2Tx(opts: {
   note?: SellerNote
   tokenSats?: number
   feePerKb?: number
-}): Promise<ReplicateResult & { creatorCut: number; resellerCut: number }> {
+}): Promise<ReplicateResult & { publisherCut: number; resellerCut: number }> {
   const tokenSats = opts.tokenSats ?? PHARLAP_OUTPUT_SATS
   const lock = LockingScript.fromBinary(opts.edition.lockBytes)
   const parsed = parseEditionScriptV2(lock)
   if (parsed == null) throw new Error('buildReplicateV2Tx: not a v2 edition covenant')
   const holderPub = editionOwnerPubKey(opts.edition.lockBytes)
   const buyerPub = pubKeyBytes(opts.buyerKey)
-  const creatorCut = Math.floor((parsed.priceSats * parsed.terms.cBps) / 10000)
-  const resellerCut = parsed.priceSats - creatorCut
+  const publisherCut = Math.floor((parsed.priceSats * parsed.terms.pBps) / 10000)
+  const resellerCut = parsed.priceSats - publisherCut
   const tx = new Transaction()
   tx.version = 2
 
@@ -344,8 +344,8 @@ export async function buildReplicateV2Tx(opts: {
 
   tx.addOutput({ lockingScript: lock, satoshis: tokenSats })                                                  // [0] token → holder (verbatim)
   tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats }) // [1] replica → buyer
-  tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(parsed.terms.creatorPubKeyHash)), satoshis: creatorCut })       // [2] creator cut = ⌊P·c%⌋
-  tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash.hash160(holderPub))), satoshis: resellerCut })             // [3] reseller cut = P − creatorCut
+  tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(parsed.terms.publisherPubKeyHash)), satoshis: publisherCut })       // [2] publisher cut = ⌊P·c%⌋
+  tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash.hash160(holderPub))), satoshis: resellerCut })             // [3] reseller cut = P − publisherCut
   if (opts.note && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
     tx.addOutput({
       lockingScript: buildNoteScript(Utils.toHex(buyerPub), {
@@ -363,7 +363,7 @@ export async function buildReplicateV2Tx(opts: {
   const changeSats = tx.outputs[changeVout]?.satoshis ?? 0
   return {
     tx, txId: tx.id('hex'), holderTokenVout: 0, replicaVout: 1,
-    changeVout: changeSats > 0 ? changeVout : null, creatorCut, resellerCut,
+    changeVout: changeSats > 0 ? changeVout : null, publisherCut, resellerCut,
   }
 }
 
@@ -474,7 +474,7 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   // Covenant template committed in TX1: structurally identical to an edition but with identity zeroed.
   const templateLock = buildEditionLock({
     tx1Ref: new Array(32).fill(0), ownerPubKey: new Array(33).fill(0), stateData,
-    creatorPubKeyHash: params.terms.creatorPubKeyHash, creatorFeeSats: params.terms.creatorFeeSats,
+    publisherPubKeyHash: params.terms.publisherPubKeyHash, publisherFeeSats: params.terms.publisherFeeSats,
     holderFeeSats: params.terms.holderFeeSats, tokenSats,
   })
 
@@ -569,7 +569,7 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
   // Buyer funds: token + replica sats, both fees, the optional note output, miner fee, margin.
   const noteSats = params.note ? tokenSats : 0
   const estFee = Math.ceil((1500 * feePerKb) / 1000)
-  const target = 2 * tokenSats + noteSats + params.terms.creatorFeeSats + params.terms.holderFeeSats + estFee + 1000
+  const target = 2 * tokenSats + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1000
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding = await toFundingInputs(provider, selected)
 
@@ -612,7 +612,7 @@ export async function createEditionV2(provider: WalletProvider, key: PrivateKey,
   // v2 covenant template (identity zeroed) committed in TX1 — lets a holder's edition be reconstructed later.
   const templateLock = buildEditionLockV2({
     tx1Ref: new Array(32).fill(0), ownerPubKey: new Array(33).fill(0), price, stateData,
-    creatorPubKeyHash: params.terms.creatorPubKeyHash, cBps: params.terms.cBps, tokenSats,
+    publisherPubKeyHash: params.terms.publisherPubKeyHash, pBps: params.terms.pBps, tokenSats,
   })
 
   // Tier-1 encrypt the file: store ciphertext, carry the wrapped content key + keySalt in the template.
@@ -682,7 +682,7 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
   /** Seller's note (promo + optional bonus) to echo onto the buyer's copy (hands-off propagation, like v1). */
   note?: SellerNote
   feePerKb?: number
-}): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string; creatorCut: number; resellerCut: number }> {
+}): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string; publisherCut: number; resellerCut: number }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
   const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
   const parsed = parseEditionScriptV2(LockingScript.fromBinary(lockBytes))
@@ -692,7 +692,7 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
   const edition: EditionUtxo = {
     txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis: tokenSats, lockBytes, sourceTx,
   }
-  // Buyer funds: token + replica sats + the price (creator + reseller cuts) + the optional note output + miner fee + margin.
+  // Buyer funds: token + replica sats + the price (publisher + reseller cuts) + the optional note output + miner fee + margin.
   const noteSats = params.note ? tokenSats : 0
   const estFee = Math.ceil((1600 * feePerKb) / 1000)
   const target = 2 * tokenSats + noteSats + parsed.priceSats + estFee + 1000
@@ -708,7 +708,7 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
   return {
     txId: rep.txId, replicaOutpoint: { txId: rep.txId, outputIndex: rep.replicaVout },
     lockHex: Utils.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary()),
-    creatorCut: rep.creatorCut, resellerCut: rep.resellerCut,
+    publisherCut: rep.publisherCut, resellerCut: rep.resellerCut,
   }
 }
 
@@ -817,7 +817,7 @@ export async function resolveHolderEdition(provider: WalletProvider, params: {
   const pick = unspent.find(u => u.satoshis > 0) ?? unspent[0]
   return {
     txId: pick.txId, outputIndex: pick.outputIndex, lockHex: Utils.toHex(lockBytes),
-    terms: { creatorPubKeyHash: ed.terms.creatorPubKeyHash, creatorFeeSats: ed.terms.creatorFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: pick.satoshis },
+    terms: { publisherPubKeyHash: ed.terms.publisherPubKeyHash, publisherFeeSats: ed.terms.publisherFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: pick.satoshis },
     tokenSats: pick.satoshis, isV2: ed.isV2, priceSats: ed.priceSats,
   }
 }
@@ -883,7 +883,7 @@ export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: 
       try { note = readNoteFromTx(await provider.getSourceTransaction(u.txId), tx1RefHex) } catch { /* best-effort */ }
       found.push({
         txId: u.txId, outputIndex: u.outputIndex, lockHex, tx1RefHex,
-        terms: { creatorPubKeyHash: ed.terms.creatorPubKeyHash, creatorFeeSats: ed.terms.creatorFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: u.satoshis ?? PHARLAP_OUTPUT_SATS },
+        terms: { publisherPubKeyHash: ed.terms.publisherPubKeyHash, publisherFeeSats: ed.terms.publisherFeeSats, holderFeeSats: ed.terms.holderFeeSats, tokenSats: u.satoshis ?? PHARLAP_OUTPUT_SATS },
         isV2: ed.isV2, priceSats: ed.priceSats,
         ...(note ? { sellerNote: note } : {}),
         ...(u.height ? { height: u.height } : {}),

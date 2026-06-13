@@ -22,8 +22,8 @@ export interface StoredToken {
   /** Edition locking script (hex) — needed to replicate/transfer the covenant. */
   lockHex?: string
   /** Edition terms (for rebuilding replicate/transfer txs). */
-  creatorPubKeyHashHex?: string
-  creatorFeeSats?: number
+  publisherPubKeyHashHex?: string
+  publisherFeeSats?: number
   holderFeeSats?: number
   /** Seller's promo note captured at purchase (the note that was current when this copy was bought). */
   sellerNote?: string
@@ -45,6 +45,19 @@ function outpointKey(t: { txId: string; outputIndex: number }): string {
   return `${t.txId}:${t.outputIndex}`
 }
 
+/** Back-compat: tokens stored before the creator→publisher rename used `creator*` JSON keys.
+ *  Map them onto the current `publisher*` fields on read so older holdings survive a reload. */
+function migrateLegacyKeys(t: StoredToken): StoredToken {
+  const legacy = t as StoredToken & { creatorPubKeyHashHex?: string; creatorFeeSats?: number }
+  if (t.publisherPubKeyHashHex === undefined && legacy.creatorPubKeyHashHex !== undefined) {
+    t.publisherPubKeyHashHex = legacy.creatorPubKeyHashHex
+  }
+  if (t.publisherFeeSats === undefined && legacy.creatorFeeSats !== undefined) {
+    t.publisherFeeSats = legacy.creatorFeeSats
+  }
+  return t
+}
+
 export class PharLapStore {
   private kv: KVStore
 
@@ -61,7 +74,7 @@ export class PharLapStore {
     if (raw == null || raw === '') return []
     try {
       const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? (parsed as StoredToken[]) : []
+      return Array.isArray(parsed) ? (parsed as StoredToken[]).map(migrateLegacyKeys) : []
     } catch {
       return []
     }
@@ -86,8 +99,8 @@ export class PharLapStore {
     addedAt?: string
     kind?: 'edition'
     lockHex?: string
-    creatorPubKeyHashHex?: string
-    creatorFeeSats?: number
+    publisherPubKeyHashHex?: string
+    publisherFeeSats?: number
     holderFeeSats?: number
   }): boolean {
     const tokens = this.list()
@@ -103,8 +116,8 @@ export class PharLapStore {
       addedAt: token.addedAt ?? new Date().toISOString(),
       kind: token.kind,
       lockHex: token.lockHex,
-      creatorPubKeyHashHex: token.creatorPubKeyHashHex,
-      creatorFeeSats: token.creatorFeeSats,
+      publisherPubKeyHashHex: token.publisherPubKeyHashHex,
+      publisherFeeSats: token.publisherFeeSats,
       holderFeeSats: token.holderFeeSats,
     })
     this.write(tokens)
