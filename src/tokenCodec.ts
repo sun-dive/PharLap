@@ -8,15 +8,15 @@
  * Three record types, distinguished by `recordType` (data field [2]):
  *
  *   TOKEN    (lock = owner)   [ P, version, 0x02, TX1-ref(32B), stateData ]
- *   TEMPLATE (lock = creator) [ P, version, 0x01, tokenName, tokenRules(8B), covenantScript, fileHash?(32B) ]
- *   FILE     (lock = creator) [ P, version, 0x03, mimeType, fileName, fileBytes ]
+ *   TEMPLATE (lock = publisher) [ P, version, 0x01, tokenName, tokenRules(8B), covenantScript, fileHash?(32B) ]
+ *   FILE     (lock = publisher) [ P, version, 0x03, mimeType, fileName, fileBytes ]
  *
  * Identity = Collection ID = the txid of TX1 (the template transaction), carried by every
  * token as `TX1-ref`. There is no per-token Token ID and no on-chain proof chain — see
  * PLAN.md (Addendum C) and docs/DEVIATIONS_FROM_MPT.md.
  *
  * The PushDrop lock key carries ownership/authorship: the token's lock key is the current
- * owner; the template/file outputs' lock key is the creator. So the creator pubkey is
+ * owner; the template/file outputs' lock key is the publisher. So the publisher pubkey is
  * recovered from the template output via `pushDrop.decode`, not stored as a field.
  */
 import { LockingScript, Utils } from '@bsv/sdk'
@@ -30,11 +30,11 @@ export const P_VERSION = 0x03
 export const RECORD_TEMPLATE = 0x01
 export const RECORD_TOKEN = 0x02
 export const RECORD_FILE = 0x03
-/** Reserved for creator↔holder messages / announcements (encrypted or public). See PLAN.md Addendum E. */
+/** Reserved for publisher↔holder messages / announcements (encrypted or public). See PLAN.md Addendum E. */
 export const RECORD_MESSAGE = 0x04
 // 0x05 = RECORD_EDITION (covenant edition token; defined in covenant.ts).
 /** Immutable storefront metadata (description + optional public cover image) — a TX1 output, locked to
- *  the creator. The "what you're buying" face of a collection, public even when the content is encrypted.
+ *  the publisher. The "what you're buying" face of a collection, public even when the content is encrypted.
  *  See PLAN.md Step 2 (D3): immutable data lives in an immutable record, never in the mutable stateData. */
 export const RECORD_STOREFRONT = 0x06
 /** A seller's MUTABLE promo note for a collection (review, bonuses, redemption instructions). Public,
@@ -46,8 +46,8 @@ export const RECORD_NOTE = 0x07
 /** tokenRules restrictions bitfield. */
 export const RESTRICTION_FUNGIBLE = 0x0001 // interchangeable amounts (satoshis = units)
 export const RESTRICTION_REPLICABLE = 0x0002 // "unlimited mints" edition-replication covenant active
-/** Reserved: transfers report to the creator (1-sat creator notification) so the creator can track
- *  current holders. Creator's explicit, visible choice at mint; private by default. See PLAN.md Addendum E. */
+/** Reserved: transfers report to the publisher (1-sat publisher notification) so the publisher can track
+ *  current holders. Publisher's explicit, visible choice at mint; private by default. See PLAN.md Addendum E. */
 export const RESTRICTION_TRACK_TRANSFERS = 0x0004
 /** The embedded file is Tier-1 encrypted: the FILE output holds ciphertext; the template carries the
  *  wrapped content key + keySalt (see contentCrypto / PLAN.md Addendum F). */
@@ -248,20 +248,20 @@ export function decodeTemplateFields(fields: number[][]): TemplateFields | null 
   return result
 }
 
-/** Build a TX1 template PushDrop locking script, locked to the creator's public key. */
-export function buildTemplateScript(creatorPubKeyHex: string, data: TemplateFields): LockingScript {
-  return pushDropLock(creatorPubKeyHex, encodeTemplateFields(data))
+/** Build a TX1 template PushDrop locking script, locked to the publisher's public key. */
+export function buildTemplateScript(publisherPubKeyHex: string, data: TemplateFields): LockingScript {
+  return pushDropLock(publisherPubKeyHex, encodeTemplateFields(data))
 }
 
-/** Parse a TX1 template output → creator pubkey + template fields, or null. */
+/** Parse a TX1 template output → publisher pubkey + template fields, or null. */
 export function parseTemplateScript(
   script: LockingScript,
-): { creatorPubKeyHex: string; fields: TemplateFields } | null {
+): { publisherPubKeyHex: string; fields: TemplateFields } | null {
   const d = pushDropDecode(script)
   if (d == null) return null
   const fields = decodeTemplateFields(d.fields)
   if (fields == null) return null
-  return { creatorPubKeyHex: d.pubKeyHex, fields }
+  return { publisherPubKeyHex: d.pubKeyHex, fields }
 }
 
 // ─── FILE record (TX1, optional) ────────────────────────────────────
@@ -295,19 +295,19 @@ export function decodeFileFields(fields: number[][]): FileFields | null {
   }
 }
 
-/** Build a FILE PushDrop locking script, locked to the creator's public key. */
-export function buildFileScript(creatorPubKeyHex: string, data: FileFields): LockingScript {
-  return pushDropLock(creatorPubKeyHex, encodeFileFields(data))
+/** Build a FILE PushDrop locking script, locked to the publisher's public key. */
+export function buildFileScript(publisherPubKeyHex: string, data: FileFields): LockingScript {
+  return pushDropLock(publisherPubKeyHex, encodeFileFields(data))
 }
 
 export function parseFileScript(
   script: LockingScript,
-): { creatorPubKeyHex: string; fields: FileFields } | null {
+): { publisherPubKeyHex: string; fields: FileFields } | null {
   const d = pushDropDecode(script)
   if (d == null) return null
   const fields = decodeFileFields(d.fields)
   if (fields == null) return null
-  return { creatorPubKeyHex: d.pubKeyHex, fields }
+  return { publisherPubKeyHex: d.pubKeyHex, fields }
 }
 
 // ─── STOREFRONT record (TX1, optional) ──────────────────────────────
@@ -354,19 +354,19 @@ export function decodeStorefrontFields(fields: number[][]): StorefrontFields | n
   }
 }
 
-/** Build a STOREFRONT PushDrop locking script, locked to the creator's public key. */
-export function buildStorefrontScript(creatorPubKeyHex: string, data: StorefrontFields): LockingScript {
-  return pushDropLock(creatorPubKeyHex, encodeStorefrontFields(data))
+/** Build a STOREFRONT PushDrop locking script, locked to the publisher's public key. */
+export function buildStorefrontScript(publisherPubKeyHex: string, data: StorefrontFields): LockingScript {
+  return pushDropLock(publisherPubKeyHex, encodeStorefrontFields(data))
 }
 
 export function parseStorefrontScript(
   script: LockingScript,
-): { creatorPubKeyHex: string; fields: StorefrontFields } | null {
+): { publisherPubKeyHex: string; fields: StorefrontFields } | null {
   const d = pushDropDecode(script)
   if (d == null) return null
   const fields = decodeStorefrontFields(d.fields)
   if (fields == null) return null
-  return { creatorPubKeyHex: d.pubKeyHex, fields }
+  return { publisherPubKeyHex: d.pubKeyHex, fields }
 }
 
 // ─── NOTE record (seller's mutable promo note) ──────────────────────
@@ -466,7 +466,7 @@ export interface DecodedTokenRules {
   isFungible: boolean
   isReplicable: boolean
   isUnlimited: boolean
-  /** Transfers report to the creator (RESTRICTION_TRACK_TRANSFERS) — reserved, see Addendum E. */
+  /** Transfers report to the publisher (RESTRICTION_TRACK_TRANSFERS) — reserved, see Addendum E. */
   isTracked: boolean
   /** The embedded file is Tier-1 encrypted (RESTRICTION_ENCRYPTED) — see Addendum F. */
   isEncrypted: boolean

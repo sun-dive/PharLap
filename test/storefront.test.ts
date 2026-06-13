@@ -9,8 +9,8 @@ import {
   type StorefrontFields,
 } from '../src/tokenCodec.ts'
 
-const creator = PrivateKey.fromRandom()
-const creatorPub = creator.toPublicKey().toString()
+const publisher = PrivateKey.fromRandom()
+const publisherPub = publisher.toPublicKey().toString()
 const coverBytes = Array.from({ length: 512 }, (_, i) => (i * 7 + 3) & 0xff)
 
 test('storefront with cover image: fields round-trip through the PushDrop', () => {
@@ -20,9 +20,9 @@ test('storefront with cover image: fields round-trip through the PushDrop', () =
     coverFileName: 'cover.png',
     coverBytes,
   }
-  const parsed = parseStorefrontScript(buildStorefrontScript(creatorPub, sf))
+  const parsed = parseStorefrontScript(buildStorefrontScript(publisherPub, sf))
   assert.ok(parsed)
-  assert.equal(parsed!.creatorPubKeyHex, creatorPub)
+  assert.equal(parsed!.publisherPubKeyHex, publisherPub)
   assert.equal(parsed!.fields.description, sf.description)
   assert.equal(parsed!.fields.coverMimeType, 'image/png')
   assert.equal(parsed!.fields.coverFileName, 'cover.png')
@@ -31,7 +31,7 @@ test('storefront with cover image: fields round-trip through the PushDrop', () =
 
 test('storefront without a cover: description-only round-trips, cover fields undefined', () => {
   const sf: StorefrontFields = { description: 'Just a blurb, no cover art.' }
-  const parsed = parseStorefrontScript(buildStorefrontScript(creatorPub, sf))
+  const parsed = parseStorefrontScript(buildStorefrontScript(publisherPub, sf))
   assert.ok(parsed)
   assert.equal(parsed!.fields.description, sf.description)
   assert.equal(parsed!.fields.coverMimeType, undefined)
@@ -44,14 +44,14 @@ test('storefront with empty description (cover only) decodes to empty string, no
     description: '',
     coverMimeType: 'image/jpeg', coverFileName: 'art.jpg', coverBytes,
   }
-  const parsed = parseStorefrontScript(buildStorefrontScript(creatorPub, sf))
+  const parsed = parseStorefrontScript(buildStorefrontScript(publisherPub, sf))
   assert.ok(parsed)
   assert.equal(parsed!.fields.description, '')
   assert.deepEqual(parsed!.fields.coverBytes, coverBytes)
 })
 
 test('a storefront output classifies as RECORD_STOREFRONT (0x06)', () => {
-  const script = buildStorefrontScript(creatorPub, { description: 'hi' })
+  const script = buildStorefrontScript(publisherPub, { description: 'hi' })
   assert.equal(classifyRecord(script), RECORD_STOREFRONT)
 })
 

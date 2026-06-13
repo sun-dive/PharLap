@@ -98,7 +98,7 @@ copy ("edition") **without any interaction from the current holder's wallet**.
   preimage `hashOutputs`:
   - `[0]` token **returned** to current holder (same fields/owner, re-locked under same covenant)
   - `[1]` **replica** to buyer (cloned fields, owner = buyer pubkey, same covenant)
-  - `[2]` creator fee → creator address (immutable field)
+  - `[2]` publisher fee → publisher address (immutable field)
   - `[3]` holder fee → current holder address
   - `[4+]` buyer change
 - `ANYONECANPAY` zeroes `hashPrevouts`, so arbitrary buyers can attach funding without breaking the covenant.
@@ -141,11 +141,11 @@ copy ("edition") **without any interaction from the current holder's wallet**.
   deep-walk.
 - These tokens are **heavier** (the covenant script must travel in every output — no immutable-field
   omission saving from the transfer-size analysis).
-- **Fee outputs are P2PKH and double as discovery breadcrumbs.** The replication tx pays the creator fee and
+- **Fee outputs are P2PKH and double as discovery breadcrumbs.** The replication tx pays the publisher fee and
   the holder fee as **P2PKH** outputs (to `hash160(pubkey)`, address-indexed) — NOT P2P-K. The covenant reads the
-  holder's pubkey from its own `scriptCode` and `OP_HASH160`es it to build the holder-fee P2PKH; the creator
-  address comes from TX1's committed creator pubkey. Because these are address-indexed payments, the **seller**
-  discovers their returned token (and the **creator** discovers royalties) via the normal `scanIncoming` flow —
+  holder's pubkey from its own `scriptCode` and `OP_HASH160`es it to build the holder-fee P2PKH; the publisher
+  address comes from TX1's committed publisher pubkey. Because these are address-indexed payments, the **seller**
+  discovers their returned token (and the **publisher** discovers royalties) via the normal `scanIncoming` flow —
   the holder fee tx appears in the seller's address history, then `findOwnedTokenOutputs` finds the returned
   token. So the permissionless-replication flow needs **no extra notification output** (the buyer built the tx
   and already knows the replica's outpoint). Edge case: this relies on a non-zero holder fee (always true in this
@@ -201,7 +201,7 @@ user: applies UNIFORMLY to every collection.
 (interchangeable editions, fungible-like); individual UTXOs are tracked by outpoint (txid:index) + stateData.
 **No per-token Token ID, no carried `genesisTxId`** (confirmed with user — it adds bytes + a genesis/transfer
 field asymmetry without improving security; a forger can carry the real value, only descent-walking catches
-forgeries). Creator's pubkey = the **lock key of the TX1 template output** (recoverable via `pushDrop.decode`),
+forgeries). Publisher's pubkey = the **lock key of the TX1 template output** (recoverable via `pushDrop.decode`),
 so it needs no separate field.
 
 **Why this model:**
@@ -219,10 +219,10 @@ bundles (BRC-62/64; `@bsv/sdk` `BEEF_V1/V2`/`MerklePath`) for offline verificati
 ⇒ transfers are **minimal and constant-size forever**.
 
 **Verification (lightweight default, per Addendum A):** read token's `TX1-ref` → fetch TX1 (non-prunable) →
-read name/rules/covenant/file + creator pubkey → check the token's covenant matches TX1's commitment → confirm
+read name/rules/covenant/file + publisher pubkey → check the token's covenant matches TX1's commitment → confirm
 the **immediate parent** (Input 0's source) is a confirmed, covenant-matching PHAR LAP token of the same
 collection. (A fresh forgery fails this because its Input 0 is a plain funding UTXO, not a covenant-C token.)
-Optional **deep verify** walks the descent and recognizes the creator-authorized genesis via the creator pubkey
+Optional **deep verify** walks the descent and recognizes the publisher-authorized genesis via the publisher pubkey
 committed in TX1.
 
 **Covenant note:** the executable covenant still travels in each token's locking script (miners can't read TX1).
@@ -235,8 +235,8 @@ fetch TX1 once (cached per collection).
 
 **Field layouts** (PushDrop data fields, in order; the PushDrop lock key carries ownership/authorship):
 - Token (lock=owner):     `[ P(0x50), version(0x03), recordType(0x02=TOKEN), TX1-ref(32B), stateData ]`
-- Template (lock=creator): `[ P, version, recordType(0x01=TEMPLATE), tokenName, tokenRules(8B), covenantScript, fileHash?(32B) ]`
-- File (lock=creator):     `[ P, version, recordType(0x03=FILE), mimeType, fileName, fileBytes ]`  (separate TX1 output, optional)
+- Template (lock=publisher): `[ P, version, recordType(0x01=TEMPLATE), tokenName, tokenRules(8B), covenantScript, fileHash?(32B) ]`
+- File (lock=publisher):     `[ P, version, recordType(0x03=FILE), mimeType, fileName, fileBytes ]`  (separate TX1 output, optional)
 
 `stateData` is mutable and NOT in the identity (empty normalizes to a 1-byte sentinel `"00"`). `tokenAttributes`
 is removed entirely. Phase 2 builds the field codec for these (no proof-chain/OP_RETURN-cargo codec needed);
@@ -280,47 +280,47 @@ integration, where the wallet supplies outputs + BEEF proofs and WoC disappears.
 
 ---
 
-## Addendum E — Creator↔holder messaging + transfer tracking (later feature; hooks reserved) [design 2026-06-10]
+## Addendum E — Publisher↔holder messaging + transfer tracking (later feature; hooks reserved) [design 2026-06-10]
 
-Use case: a creator mints tokenized content, sells editions (permissionless replication), and later wants to
+Use case: a publisher mints tokenized content, sells editions (permissionless replication), and later wants to
 reach holders (announcements, airdrops, loyalty, direct messages). Two complementary models:
 
-- **Broadcast (pull / private):** the creator publishes a message ONCE, anchored to the collection's creator
-  pubkey (the TX1 lock key). Any **current** holder polls the creator's address for `RECORD_MESSAGE` records
-  referencing their collection. Reaches current owners regardless of free transfers, flat cost, and the creator
+- **Broadcast (pull / private):** the publisher publishes a message ONCE, anchored to the collection's publisher
+  pubkey (the TX1 lock key). Any **current** holder polls the publisher's address for `RECORD_MESSAGE` records
+  referencing their collection. Reaches current owners regardless of free transfers, flat cost, and the publisher
   need not know who the holders are.
-- **Targeted / per-holder (push):** the creator sends a (1-sat P2PKH + payload) to specific holders. Requires
-  knowing each holder's **pubkey** — which the creator learns from (a) royalty payments revealing original
+- **Targeted / per-holder (push):** the publisher sends a (1-sat P2PKH + payload) to specific holders. Requires
+  knowing each holder's **pubkey** — which the publisher learns from (a) royalty payments revealing original
   buyers' replica outputs, and (b) **transfer notifications** for current holders (below). Enables encrypted DMs.
 
-**Encryption:** because tokens lock to **pubkeys**, the creator learns each holder's pubkey and can **ECIES-encrypt**
+**Encryption:** because tokens lock to **pubkeys**, the publisher learns each holder's pubkey and can **ECIES-encrypt**
 a message to it (only the holder's privkey decrypts). `@bsv/sdk` has ECIES. Messages may be public or encrypted.
 
-**Transfer tracking (creator-notify) — per-collection, opt-in, private by default.** Ordinary transfers are
-fee-free and invisible to the creator, so the royalty list reflects original buyers, not current owners. To let
-the creator track **current** holders, a transfer can add a **1-sat P2PKH notification to the creator's address**
-(creator pubkey = TX1 lock key); the creator scans their address → sees every transfer → reads the new owner's
-pubkey. This makes the collection **creator-tracked** (creator sees the ownership graph) — a deliberate privacy
-trade, so it is the **creator's explicit choice at mint** via the `RESTRICTION_TRACK_TRANSFERS` rules bit
+**Transfer tracking (publisher-notify) — per-collection, opt-in, private by default.** Ordinary transfers are
+fee-free and invisible to the publisher, so the royalty list reflects original buyers, not current owners. To let
+the publisher track **current** holders, a transfer can add a **1-sat P2PKH notification to the publisher's address**
+(publisher pubkey = TX1 lock key); the publisher scans their address → sees every transfer → reads the new owner's
+pubkey. This makes the collection **publisher-tracked** (publisher sees the ownership graph) — a deliberate privacy
+trade, so it is the **publisher's explicit choice at mint** via the `RESTRICTION_TRACK_TRANSFERS` rules bit
 (visible to buyers before they buy). Private by default.
 
 **Holder opt-out is a hard requirement (consent-first).** The buyer/current holder must always be able to
 opt out, which constrains the design:
-- **Opt out of being tracked:** the creator-notify is a **default-on, holder-OMITTABLE** output — the holder's
+- **Opt out of being tracked:** the publisher-notify is a **default-on, holder-OMITTABLE** output — the holder's
   wallet can simply not add it on transfer. Therefore transfer-tracking is a **wallet convention, NOT
-  covenant-enforced** (a covenant mandate would remove the opt-out). If a creator ever wants *enforced* tracking,
+  covenant-enforced** (a covenant mandate would remove the opt-out). If a publisher ever wants *enforced* tracking,
   that must be **disclosed before purchase** (informed consent — the buyer sees it and can decline to buy); it is
   never silent.
 - **Opt out of receiving/seeing messages:** always available at the receiver — the holder's wallet filters/ignores
-  creator messages regardless of what the creator sends.
-- **Boundary:** the *initial purchase* unavoidably reveals an original buyer to the creator (buying = paying the
+  publisher messages regardless of what the publisher sends.
+- **Boundary:** the *initial purchase* unavoidably reveals an original buyer to the publisher (buying = paying the
   royalty-fee output). Opt-out covers ongoing transfer-tracking + message display, not the purchase-time royalty.
 The messaging-phase UI must surface these choices to the buyer/holder explicitly.
 
 **Hooks reserved now (no full feature yet):**
 - `tokenCodec`: `RECORD_MESSAGE = 0x04`; `RESTRICTION_TRACK_TRANSFERS = 0x0004` (+ `decodeTokenRules().isTracked`).
-- `transfer.buildTransferTx`/`createTransfer`: optional `notifyCreator` + `creatorPubKeyHex` → adds the 1-sat
-  creator notification (`creatorNotifyVout`). Off by default.
+- `transfer.buildTransferTx`/`createTransfer`: optional `notifyPublisher` + `publisherPubKeyHex` → adds the 1-sat
+  publisher notification (`publisherNotifyVout`). Off by default.
 - ECIES for encrypted messages: deferred to the messaging phase (SDK provides it).
 
 Deferred: the announcement/pull channel, the message record format (plaintext + ECIES), and covenant-enforced
@@ -343,7 +343,7 @@ MessageFields + build/parseMessageScript. Minimal "Messages" UI (compose + Check
   senders/collections you know), attachment gallery, notifications. The current UI is a minimal functional
   stub (send + flat inbox list, transient).
 - **v1.1 protocol:** ride-along messages (attach a message/key to a transfer/replicate tx — same-tx key
-  delivery for a sale); broadcast/pull announcement channel (anchored to TX1 creator pubkey, plaintext or
+  delivery for a sale); broadcast/pull announcement channel (anchored to TX1 publisher pubkey, plaintext or
   group-encrypted); ephemeral/anonymous ECIES mode (unauthenticated, hides senderPubKey); `FILE_REF` + the
   hosting layer for large bonus files.
 
@@ -366,28 +366,28 @@ direct-from-chain access hard," **NOT foolproof DRM**. Confirmed direction with 
 analysis — smallest blast radius; a server is needed anyway for shareable sales links, so the availability
 dependency is non-blocking):
 - Buyers **self-mint** editions permissionlessly (covenant, Addendum A); they don't have K at mint time.
-- The creator runs a **delivery service that is keyless except for K**: it watches the chain (read-only) for paid
-  editions (via the creator-fee / notification, Addendum E), verifies on-chain that the requester holds a paid
+- The publisher runs a **delivery service that is keyless except for K**: it watches the chain (read-only) for paid
+  editions (via the publisher-fee / notification, Addendum E), verifies on-chain that the requester holds a paid
   edition, then delivers `wrappedK = ECIES(K, buyerPubKey)` **off-chain** (HTTP, or a message per Addendum E).
   Because ECIES delivery is ephemeral and the buyer can *verify* K works (it must AES-decrypt the on-chain
-  ciphertext to a file matching `fileHash`), the service needs **no creator signing key** — the creator's
+  ciphertext to a file matching `fileHash`), the service needs **no publisher signing key** — the publisher's
   identity/spending key stays **offline/cold**.
 - The buyer's wallet verifies K, stores `wrappedK` locally (keyed by collection), and the **View** flow unwraps
   K → AES-decrypts the on-chain ciphertext → displays.
 - For **wallet-mediated transfers** (seller → buyer), the seller re-wraps K into the recipient's token
   **`stateData`** on-chain, so the key travels with the token. So `wrappedK` lives in `stateData` (on-chain, for
-  transfers / creator-held editions) and/or the buyer's local store (off-chain delivery for permissionless
+  transfers / publisher-held editions) and/or the buyer's local store (off-chain delivery for permissionless
   purchases); View checks both.
 
 **Key exposure:**
 - *Shared, irreducible:* the delivery service holds K; a breach leaks K → the immutable on-chain ciphertext is
   decryptable forever. Acceptable under the "inconvenience, not DRM" bar.
-- *Minimized:* the service holds **only K** (no creator signing key). Use **per-collection K** so one breach
+- *Minimized:* the service holds **only K** (no publisher signing key). Use **per-collection K** so one breach
   doesn't expose other collections; a dedicated hot key for any signing; manual delivery for low volume.
 
 **Honest limits:** any holder can extract K + plaintext; no revocation of past holders; once K leaks the
-ciphertext is forever decryptable; viewing new permissionless purchases depends on the creator's delivery service
-(an *availability*, not *trust*, dependency — it's the creator's own service).
+ciphertext is forever decryptable; viewing new permissionless purchases depends on the publisher's delivery service
+(an *availability*, not *trust*, dependency — it's the publisher's own service).
 
 **Building blocks (all confirmed in @bsv/sdk):** `SymmetricKey` (AES-GCM) for the file; `ECIES` (ephemeral) +
 `PrivateKey.deriveSharedSecret` for key-wrapping; `Random` for K. `stateData` carries `wrappedK` on the on-chain path.
@@ -417,14 +417,14 @@ profitable, so leaking sabotages a market the holder benefits from). Tx-separati
 friction only. The user's chosen v1 shape, and it needs no new infra (messaging is built).
 
 **Tier 2 — live sender, no *dedicated* server, real per-recipient ECIES (private, needs availability).** The
-creator's or a holder's online wallet delivers `wrappedK = ECIES(K, buyerPub)` per buyer (RECORD_MESSAGE key-part,
+publisher's or a holder's online wallet delivers `wrappedK = ECIES(K, buyerPub)` per buyer (RECORD_MESSAGE key-part,
 or `stateData` on a wallet-mediated transfer). `K` is *not* exposed on-chain (ciphertext to one recipient). Cost:
 someone must be online to respond; not instant/permissionless. A strict upgrade over Tier 1, reachable today.
 
 **Tier 3 — server, per-buyer WATERMARK + encryption, content OFF-chain (the polished product).** Content leaves
-the chain; the chain becomes the **trustless purchase receipt** (the edition mint / replicate + creator-fee). A
+the chain; the chain becomes the **trustless purchase receipt** (the edition mint / replicate + publisher-fee). A
 **"keyless-except-content"** server watches the chain read-only, verifies the buyer paid, **watermarks the
-plaintext per-buyer**, encrypts (to the buyer's pubkey), and serves for immediate download. Creator *signing* key
+plaintext per-buyer**, encrypts (to the buyer's pubkey), and serves for immediate download. Publisher *signing* key
 stays cold; the server now holds the **master content** (the asset to protect). **Critical distinction:** per-buyer
 *encryption* ≠ per-buyer *watermark*. Encryption protects transit/at-rest + binds to identity, but the *decrypted*
 plaintext is byte-identical → untraceable once shared. A *watermark* makes each buyer's plaintext unique → a
@@ -446,7 +446,7 @@ the **resale incentive** = leaking is *cheap to avoid* (just buy), *traceable to
 my own royalty stream). That flips DRM from punish-only to reward-the-honest-path — most schemes lack the carrot.
 
 **Phasing:** Tier 1 buildable now (no new infra; AES-GCM the file + a key-part message + a shared encode). Tier 2
-reachable now (creator-active messaging). Tier 3 = the eventual product (needs the server that shareable links /
+reachable now (publisher-active messaging). Tier 3 = the eventual product (needs the server that shareable links /
 large files need anyway). Pair any tier with **per-buyer watermarking** for traceability. Primitives: `SymmetricKey`
 (AES-GCM), `ECIES`, `Random`; RECORD_MESSAGE key-part (Addendum E) for Tier 1/2 delivery; off-chain HTTP for Tier 3.
 
@@ -455,14 +455,14 @@ large files need anyway). Pair any tier with **per-buyer watermarking** for trac
 ## Addendum G — Covenant v2: ranged percentage pricing + reseller-set price [design 2026-06-13]
 
 **Why now.** Still experimental, so this is the moment to finalize the covenant to its intended FINAL shape.
-A covenant is immutable per collection; once testers/creators mint on v1 the wallet must parse both forever.
+A covenant is immutable per collection; once testers/publishers mint on v1 the wallet must parse both forever.
 Locking the design before the public deploy avoids a v1/v2 split. The public test therefore runs on the
 FINALISED covenant (Step 3 deploy waits for it). Non-covenant work already shipped (sales pages, recovery,
 notes, bonuses) is unaffected.
 
 **Motivation — BSV/fiat volatility.** A fee/price fixed in sats at mint drifts badly if BSV moves (a 5,000-sat
 royalty becomes expensive if BSV 50×'s; a fixed ebook price is unrealistic long-term). Fix: the price becomes a
-**percentage of a reseller-chosen price within a creator-set band** — each reseller acts as a local
+**percentage of a reseller-chosen price within a publisher-set band** — each reseller acts as a local
 price-discovery agent tracking real value within bounds, no oracle. Decision (2026-06-13): **percentage-only**
 fee model (no fixed-sat mode). Permissionless replicate stays the core (buyer one-clicks; reseller PRE-SETS the
 price; no holder action at buy time).
@@ -470,32 +470,32 @@ price; no holder action at buy time).
 ### Money flow (final)
 
 ```
-Reseller sets price P  — within the creator's [min,max], range-checked, owner-signed (mutable field)
+Reseller sets price P  — within the publisher's [min,max], range-checked, owner-signed (mutable field)
 A buyer one-clicks "Get a copy" and pays:
   • P, split by the COVENANT (miner-enforced):
-        creator  = ⌊P × c%⌋        → creator address (baked at mint)
-        reseller = P − creator      → holder address (hash160 of the owner pubkey, in-script)
+        publisher  = ⌊P × c%⌋        → publisher address (baked at mint)
+        reseller = P − publisher      → holder address (hash160 of the owner pubkey, in-script)
   • + host fee (page-added, CONVENTION, on top):
         host     = ⌊P × h%⌋        → the domain that served the link
   • + token sat + network fee
 ```
 
-- `c%` (creator), `h%` (host), and `[min,max]` are **baked at mint, immutable** (like today's fixed fees).
-- **Rounding:** integer math; the reseller absorbs truncation dust (creator gets exactly `⌊P×c%⌋`, reseller the
-  remainder). Express `c%` as **basis points** (`cBps`, 0–10000): `creatorCut = P × cBps / 10000`.
-- **Range matters:** `min` stops a reseller zeroing `P` to dodge the creator's cut (and sets the royalty floor
+- `c%` (publisher), `h%` (host), and `[min,max]` are **baked at mint, immutable** (like today's fixed fees).
+- **Rounding:** integer math; the reseller absorbs truncation dust (publisher gets exactly `⌊P×c%⌋`, reseller the
+  remainder). Express `c%` as **basis points** (`pBps`, 0–10000): `publisherCut = P × pBps / 10000`.
+- **Range matters:** `min` stops a reseller zeroing `P` to dodge the publisher's cut (and sets the royalty floor
   `c%·min`); `max` caps it. Aligned incentives: the reseller maximises their own `(1−c%)·P` against demand; the
-  creator rides at `c%` of whatever the market bears.
+  publisher rides at `c%` of whatever the market bears.
 
-### Creator fee = covenant-enforced; host fee = convention (the asymmetry)
+### Publisher fee = covenant-enforced; host fee = convention (the asymmetry)
 
-- **Creator fee** is enforceable: the creator address is fixed at mint, so the covenant computes `P×c%` and
+- **Publisher fee** is enforceable: the publisher address is fixed at mint, so the covenant computes `P×c%` and
   REJECTS any sale that doesn't pay it. Miner-guaranteed.
 - **Host fee** is NOT enforceable in the covenant: the host is *whichever domain served that link* — unknown at
   mint, unverifiable in-script (a buyer would set the host address to themselves and pocket it). So it stays a
   **page-added trailing output** (same sticky-default trade as the seller-note), now a percentage. It sits **on
   top** of the split, not inside it — otherwise a buyer bypassing the hosted page would shrink the *reseller's*
-  take (penalising the reseller for something they don't control). On-top means creator+reseller are unaffected
+  take (penalising the reseller for something they don't control). On-top means publisher+reseller are unaffected
   by host-fee bypass; only the host loses if bypassed. Configured per-deployment (a `<meta>`/build constant for
   the host address + `h%`); disclosed in the buy confirmation (price + platform fee + network).
 
@@ -517,9 +517,9 @@ prefix + `selector OP_IF transfer OP_ELSE replicate OP_ENDIF`. v2:
    re-publishing; the mutable field is for PRICE only.)
 3. **Replicate branch: computed fee outputs** (replace the baked constants).
    - Extract `P` from the price field; `OP_BIN2NUM` → number.
-   - `creatorCut = P × cBps / 10000` (`OP_MUL`,`OP_DIV`; `cBps` baked). `resellerCut = P − creatorCut` (`OP_SUB`).
+   - `publisherCut = P × pBps / 10000` (`OP_MUL`,`OP_DIV`; `pBps` baked). `resellerCut = P − publisherCut` (`OP_SUB`).
    - Encode each as an 8-byte LE output value with **`OP_NUM2BIN(cut, 8)`** (positive, `< 2^63` ⇒ correct
-     unsigned LE), then `‖ varint(25) ‖ P2PKH(addr)` — `out[2]` to the baked creator hash, `out[3]` to
+     unsigned LE), then `‖ varint(25) ‖ P2PKH(addr)` — `out[2]` to the baked publisher hash, `out[3]` to
      `hash160(ownerPub)`. Post-Chronicle big-int math means no overflow for sane `P`; **cap `max` well under
      `2^63`** and keep the price field 8 bytes. Optionally re-check `min ≤ P ≤ max` here too (defence in depth;
      primary enforcement is at update so a reseller can't store an out-of-range price).
@@ -533,7 +533,7 @@ prefix + `selector OP_IF transfer OP_ELSE replicate OP_ENDIF`. v2:
 
 Percentage fees auto-track the reseller-adjusted `P`, but the `[min,max]` **band is fixed in sats at mint**, so
 it absorbs MODERATE volatility (reseller slides within the band) — an extreme long-term move drifts the band
-itself. Mitigations: set a **wide band** (near-total reseller latitude, soft creator floor/ceiling); or, much
+itself. Mitigations: set a **wide band** (near-total reseller latitude, soft publisher floor/ceiling); or, much
 later, a **fiat-pegged price via an oracle** (robust but reintroduces a trusted feed — out of scope).
 
 ### Build / validation plan (foundational — spec-first, validate before wiring)
@@ -543,14 +543,14 @@ later, a **fiat-pegged price via an oracle** (robust but reintroduces a trusted 
 2. **Prototype the riskiest pieces on MAINNET first** — the `OP_MUL/OP_DIV/OP_NUM2BIN` fee computation and the
    owner-signed UPDATE branch — confirming a real mint → set-price(update) → permissionless-replicate cycle is
    relayed/mined (mirror the original replicate validation at block 953007). Only then layer the rest.
-3. Wire `editionBuilder` (genesis takes `cBps`/`min`/`max`/initial price; new `updatePrice`; replicate reads the
-   price; funding/disclosure) + the wallet UI (creator sets `c%`,`min`,`max` at mint; holder sets price within
+3. Wire `editionBuilder` (genesis takes `pBps`/`min`/`max`/initial price; new `updatePrice`; replicate reads the
+   price; funding/disclosure) + the wallet UI (publisher sets `c%`,`min`,`max` at mint; holder sets price within
    band; buy shows the computed split + host surcharge) + the host-fee percentage trailing output.
 4. **Then** deploy the public test (Step 3) on the finalised covenant.
 
 ### Open knobs to confirm at build time
 
-- `cBps` precision (basis points = 0.01% granularity — enough?); default `c%`, `h%`, and `[min,max]` suggestions.
+- `pBps` precision (basis points = 0.01% granularity — enough?); default `c%`, `h%`, and `[min,max]` suggestions.
 - Whether to re-check range at replicate (defence-in-depth) vs update-only.
 - Price field 8 bytes (cap `max` ≪ 2^63) — confirm sane upper bound.
 - Host-fee config surface (per-deployment `<meta>` vs build constant) + how the page learns its own host address.
@@ -560,13 +560,13 @@ later, a **fiat-pegged price via an oracle** (robust but reintroduces a trusted 
 Same family as the host fee — **page-added, percentage, on-top, convention** (bypassable like web/MLM
 referrals, NOT miner-enforced) — a sellable future feature, no covenant change.
 
-- **Elegant fit:** PharLap's resale chain IS a referral chain (creator → A → B → C). We already propagate data
+- **Elegant fit:** PharLap's resale chain IS a referral chain (publisher → A → B → C). We already propagate data
   sale-to-sale (the seller-note echo) and track provenance, so a propagating **referrer stack** (the last N
   sellers'/referrers' payout addresses) can ride the same outputs. Each buy pays the stack on a **decaying
   schedule** (e.g. L1 2%, L2 1%, L3 0.5%), then pushes the current seller and trims to N.
 - **Knobs:** levels `N` + the percentage schedule (**cap the total** — every level adds to the buyer's
   surcharge and stacks with the host fee); **resale-chain referrers** (owners) vs **affiliate-link referrers**
-  (promoters who needn't own); schedule set by the **creator at mint** (TX1 metadata, non-covenant) so honest
+  (promoters who needn't own); schedule set by the **publisher at mint** (TX1 metadata, non-covenant) so honest
   deployments honour it.
 - **Reality:** convention only — a buyer/modified page can omit payouts or stuff the stack with their own
   addresses (the same circumvention the web already lives with). That's the accepted price of zero covenant
@@ -598,7 +598,7 @@ and WoC's free per-IP limit applies per-user, not in aggregate.
 ### Step 2 — Shareable collection links + public view page (the headline feature)
 The "shareable sales link" from the product vision; builds on the existing permissionless replicate.
 - **Hash routing** (works on static hosting, no server routing): `…/#c=<TX1-txid>` → read `location.hash` on load.
-- **Collection view page:** fetch TX1, render name + rules/terms (creator/holder fees, edition flag, encrypted
+- **Collection view page:** fetch TX1, render name + rules/terms (publisher/holder fees, edition flag, encrypted
   flag), and a file preview (decrypt if a holder + encrypted, else a "🔒 holders only" placeholder).
 - **"Get a copy"** action = the permissionless replicate flow (auto-create a wallet if none). Friction to design:
   a stranger needs funds — testnet faucet, or a "fund this address to buy" prompt on mainnet.
@@ -656,7 +656,7 @@ standard BSV wallet sends to an address; the pubkey is only for receiving tokens
 tiny pure-JS encoder bundled (no external image calls).
 
 **D2 — Resolution: any-holder address-history trace now; tiny read-cache resolver service in production.**
-Every current holder gets their OWN share page, not just the creator. Share link carries collection + holder:
+Every current holder gets their OWN share page, not just the publisher. Share link carries collection + holder:
 `…/#c=<TX1-txid>&h=<holderPubKey>`. The page resolves **that holder's current edition tip** by tracing the
 holder's address history forward (holder-fee P2PKH breadcrumb + the `out[0]`-returns-to-holder quine make the
 edition discoverable at its latest outpoint). The buyer's replicate then sources from *that* holder, so the
@@ -666,7 +666,7 @@ outpoint); the trace walks only that holder's short forward chain, not the hot-t
 = a read-cache only (try cached outpoint → if spent-and-not-returned, re-trace → cache new tip); never an
 authority, no custody, pure optimization over the same trustless trace. Tests: live trace each load, no cache.
 
-**D3 — Storefront metadata (immutable creator record + a mutable seller-note on the notification output).**
+**D3 — Storefront metadata (immutable publisher record + a mutable seller-note on the notification output).**
 
 A field-semantics correction drove the final structure: `tokenRules` is meant to be immutable and `stateData`
 mutable — but under the edition COVENANT *both* are immutable, because the covenant reconstructs each spend's
@@ -678,9 +678,9 @@ state must live OUTSIDE the covenant script (a companion/notification output tha
 scriptCode). Resulting split — *covenant token carries what must be immutable; a sibling output carries what
 must be mutable*:
 
-- *Immutable "what you're buying"* (creator, set at mint): a dedicated **`RECORD_STOREFRONT` (0x06) output in
+- *Immutable "what you're buying"* (publisher, set at mint): a dedicated **`RECORD_STOREFRONT` (0x06) output in
   TX1** = `[P, ver, 0x06, description, coverMimeType, coverFileName, coverBytes]`. Self-contained and immutable
-  by virtue of living in TX1 (the Collection ID tx, never re-created, locked to the creator); every edition binds
+  by virtue of living in TX1 (the Collection ID tx, never re-created, locked to the publisher); every edition binds
   to it via `tx1Ref`. Title stays `template.tokenName`. Works even for encrypted collections (cover + blurb
   public, content locked) — the public face of the "🔒 holders only" gate. Cover BYTES live here (too big for a
   script field); editions stay small (no per-edition duplication — one `tx1Ref` fetch the page does anyway).
@@ -731,7 +731,7 @@ funds check + fund-address prompt → permissionless replicate w/ retry-on-doubl
 one-click "anyone can click and own" buy IS the thing being tested (the SVphone-style demo); resolve+replicate
 already exist in `editionBuilder.ts`. A read-only landing page alone would just be a viewer.
 
-**Landing-page layout (per-holder link):** `[cover image]` · title · creator · price (creator+holder fees) ·
+**Landing-page layout (per-holder link):** `[cover image]` · title · publisher · price (publisher+holder fees) ·
 type/lock state · **that holder's seller-note** (if any) · `[Get a copy]` `[Share]` `[Open in wallet]` · WoC badge.
 
 **Build order within Step 2:** (1) hash-route reader (`#c=`,`#h=`) + a collection-view mode in the SPA;

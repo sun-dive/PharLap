@@ -10,12 +10,12 @@ import {
   EDITION_OWNER_SCRIPT_OFFSET, EDITION_PRICE_SCRIPT_OFFSET,
 } from '../src/covenant.ts'
 
-const creator = PrivateKey.fromRandom()
+const publisher = PrivateKey.fromRandom()
 const holder = PrivateKey.fromRandom()
 const ownerPub = holder.toPublicKey().encode(true) as number[]
 const tx1Ref = Array.from({ length: 32 }, (_, i) => (i * 3 + 1) & 0xff)
 const u64le = (n: number) => { const o: number[] = []; let v = n; for (let i = 0; i < 8; i++) { o.push(v & 0xff); v = Math.floor(v / 256) } return o }
-const terms = { creatorPubKeyHash: creator.toPublicKey().toHash() as number[], creatorFeeSats: 5000, holderFeeSats: 1000, tokenSats: 1 }
+const terms = { publisherPubKeyHash: publisher.toPublicKey().toHash() as number[], publisherFeeSats: 5000, holderFeeSats: 1000, tokenSats: 1 }
 
 test('offsets are stable: owner at 40, price at 74', () => {
   assert.equal(EDITION_OWNER_SCRIPT_OFFSET, 40)

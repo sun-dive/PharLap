@@ -34,7 +34,7 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   genesis; proofs are fetched on demand (BEEF-ready). Transfers are constant-size (no on-chain proof chain).
 - **Unlimited-mints editions (covenant).** Optional miner-enforced tokens where *any buyer* can mint their
   own copy permissionlessly — the spend is rejected unless the holder's token is returned, the buyer's
-  replica carries the same covenant forward, and fixed creator + holder fees are paid. Built on a
+  replica carries the same covenant forward, and fixed publisher + holder fees are paid. Built on a
   hand-rolled **OP_PUSH_TX** covenant (transaction introspection in script). See `docs/OVERVIEW.md`.
 - **Messaging.** Send encrypted, authenticated (ECIES) on-chain messages to any pubkey — a typed payload
   carrying text, a file (bonus content), and/or a content key. The same record shape as a token

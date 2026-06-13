@@ -19,7 +19,7 @@ MPT minted a token in a single transaction with all immutable metadata encoded i
 PHAR LAP creates a collection with **two** transactions:
 - **TX1 (Collection Template)** — a PushDrop output committing all immutable data: `tokenName`,
   `tokenRules`, covenant template, and optional embedded file. Kept unspent (non-prunable). **TX1's
-  txid = the Collection ID.** The creator's pubkey is the lock key of this output.
+  txid = the Collection ID.** The publisher's pubkey is the lock key of this output.
 - **TX2 / every token** — references TX1 by txid; carries only `[P, version, recordType, TX1-ref, stateData]`.
 
 Immutable collection data is referenced by txid rather than re-encoded in every token. This also binds an
@@ -97,7 +97,7 @@ Key points / deviations:
   scriptCode, so no second copy is embedded), with the owner pubkey swapped where needed (replica → buyer,
   transfer → new owner). Full both-branch edition script ≈ **767 bytes**.
 - **Economic enforcement at consensus:** replicate forces `[0]` token→holder, `[1]` replica→buyer, `[2]`
-  creator fee, `[3]` holder fee, `[4+]` buyer change. Transfer is owner-signed (`OP_CHECKSIGVERIFY`) and also
+  publisher fee, `[3]` holder fee, `[4+]` buyer change. Transfer is owner-signed (`OP_CHECKSIGVERIFY`) and also
   re-creates the covenant for the new owner. Introspection scope is `ANYONECANPAY|ALL|FORKID` so buyers can
   add funding inputs.
 - **New modules:** `src/pushtx.ts`, `src/covenant.ts`, `src/editionBuilder.ts` (kept separate from the

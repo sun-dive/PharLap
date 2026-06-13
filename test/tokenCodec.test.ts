@@ -85,7 +85,7 @@ test('TEMPLATE: round-trip with covenant + fileHash', () => {
   }
   const parsed = parseTemplateScript(buildTemplateScript(PUB, data))
   assert.ok(parsed)
-  assert.equal(parsed.creatorPubKeyHex, PUB)
+  assert.equal(parsed.publisherPubKeyHex, PUB)
   assert.deepEqual(parsed.fields, data)
 })
 
