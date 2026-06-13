@@ -988,6 +988,10 @@ function initTabs(): void {
     try { localStorage.setItem('p:activeTab', name) } catch { /* private mode — ignore */ }
   }
   tabs.forEach(t => { t.onclick = () => activate(t.dataset.tab!) })
+  // Home-page cards (and any other in-app shortcut) jump to a tab via data-goto.
+  document.querySelectorAll<HTMLElement>('[data-goto]').forEach(el => {
+    el.onclick = () => activate(el.dataset.goto!)
+  })
   let saved: string | null = null
   try { saved = localStorage.getItem('p:activeTab') } catch { /* ignore */ }
   if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved)

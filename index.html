@@ -41,6 +41,24 @@
     .tabpanel.is-active { display:block; animation:tabFade .22s ease both; }
     @keyframes tabFade { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
     @media (prefers-reduced-motion:reduce) { .tabpanel.is-active { animation:none; } }
+    /* Home landing */
+    .home-hero { text-align:center; margin:6px 0 20px; }
+    .home-title { font-size:23px; line-height:1.2; margin:0 0 8px; letter-spacing:-.3px; text-transform:none; color:var(--fg); }
+    .home-tagline { color:var(--muted); margin:0 auto; max-width:48ch; line-height:1.5; }
+    .home-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    @media (max-width:560px) { .home-grid { grid-template-columns:1fr; } }
+    .home-card { display:flex; flex-direction:column; text-align:left; padding:0; background:var(--card);
+      color:var(--fg); border:1px solid var(--line); border-radius:14px; overflow:hidden; cursor:pointer; font:inherit;
+      transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+    .home-card:hover { transform:translateY(-2px); filter:none; border-color:#3a4655; box-shadow:0 14px 34px -18px rgba(0,0,0,.8); }
+    .home-art { aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; font-size:52px;
+      background:linear-gradient(140deg, var(--g1,#21262d), var(--g2,#0d1117)); background-size:cover; background-position:center; }
+    .home-card-body { padding:12px 14px 15px; }
+    .home-card-body h3 { margin:0 0 4px; font-size:16px; color:var(--fg); text-transform:none; letter-spacing:0; }
+    .home-card-body p { margin:0; color:var(--muted); font-size:13px; line-height:1.45; }
+    .home-foot { text-align:center; margin:18px 0 0; font-size:13px; }
+    .linklike { background:none; border:0; color:var(--accent2); cursor:pointer; padding:0; font:inherit; text-decoration:underline; }
+    .linklike:hover { filter:none; }
     /* Help panel */
     .help h3 { font-size:15px; margin:18px 0 6px; color:var(--fg); text-transform:none; letter-spacing:0; }
     .help h3:first-child { margin-top:0; }
@@ -142,7 +160,8 @@
     <div id="status" class="status">Loading…</div>
 
     <nav class="tabs" role="tablist" aria-label="Wallet sections">
-      <button class="tab is-active" data-tab="wallet" role="tab">Wallet</button>
+      <button class="tab is-active" data-tab="home" role="tab">Home</button>
+      <button class="tab" data-tab="wallet" role="tab">Wallet</button>
       <!-- Plain-token "Mint" tab hidden for the first-time-user UI (Editions is the single mint path).
            The #tab-mint panel below is kept in the DOM so btnMint wiring stays intact — re-add this
            button to surface it again. -->
@@ -152,7 +171,36 @@
       <button class="tab" data-tab="help" role="tab">Help</button>
     </nav>
 
-    <section class="tabpanel is-active" id="tab-wallet" role="tabpanel">
+    <section class="tabpanel is-active" id="tab-home" role="tabpanel">
+      <div class="home-hero">
+        <h2 class="home-title">Publish content. Get paid on every copy.</h2>
+        <p class="home-tagline">Anyone can buy a copy of what you publish — in one click, with your fee enforced on-chain. Pick where to start:</p>
+      </div>
+      <!-- Placeholder art: each .home-art is a gradient + emoji for now. To use fal.ai images later,
+           drop files in brand/home/ and set e.g. style="background-image:url(brand/home/wallet.webp)"
+           on the .home-art (background-size:cover is already applied) — or swap in an <img>. -->
+      <div class="home-grid">
+        <button class="home-card" data-goto="wallet">
+          <div class="home-art" style="--g1:#1f6feb;--g2:#0d3a8a">💰</div>
+          <div class="home-card-body"><h3>Wallet</h3><p>Your keys &amp; balance. Back up once, restore anywhere.</p></div>
+        </button>
+        <button class="home-card" data-goto="editions">
+          <div class="home-art" style="--g1:#2ea043;--g2:#0f5323">📤</div>
+          <div class="home-card-body"><h3>Publish</h3><p>Turn your content into editions anyone can buy.</p></div>
+        </button>
+        <button class="home-card" data-goto="tokens">
+          <div class="home-art" style="--g1:#9e6a03;--g2:#5a3c02">🎴</div>
+          <div class="home-card-body"><h3>My tokens</h3><p>Your collection — share a sales page, transfer, or view.</p></div>
+        </button>
+        <button class="home-card" data-goto="messages">
+          <div class="home-art" style="--g1:#8957e5;--g2:#48247a">✉️</div>
+          <div class="home-card-body"><h3>Messages</h3><p>Send encrypted notes or files, on-chain.</p></div>
+        </button>
+      </div>
+      <p class="home-foot muted">New here? Open <button class="linklike" data-goto="help">Help</button> for a step-by-step guide.</p>
+    </section>
+
+    <section class="tabpanel" id="tab-wallet" role="tabpanel">
     <div class="card">
       <div class="kv"><b>Address</b><span id="address" class="mono"></span></div>
       <div class="kv"><b>Public key (give this to senders)</b><span id="pubkey" class="mono"></span></div>

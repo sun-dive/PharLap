@@ -20275,6 +20275,9 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
     tabs.forEach((t) => {
       t.onclick = () => activate(t.dataset.tab);
     });
+    document.querySelectorAll("[data-goto]").forEach((el) => {
+      el.onclick = () => activate(el.dataset.goto);
+    });
     let saved = null;
     try {
       saved = localStorage.getItem("p:activeTab");
