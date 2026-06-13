@@ -31,6 +31,16 @@
     .status.ok { border-color:var(--accent); }
     .status.error { border-color:var(--err); color:#ffb4ae; }
     .grid2 { display:grid; grid-template-columns:1fr 120px; gap:8px; }
+    /* Wallet section tabs */
+    .tabs { display:flex; gap:2px; flex-wrap:wrap; margin:0 0 16px; border-bottom:1px solid var(--line); }
+    .tab { background:transparent; color:var(--muted); border:0; border-bottom:2px solid transparent; border-radius:0;
+      padding:9px 15px; font-size:14px; font-weight:600; cursor:pointer; margin-bottom:-1px; }
+    .tab:hover { color:var(--fg); filter:none; }
+    .tab.is-active { color:var(--fg); border-bottom-color:var(--accent); }
+    .tabpanel { display:none; }
+    .tabpanel.is-active { display:block; animation:tabFade .22s ease both; }
+    @keyframes tabFade { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+    @media (prefers-reduced-motion:reduce) { .tabpanel.is-active { animation:none; } }
     .token { border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:8px; background:#0d1117; }
     .token-name { font-weight:600; margin-bottom:4px; }
     .token .state { color:var(--accent); font-size:12px; margin-top:4px; }
@@ -49,29 +59,70 @@
     .foot a { color:var(--accent2); }
     .woc-badge { height:56px; width:auto; opacity:.9; }
     .woc-badge:hover { opacity:1; }
-    /* Collection / sales view (shareable link landing) */
-    .cview { position:fixed; inset:0; background:var(--bg); overflow:auto; z-index:5; display:flex; justify-content:center; padding:24px 16px 48px; }
-    .cview-box { max-width:560px; width:100%; }
-    .cv-cover { margin-bottom:16px; border-radius:12px; overflow:hidden; background:var(--card); border:1px solid var(--line); }
-    .cv-cover-img { width:100%; display:block; }
-    .cv-cover-ph { font-size:64px; text-align:center; padding:48px 0; color:var(--muted); }
-    .cv-title { font-size:26px; margin:0 0 6px; letter-spacing:.3px; }
-    .cv-badges { margin-bottom:8px; display:flex; gap:6px; flex-wrap:wrap; }
-    .cv-creator { margin-bottom:12px; }
-    .cv-desc { white-space:pre-wrap; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin:0; }
-    .cv-price { margin:16px 0; font-size:16px; }
-    .cv-actions { display:flex; gap:8px; flex-wrap:wrap; }
-    .cv-actions button { padding:12px 18px; font-size:15px; }
-    .cv-status { margin-top:12px; color:var(--muted); font-size:13px; min-height:18px; }
-    .cv-status.error { color:#ffb4ae; }
-    .cv-fund { margin-top:14px; padding:14px; border:1px solid #9e6a03; border-radius:8px; background:#1a1206; font-size:14px; }
-    .cv-fund .mono { color:var(--fg); }
-    .cv-note { margin:12px 0; padding:10px 12px; border-left:3px solid var(--accent2); background:#0d1117; border-radius:6px; font-size:14px; white-space:pre-wrap; }
-    .cv-bonus { margin:12px 0; padding:10px 12px; border:1px solid var(--accent); border-radius:6px; background:#0d1117; font-size:14px; }
-    .bonus-claim { display:inline-block; color:var(--accent); font-weight:600; }
-    .cv-noteedit { margin:12px 0; }
+    /* ─── Collection / sales view (shareable link landing) — premium storefront ─── */
+    .cview { position:fixed; inset:0; background:
+        radial-gradient(1200px 600px at 50% -10%, #16202c 0%, rgba(22,32,44,0) 60%),
+        var(--bg);
+      overflow:auto; z-index:5; display:flex; justify-content:center; padding:0 16px 56px; }
+    .cv-ambient { position:fixed; inset:0; pointer-events:none; z-index:-1;
+      background:radial-gradient(560px 380px at 50% 8%, rgba(63,185,80,.10), rgba(56,139,253,.06) 45%, transparent 72%); }
+    .cview-box { max-width:540px; width:100%; padding-top:18px;
+      animation:cvRise .5s cubic-bezier(.22,.61,.36,1) both; }
+    @keyframes cvRise { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
+    @media (prefers-reduced-motion:reduce) { .cview-box { animation:none; } }
+
+    .cv-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; }
+    .cv-brand { font-weight:700; letter-spacing:1.5px; font-size:13px; text-transform:uppercase; color:var(--muted); display:flex; align-items:center; gap:7px; }
+    .cv-brand-mark { color:var(--accent); filter:drop-shadow(0 0 6px rgba(63,185,80,.5)); }
+    .cv-ghost { background:transparent; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:7px 14px; font-size:13px; font-weight:500; }
+    .cv-ghost:hover { color:var(--fg); border-color:#3a4655; filter:none; }
+
+    .cv-hero { margin:0 0 20px; }
+    .cv-cover { position:relative; border-radius:18px; overflow:hidden; background:linear-gradient(160deg,#1b222c,#10151c);
+      border:1px solid var(--line); box-shadow:0 24px 60px -24px rgba(0,0,0,.8), 0 2px 0 0 rgba(255,255,255,.03) inset; aspect-ratio:1/1; }
+    .cv-cover-img { width:100%; height:100%; object-fit:cover; display:block; }
+    .cv-cover-ph { height:100%; display:flex; align-items:center; justify-content:center; font-size:96px;
+      background:radial-gradient(420px 420px at 50% 35%, rgba(56,139,253,.18), transparent 70%); filter:saturate(.9); }
+
+    .cv-head { margin-bottom:14px; }
+    .cv-title { font-size:30px; line-height:1.15; margin:0 0 10px; letter-spacing:-.3px; font-weight:750; }
+    .cv-badges { margin-bottom:10px; display:flex; gap:6px; flex-wrap:wrap; }
+    .cview .badge { font-size:10.5px; padding:3px 9px; border-radius:999px; font-weight:600; }
+    .cv-creator { margin:0; font-size:12px; }
+
+    .cv-desc { white-space:pre-wrap; color:var(--fg); line-height:1.6; background:rgba(255,255,255,.02);
+      border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin:0 0 14px; }
+
+    .cv-note { margin:12px 0; padding:12px 14px; border:1px solid #24405f; border-left:3px solid var(--accent2);
+      background:linear-gradient(90deg, rgba(56,139,253,.08), rgba(56,139,253,.02)); border-radius:10px; font-size:14px; line-height:1.55; white-space:pre-wrap; }
+    .cv-bonus { margin:12px 0; padding:12px 14px; border:1px solid rgba(63,185,80,.45); border-radius:10px;
+      background:linear-gradient(90deg, rgba(63,185,80,.10), rgba(63,185,80,.02)); font-size:14px; line-height:1.55; }
+    .bonus-claim { display:inline-block; color:var(--accent); font-weight:700; }
+    .cv-noteedit { margin:14px 0; }
     .cv-noteedit textarea { min-height:54px; }
     .cv-noteedit select { background:#0d1117; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:8px 10px; font:inherit; width:100%; }
+
+    /* Buy card — the conversion surface */
+    .cv-buy { margin:18px 0 0; padding:18px; border-radius:16px;
+      background:linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.012));
+      border:1px solid var(--line); box-shadow:0 12px 36px -20px rgba(0,0,0,.7); }
+    .cv-price { margin:0 0 14px; font-size:15px; color:var(--muted); }
+    .cv-price b { color:var(--fg); font-size:26px; font-weight:750; letter-spacing:-.3px; }
+    .cv-actions { display:flex; gap:10px; flex-wrap:wrap; }
+    .cv-actions button { padding:13px 20px; font-size:15px; border-radius:10px; }
+    .cv-cta { flex:1 1 auto; min-width:160px;
+      background:linear-gradient(180deg,#46c95a,#2ea043); color:#04140a; font-weight:700;
+      box-shadow:0 8px 24px -8px rgba(63,185,80,.6); transition:transform .12s ease, box-shadow .12s ease, filter .12s ease; }
+    .cv-cta:hover { transform:translateY(-1px); box-shadow:0 12px 30px -8px rgba(63,185,80,.75); }
+    .cv-cta:active { transform:translateY(0); }
+    .cv-cta:disabled { filter:grayscale(.4) brightness(.8); transform:none; box-shadow:none; cursor:default; }
+    .cv-status { margin-top:12px; color:var(--muted); font-size:13px; min-height:18px; }
+    .cv-status.ok { color:var(--accent); }
+    .cv-status.error { color:#ffb4ae; }
+
+    .cv-fund { margin-top:14px; padding:16px; border:1px solid #9e6a03; border-radius:12px;
+      background:linear-gradient(180deg, rgba(158,106,3,.14), rgba(158,106,3,.05)); font-size:14px; line-height:1.5; }
+    .cv-fund .mono { color:var(--fg); }
   </style>
 </head>
 <body>
@@ -80,7 +131,17 @@
 
     <div id="status" class="status">Loading…</div>
 
-    <h2>Wallet</h2>
+    <nav class="tabs" role="tablist" aria-label="Wallet sections">
+      <button class="tab is-active" data-tab="wallet" role="tab">Wallet</button>
+      <!-- Plain-token "Mint" tab hidden for the first-time-user UI (Editions is the single mint path).
+           The #tab-mint panel below is kept in the DOM so btnMint wiring stays intact — re-add this
+           button to surface it again. -->
+      <button class="tab" data-tab="editions" role="tab">Editions</button>
+      <button class="tab" data-tab="tokens" role="tab">My tokens</button>
+      <button class="tab" data-tab="messages" role="tab">Messages</button>
+    </nav>
+
+    <section class="tabpanel is-active" id="tab-wallet" role="tabpanel">
     <div class="card">
       <div class="kv"><b>Address</b><span id="address" class="mono"></span></div>
       <div class="kv"><b>Public key (give this to senders)</b><span id="pubkey" class="mono"></span></div>
@@ -99,8 +160,9 @@
       </div>
       <p class="muted" style="font-size:12px;margin:6px 0 0">Restoring rebuilds your wallet <b>and recovers your purchases from chain</b> — works on any browser or device.</p>
     </div>
+    </section>
 
-    <h2>Mint a collection</h2>
+    <section class="tabpanel" id="tab-mint" role="tabpanel">
     <div class="card">
       <label>Collection name</label>
       <input id="mintName" placeholder="e.g. My Tokenized Content" />
@@ -111,8 +173,9 @@
       <div class="row" style="margin-top:10px"><button id="btnMint">Mint collection</button></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Creates TX1 (template, the Collection ID) then TX2 (genesis editions). Requires funds on your address.</p>
     </div>
+    </section>
 
-    <h2>Editions — unlimited mints (experimental covenant)</h2>
+    <section class="tabpanel" id="tab-editions" role="tabpanel">
     <div class="card warn">
       <p class="muted" style="font-size:12px;margin:0 0 8px">
         Miner-enforced covenant tokens (OP_PUSH_TX). <b>Experimental — small-value mainnet only.</b>
@@ -157,8 +220,9 @@
         <b>Sales page</b> to share a buy link. <b>Self-test</b> mints + immediately replicates (you = creator/holder/buyer).
       </p>
     </div>
+    </section>
 
-    <h2>My tokens</h2>
+    <section class="tabpanel" id="tab-tokens" role="tabpanel">
     <div class="card">
       <label>Recipient public key (for Send)</label>
       <input id="sendPubKey" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
@@ -166,8 +230,9 @@
       <div id="tokens"></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Enter a recipient public key above, then click <b>Send</b> on the token you want to transfer.</p>
     </div>
+    </section>
 
-    <h2>Messages</h2>
+    <section class="tabpanel" id="tab-messages" role="tabpanel">
     <div class="card">
       <label>Recipient public key</label>
       <input id="msgTo" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
@@ -183,6 +248,7 @@
       <div id="inbox" style="margin-top:12px"></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Messages are delivered on-chain to the recipient's pubkey (encrypted by default). A message can carry text, a file, or a content key — the basis for paid encrypted content.</p>
     </div>
+    </section>
 
     <footer class="foot">
       <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
@@ -193,15 +259,29 @@
   </div>
 
   <div id="collectionView" class="cview" style="display:none">
+    <div class="cv-ambient" aria-hidden="true"></div>
     <div class="cview-box">
-      <div id="cvCover" class="cv-cover"></div>
-      <h1 id="cvTitle" class="cv-title"></h1>
-      <div id="cvBadges" class="cv-badges"></div>
-      <div id="cvCreator" class="mono cv-creator muted"></div>
+      <header class="cv-top">
+        <div class="cv-brand"><span class="cv-brand-mark">⚡</span> PHAR LAP</div>
+        <button id="cvWallet" class="cv-ghost">Open wallet</button>
+      </header>
+
+      <figure class="cv-hero">
+        <div id="cvCover" class="cv-cover"></div>
+      </figure>
+
+      <div class="cv-head">
+        <h1 id="cvTitle" class="cv-title"></h1>
+        <div id="cvBadges" class="cv-badges"></div>
+        <div id="cvCreator" class="mono cv-creator muted"></div>
+      </div>
+
       <p id="cvDesc" class="cv-desc"></p>
+
       <div id="cvNote" class="cv-note" style="display:none"></div>
       <div id="cvBonus" class="cv-bonus" style="display:none"></div>
-      <div id="cvNoteEdit" class="cv-noteedit" style="display:none">
+
+      <div id="cvNoteEdit" class="cv-noteedit card" style="display:none">
         <label>Your seller note (public — promo, redemption info; buyers see it)</label>
         <textarea id="cvNoteText" placeholder="e.g. Thanks for buying! Here's how to redeem your bonus…"></textarea>
         <label>Buyer bonus (optional — delivered to buyers, propagates downstream)</label>
@@ -218,13 +298,17 @@
           <span id="cvNoteStatus" class="muted" style="font-size:12px"></span>
         </div>
       </div>
-      <div id="cvPrice" class="cv-price"></div>
-      <div class="cv-actions">
-        <button id="cvGet">Get a copy</button>
-        <button id="cvView" class="secondary" style="display:none">View content</button>
-        <button id="cvShare" class="secondary">Share</button>
-        <button id="cvWallet" class="secondary">Open wallet</button>
-      </div>
+
+      <section class="cv-buy">
+        <div id="cvPrice" class="cv-price"></div>
+        <div class="cv-actions">
+          <button id="cvGet" class="cv-cta">Get a copy</button>
+          <button id="cvView" class="secondary" style="display:none">View content</button>
+          <button id="cvShare" class="secondary">Share</button>
+        </div>
+        <div id="cvStatus" class="cv-status"></div>
+      </section>
+
       <div id="cvFund" class="cv-fund" style="display:none">
         <div>Fund your wallet to buy — need <b id="cvFundNeed"></b>, have <span id="cvFundHave" class="muted"></span>.</div>
         <div style="margin-top:8px">Send a little BSV to your wallet address:</div>
@@ -235,7 +319,7 @@
         <div id="cvFundQr" class="muted" style="font-size:12px;margin-top:6px">QR code coming shortly — for now, copy the address above and send from your phone/wallet.</div>
         <button id="cvFundDone" style="margin-top:10px">I’ve funded — buy now</button>
       </div>
-      <div id="cvStatus" class="cv-status"></div>
+
       <footer class="foot">
         <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
           <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />

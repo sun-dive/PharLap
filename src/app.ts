@@ -944,7 +944,7 @@ async function onGetCopy(): Promise<void> {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         bought = tip.isV2
-          ? await replicateEditionV2(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex })
+          ? await replicateEditionV2(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? undefined })
           : await replicateEdition(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? undefined })
         break
       } catch (e) {
@@ -978,10 +978,26 @@ async function onGetCopy(): Promise<void> {
   }
 }
 
+/** Wire the wallet section tabs (show one panel at a time) and restore the last-viewed tab. */
+function initTabs(): void {
+  const tabs = Array.from(document.querySelectorAll<HTMLElement>('.tab'))
+  const panels = Array.from(document.querySelectorAll<HTMLElement>('.tabpanel'))
+  const activate = (name: string) => {
+    tabs.forEach(t => t.classList.toggle('is-active', t.dataset.tab === name))
+    panels.forEach(p => p.classList.toggle('is-active', p.id === `tab-${name}`))
+    try { localStorage.setItem('p:activeTab', name) } catch { /* private mode — ignore */ }
+  }
+  tabs.forEach(t => { t.onclick = () => activate(t.dataset.tab!) })
+  let saved: string | null = null
+  try { saved = localStorage.getItem('p:activeTab') } catch { /* ignore */ }
+  if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved)
+}
+
 function init(): void {
   store = new PharLapStore()
   useKey(loadKey())
   renderTokens()
+  initTabs()
 
   $('btnRefresh').onclick = () => void refreshBalance()
   $('btnMint').onclick = () => void onMint()

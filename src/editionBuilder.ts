@@ -679,6 +679,8 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
   editionLockHex: string
   /** Pass the edition's source tx to skip the WoC fetch (e.g. replicating an own just-minted, unconfirmed edition). */
   editionSourceTx?: Transaction
+  /** Seller's note (promo + optional bonus) to echo onto the buyer's copy (hands-off propagation, like v1). */
+  note?: SellerNote
   feePerKb?: number
 }): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string; creatorCut: number; resellerCut: number }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
@@ -690,13 +692,14 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
   const edition: EditionUtxo = {
     txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis: tokenSats, lockBytes, sourceTx,
   }
-  // Buyer funds: token + replica sats + the price (creator + reseller cuts) + miner fee + margin.
+  // Buyer funds: token + replica sats + the price (creator + reseller cuts) + the optional note output + miner fee + margin.
+  const noteSats = params.note ? tokenSats : 0
   const estFee = Math.ceil((1600 * feePerKb) / 1000)
-  const target = 2 * tokenSats + parsed.priceSats + estFee + 1000
+  const target = 2 * tokenSats + noteSats + parsed.priceSats + estFee + 1000
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding = await toFundingInputs(provider, selected)
 
-  const rep = await buildReplicateV2Tx({ edition, buyerKey, funding, feePerKb })
+  const rep = await buildReplicateV2Tx({ edition, buyerKey, funding, note: params.note, feePerKb })
   await provider.broadcast(rep.tx.toHex())
   provider.registerPendingTx(rep.txId,
     [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex },

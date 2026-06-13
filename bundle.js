@@ -18679,11 +18679,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       lockBytes,
       sourceTx
     };
+    const noteSats = params.note ? tokenSats : 0;
     const estFee = Math.ceil(1600 * feePerKb / 1e3);
-    const target = 2 * tokenSats + parsed.priceSats + estFee + 1e3;
+    const target = 2 * tokenSats + noteSats + parsed.priceSats + estFee + 1e3;
     const selected = selectFunding(await getSafeUtxos(provider2), target);
     const funding = await toFundingInputs(provider2, selected);
-    const rep = await buildReplicateV2Tx({ edition, buyerKey, funding, feePerKb });
+    const rep = await buildReplicateV2Tx({ edition, buyerKey, funding, note: params.note, feePerKb });
     await provider2.broadcast(rep.tx.toHex());
     provider2.registerPendingTx(
       rep.txId,
@@ -20217,7 +20218,7 @@ Mint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${
       let bought = null;
       for (let attempt = 0; attempt <= 2; attempt++) {
         try {
-          bought = tip.isV2 ? await replicateEditionV2(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex }) : await replicateEdition(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? void 0 });
+          bought = tip.isV2 ? await replicateEditionV2(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? void 0 }) : await replicateEdition(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? void 0 });
           break;
         } catch (e) {
           if (attempt === 2) throw e;
@@ -20250,10 +20251,32 @@ Mint a percentage-pricing edition (creator ${(cBps / 100).toFixed(2)}%, price ${
       $("cvGet").disabled = false;
     }
   }
+  function initTabs() {
+    const tabs = Array.from(document.querySelectorAll(".tab"));
+    const panels = Array.from(document.querySelectorAll(".tabpanel"));
+    const activate = (name) => {
+      tabs.forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
+      panels.forEach((p) => p.classList.toggle("is-active", p.id === `tab-${name}`));
+      try {
+        localStorage.setItem("p:activeTab", name);
+      } catch {
+      }
+    };
+    tabs.forEach((t) => {
+      t.onclick = () => activate(t.dataset.tab);
+    });
+    let saved = null;
+    try {
+      saved = localStorage.getItem("p:activeTab");
+    } catch {
+    }
+    if (saved && tabs.some((t) => t.dataset.tab === saved)) activate(saved);
+  }
   function init() {
     store = new PharLapStore();
     useKey(loadKey());
     renderTokens();
+    initTabs();
     $("btnRefresh").onclick = () => void refreshBalance();
     $("btnMint").onclick = () => void onMint();
     $("btnV2Probe").onclick = () => void onV2Probe();
