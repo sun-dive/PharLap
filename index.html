@@ -211,8 +211,12 @@
         <button id="btnCopyPub" class="secondary">Copy public key</button>
         <button id="btnNewWallet" class="secondary">New wallet</button>
       </div>
-      <label>WIF (private key — back this up)</label>
-      <input id="wif" readonly />
+      <label>WIF (private key — back this up; keep it secret)</label>
+      <div class="row" style="flex-wrap:nowrap; align-items:stretch">
+        <input id="wif" type="password" readonly autocomplete="off" style="flex:1 1 auto; width:auto; min-width:0" />
+        <button id="btnWifShow" class="secondary" style="white-space:nowrap">👁 Show</button>
+        <button id="btnWifCopy" class="secondary">Copy</button>
+      </div>
       <label>Restore from WIF</label>
       <div class="grid2">
         <input id="restoreWif" placeholder="L… / K… WIF" />
