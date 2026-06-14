@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, createEditionV2, replicateEditionV2, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, createEditionV2, replicateEditionV2, createGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2 } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -621,7 +621,11 @@ function renderTokens(): void {
         bc.textContent = '📣 Broadcast'
         bc.className = 'secondary'
         bc.onclick = () => void onBroadcast(t)
-        actions.append(bc)
+        const gift = document.createElement('button')
+        gift.textContent = '🎁 Gift'
+        gift.className = 'secondary'
+        gift.onclick = () => void onGiftCopies(t)
+        actions.append(bc, gift)
       }
     } else {
       const send = document.createElement('button')
@@ -674,6 +678,8 @@ let cvObjectUrl: string | null = null
 let currentCollection: { info: CollectionInfo; holderPubKey: string | null } | null = null
 /** The seller's current note (promo + optional bonus) for the open collection, captured onto a purchase. */
 let cvNote: SellerNote | null = null
+/** Funded voucher WIF from a `&g=` gift link — when set, "Get a copy" claims free (the voucher pays). */
+let cvGiftWif: string | null = null
 
 function setCvStatus(msg: string, kind: 'info' | 'error' = 'info'): void {
   const el = $('cvStatus')
@@ -682,13 +688,13 @@ function setCvStatus(msg: string, kind: 'info' | 'error' = 'info'): void {
 }
 
 /** Read a `#c=…&h=…` hash route, or null if absent. */
-function parseHashRoute(): { c: string; h: string | null } | null {
+function parseHashRoute(): { c: string; h: string | null; g: string | null } | null {
   const raw = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
   if (!raw) return null
   const params = new URLSearchParams(raw)
   const c = params.get('c')
   if (!c) return null
-  return { c, h: params.get('h') }
+  return { c, h: params.get('h'), g: params.get('g') }
 }
 
 /** Fetch TX1 and extract everything the storefront page needs (template + storefront + fees). */
@@ -771,7 +777,8 @@ function showViewButton(info: CollectionInfo, show: boolean): void {
   }
 }
 
-async function openCollectionView(tx1Ref: string, holderPubKey: string | null): Promise<void> {
+async function openCollectionView(tx1Ref: string, holderPubKey: string | null, giftWif: string | null = null): Promise<void> {
+  cvGiftWif = giftWif
   $('collectionView').style.display = 'flex'
   hideFundPrompt()
   $('cvTitle').textContent = 'Loading…'
@@ -785,6 +792,11 @@ async function openCollectionView(tx1Ref: string, holderPubKey: string | null): 
     const info = await loadCollection(tx1Ref)
     currentCollection = { info, holderPubKey }
     renderCollectionView(info)
+    if (cvGiftWif) {
+      // Reframe the page as a free gift claim.
+      ;($('cvGet') as HTMLButtonElement).textContent = '🎁 Get your free copy'
+      $('cvPrice').innerHTML = '🎁 <b>A free gift from the publisher</b> <span class="muted">— claim your copy, no payment and no funds needed.</span>'
+    }
     setCvStatus('')
     // Resolve the seller's current promo note (async, best-effort) for the link's seller.
     void loadSellerNote(info, holderPubKey ?? info.publisherPubKeyHex)
@@ -959,6 +971,24 @@ async function onGetCopy(): Promise<void> {
     let tip = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex })
     if (!tip) { setCvStatus('This seller has no edition available right now — try another link or ask them to mint one.', 'error'); return }
 
+    // ── Gift claim: a funded voucher (in the link) pays the whole tx; the recipient just owns the copy.
+    //    No price prompt, no fund check, works for a brand-new or existing wallet.
+    if (cvGiftWif) {
+      let giftNote: SellerNote | null = cvNote
+      if (!giftNote) { try { giftNote = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref) } catch { /* best-effort */ } }
+      setCvStatus('🎁 Claiming your free copy…')
+      const claimed = await claimGiftEdition(provider, key, {
+        giftWif: cvGiftWif, editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: giftNote ?? undefined,
+      })
+      storeEdition({ txId: claimed.replicaOutpoint.txId, outputIndex: claimed.replicaOutpoint.outputIndex, lockHex: claimed.lockHex },
+        info.tx1Ref, info.name, tip.terms, giftNote)
+      renderTokens()
+      showViewButton(info, true)
+      setCvStatus('🎁 It’s yours! Your free copy is now in My NFTs.', 'ok')
+      cvGiftWif = null // single-use — the voucher is now spent
+      return
+    }
+
     // Price = the seller's actual price (v2: their set price split by %; v1: fixed fees).
     const publisherCut = tip.isV2 ? Math.floor((tip.priceSats * info.pBps) / 10000) : tip.terms.publisherFeeSats
     const resellerCut = tip.isV2 ? tip.priceSats - publisherCut : tip.terms.holderFeeSats
@@ -1038,6 +1068,66 @@ async function onBroadcast(t: StoredToken): Promise<void> {
   } catch (e) {
     setStatus(`Broadcast failed: ${(e as Error).message}`, 'error')
   }
+}
+
+/** Publisher: create N pre-funded free-gift links for a collection (each single-use). */
+async function onGiftCopies(t: StoredToken): Promise<void> {
+  // Per-voucher funding = the claim's price/fees (which return to you as holder) + miner fee + a small starter.
+  let claimCost = 0
+  try {
+    const ed = parseEditionAny(LockingScript.fromHex(t.lockHex ?? ''))
+    if (ed) claimCost = ed.isV2 ? ed.priceSats : (ed.terms.publisherFeeSats + ed.terms.holderFeeSats)
+  } catch { /* leave 0 */ }
+  const fundEach = claimCost + 700 /* miner buffer */ + 800 /* recipient starter */
+  const countStr = prompt(
+    `Create free-gift links for “${t.collectionName ?? 'this collection'}”.\n\n` +
+    `How many?  Each is pre-funded with ~${fundEach} sat — but the price + fees come back to you as the holder, ` +
+    `so your real cost is ≈ the miner fee per claim.`, '10')
+  if (countStr == null) return
+  const count = Math.max(1, Math.min(500, parseInt(countStr, 10) || 0))
+  const total = count * fundEach
+  if (!confirm(`Fund ${count} gift link(s) at ~${fundEach} sat each (~${total} sat from your wallet; most returns on claim). Proceed?`)) return
+  setStatus(`Creating ${count} funded gift link(s)…`)
+  try {
+    const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { count, fundEachSats: fundEach })
+    const links = voucherWifs.map(wif => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`)
+    setStatus(`✅ ${count} gift link(s) funded (tx ${short(fundingTxId)}). Hand them out from the popup.`, 'ok')
+    showGiftLinksModal(t.collectionName ?? 'Free gift', links)
+  } catch (e) {
+    setStatus(`Gift creation failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Show the generated gift links: bulk copy/download + a per-link QR for in-person handouts. */
+function showGiftLinksModal(title: string, links: string[]): void {
+  const overlay = document.createElement('div')
+  overlay.className = 'modal'
+  const rows = links.map((l, i) =>
+    `<div class="gift-row"><span class="mono gift-link">${escapeHtml(l)}</span>` +
+    `<button class="secondary gift-qr" data-i="${i}">QR</button></div>`).join('')
+  overlay.innerHTML =
+    '<div class="modal-box gift-modal-box">' +
+    `<div class="modal-head"><span>🎁 ${escapeHtml(title)} — ${links.length} gift link${links.length > 1 ? 's' : ''}</span>` +
+    '<button class="secondary gift-close">✕ Close</button></div>' +
+    '<div class="row" style="margin-bottom:10px"><button class="gift-copyall">Copy all</button>' +
+    '<button class="secondary gift-download">Download .txt</button></div>' +
+    `<div class="gift-list">${rows}</div>` +
+    '<p class="muted" style="font-size:11px;margin-top:10px">Each link is single-use and pre-funded. Hand them out (email, DM, in person); the recipient claims a free copy and can resell it — your publisher fee returns on every resale.</p>' +
+    '</div>'
+  const close = (): void => overlay.remove()
+  overlay.addEventListener('click', e => { if (e.target === overlay) close() })
+  overlay.querySelector('.gift-close')?.addEventListener('click', close)
+  overlay.querySelector('.gift-copyall')?.addEventListener('click', () => void navigator.clipboard?.writeText(links.join('\n')))
+  overlay.querySelector('.gift-download')?.addEventListener('click', () => {
+    const blob = new Blob([links.join('\n')], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = 'smart-nfts-gift-links.txt'; a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  })
+  overlay.querySelectorAll('.gift-qr').forEach(b => b.addEventListener('click', () => {
+    showQrModal('Scan to claim a free copy', links[parseInt((b as HTMLElement).dataset.i ?? '0', 10)])
+  }))
+  document.body.append(overlay)
 }
 
 /** Holder: pull announcements from the publishers of every collection you hold → newest-first feed. */
@@ -1147,13 +1237,13 @@ function init(): void {
   $('cvFundDone').onclick = () => void onGetCopy()
   window.addEventListener('hashchange', () => {
     const r = parseHashRoute()
-    if (r) void openCollectionView(r.c, r.h)
+    if (r) void openCollectionView(r.c, r.h, r.g)
     else closeCollectionView()
   })
 
   // If the page was opened via a share link, show the storefront over the wallet.
   const route = parseHashRoute()
-  if (route) void openCollectionView(route.c, route.h)
+  if (route) void openCollectionView(route.c, route.h, route.g)
 
   void refreshBalance()
 }
