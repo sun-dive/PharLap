@@ -19099,6 +19099,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (parts == null) return null;
     return { senderPubKeyHex, encrypted, parts };
   }
+  function openPublicEnvelope(envelope) {
+    if (envelope.length < 35 || envelope[0] !== ENVELOPE_VERSION) return null;
+    if ((envelope[1] & FLAG_ENCRYPTED) !== 0) return null;
+    const senderPubKeyHex = utils_exports.toHex(envelope.slice(2, 35));
+    const parts = decodeParts(envelope.slice(35));
+    if (parts == null) return null;
+    return { senderPubKeyHex, encrypted: false, parts };
+  }
 
   // src/messageBuilder.ts
   var ZERO_REF = "00".repeat(32);
@@ -19201,6 +19209,89 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       });
     }
     return found;
+  }
+
+  // src/broadcast.ts
+  var MAX_BROADCAST_BYTES = 480;
+  var MAX_BROADCAST_SCAN = 50;
+  async function publishBroadcast(provider2, key2, collectionId, text) {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) throw new Error("announcement is empty");
+    if (new TextEncoder().encode(trimmed).length > MAX_BROADCAST_BYTES) {
+      throw new Error(`announcement exceeds ${MAX_BROADCAST_BYTES} bytes`);
+    }
+    const pubHex = key2.toPublicKey().toString();
+    const envelope = buildEnvelope({
+      senderPriv: key2,
+      recipientPubKeyHex: pubHex,
+      parts: [{ kind: "text", text: trimmed }],
+      encrypt: false
+    });
+    const selected = selectFunding(await getSafeUtxos(provider2), PHARLAP_OUTPUT_SATS + 600);
+    const funding = await Promise.all(
+      selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) }))
+    );
+    const tx = new Transaction();
+    for (const f2 of funding) {
+      tx.addInput({
+        sourceTransaction: f2.sourceTx,
+        sourceOutputIndex: f2.utxo.outputIndex,
+        unlockingScriptTemplate: new P2PKH().unlock(key2)
+      });
+    }
+    tx.addOutput({
+      lockingScript: buildMessageScript(pubHex, { ref: collectionId, envelope }),
+      satoshis: PHARLAP_OUTPUT_SATS
+    });
+    tx.addOutput({ lockingScript: new P2PKH().lock(key2.toAddress()), change: true });
+    await tx.fee(new SatoshisPerKilobyte(DEFAULT_FEE_PER_KB));
+    await tx.sign();
+    await provider2.broadcast(tx.toHex());
+    const txId = tx.id("hex");
+    provider2.registerPendingTx(
+      txId,
+      selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
+      (tx.outputs[1]?.satoshis ?? 0) > 0 ? { outputIndex: 1, satoshis: tx.outputs[1].satoshis ?? 0 } : void 0
+    );
+    return txId;
+  }
+  async function resolveBroadcasts(provider2, publisherPubKeyHex, collectionId) {
+    const address2 = PublicKey.fromString(publisherPubKeyHex).toAddress();
+    const heightByTx = /* @__PURE__ */ new Map();
+    try {
+      for (const h of await provider2.getAddressHistory(address2)) heightByTx.set(h.txId, h.blockHeight || 0);
+    } catch {
+    }
+    try {
+      for (const txId of await provider2.getRecentTxIdsForAddress(address2)) {
+        if (!heightByTx.has(txId)) heightByTx.set(txId, 0);
+      }
+    } catch {
+    }
+    if (heightByTx.size === 0) return [];
+    const ordered = [...heightByTx.entries()].sort((a, b) => (b[1] || 1e12) - (a[1] || 1e12)).slice(0, MAX_BROADCAST_SCAN);
+    const publisher = publisherPubKeyHex.toLowerCase();
+    const want = collectionId.toLowerCase();
+    const out = [];
+    for (const [txId, height] of ordered) {
+      let tx;
+      try {
+        tx = await provider2.getSourceTransaction(txId);
+      } catch {
+        continue;
+      }
+      for (const o of tx.outputs) {
+        const m = parseMessageScript(o.lockingScript);
+        if (m == null) continue;
+        if (m.recipientPubKeyHex.toLowerCase() !== publisher) continue;
+        if (m.fields.ref.toLowerCase() !== want) continue;
+        const opened = openPublicEnvelope(m.fields.envelope);
+        if (opened == null || opened.senderPubKeyHex.toLowerCase() !== publisher) continue;
+        const textPart = opened.parts.find((p) => p.kind === "text");
+        if (textPart && textPart.kind === "text") out.push({ text: textPart.text, txId, height });
+      }
+    }
+    return out;
   }
 
   // src/verify.ts
@@ -19643,6 +19734,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
     }
   }
   var nameCache = /* @__PURE__ */ new Map();
+  var latestBroadcast = /* @__PURE__ */ new Map();
   async function resolveCollectionName(tx1RefHex) {
     const cached = nameCache.get(tx1RefHex);
     if (cached != null) return cached;
@@ -19836,11 +19928,14 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       return;
     }
     host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held \u2014 newest first</p>`;
+    const myPubKeyHashHex = utils_exports.toHex(Hash_exports.hash160(key.toPublicKey().encode(true)));
     for (const t of active) {
       const card = document.createElement("div");
       card.className = "token";
       const stateText = t.stateData && t.stateData !== "00" ? safeUtf8(t.stateData) : "";
       const isEdition = t.kind === "edition";
+      const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myPubKeyHashHex;
+      const latest = latestBroadcast.get(t.collectionId);
       card.innerHTML = `
       <div class="token-name">${escapeHtml(t.collectionName ?? "Collection")}${isEdition ? ' <span class="badge">edition</span>' : ""}</div>
       <div class="mono">collection ${short(t.collectionId)}</div>
@@ -19848,6 +19943,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       ${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ""}
       ${t.sellerNote ? `<div class="state" style="color:var(--accent2)">\u{1F4DD} ${escapeHtml(t.sellerNote)}</div>` : ""}
       ${t.bonusValue ? t.bonusKind === "link" ? `<div class="state">\u{1F381} <a href="${escapeHtml(t.bonusValue)}" target="_blank" rel="noopener" class="bonus-claim">Claim your bonus \u2197</a></div>` : `<div class="state">\u{1F381} Bonus code: <span class="mono">${escapeHtml(t.bonusValue)}</span></div>` : ""}
+      ${latest ? `<div class="state" style="color:var(--accent)">\u{1F4E3} ${escapeHtml(latest.text)}</div>` : ""}
     `;
       const verify2 = document.createElement("button");
       verify2.textContent = "Verify";
@@ -19872,6 +19968,13 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
         sales.className = "secondary";
         sales.onclick = () => onOpenSalesPage(t);
         actions.append(replicate, xfer, view, sales, verify2);
+        if (iAmPublisher) {
+          const bc = document.createElement("button");
+          bc.textContent = "\u{1F4E3} Broadcast";
+          bc.className = "secondary";
+          bc.onclick = () => void onBroadcast(t);
+          actions.append(bc);
+        }
       } else {
         const send = document.createElement("button");
         send.textContent = "Send";
@@ -20261,6 +20364,55 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       $("cvGet").disabled = false;
     }
   }
+  async function onBroadcast(t) {
+    const text = prompt(`Announce to all holders of \u201C${t.collectionName ?? "this collection"}\u201D.
+
+Public, one transaction, reaches every current holder. Message:`);
+    if (text == null) return;
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setStatus("Announcement was empty.", "error");
+      return;
+    }
+    setStatus("Publishing announcement to holders\u2026");
+    try {
+      const txId = await publishBroadcast(provider, key, t.collectionId, trimmed);
+      latestBroadcast.set(t.collectionId, { text: trimmed, txId, height: 0 });
+      renderTokens();
+      setStatus(`\u{1F4E3} Announcement published (${short(txId)}). Holders see it when they check Updates.`, "ok");
+    } catch (e) {
+      setStatus(`Broadcast failed: ${e.message}`, "error");
+    }
+  }
+  async function onCheckUpdates() {
+    const host = $("updatesFeed");
+    const held = [...new Set(store.active().map((t) => t.collectionId))];
+    if (held.length === 0) {
+      host.innerHTML = '<p class="muted">No collections held yet \u2014 buy or mint an edition to receive publisher updates.</p>';
+      return;
+    }
+    host.innerHTML = '<p class="muted">Checking for updates\u2026</p>';
+    const feed = [];
+    for (const collectionId of held) {
+      try {
+        const info = await loadCollection(collectionId);
+        if (!info.publisherPubKeyHex) continue;
+        const list = await resolveBroadcasts(provider, info.publisherPubKeyHex, collectionId);
+        if (list.length > 0) latestBroadcast.set(collectionId, list[0]);
+        for (const b of list) feed.push({ ...b, name: info.name });
+      } catch {
+      }
+    }
+    feed.sort((a, b) => (b.height || 1e12) - (a.height || 1e12));
+    renderTokens();
+    if (feed.length === 0) {
+      host.innerHTML = '<p class="muted">No announcements yet from the publishers of your collections.</p>';
+      return;
+    }
+    host.innerHTML = feed.map(
+      (b) => `<div class="token"><div class="token-name">\u{1F4E3} ${escapeHtml(b.name || "Collection")}</div><div class="state" style="color:var(--accent);white-space:pre-wrap">${escapeHtml(b.text)}</div><div class="mono">${short(b.txId)}</div></div>`
+    ).join("");
+  }
   function initTabs() {
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const panels = Array.from(document.querySelectorAll(".tabpanel"));
@@ -20300,6 +20452,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
     $("btnIncoming").onclick = () => void onCheckIncoming();
     $("btnSendMessage").onclick = () => void onSendMessage();
     $("btnCheckMessages").onclick = () => void onCheckMessages();
+    $("btnCheckUpdates").onclick = () => void onCheckUpdates();
     $("btnNewWallet").onclick = () => {
       if (!confirm("Replace the current wallet with a new random key? Your current key is in the WIF box \u2014 back it up first.")) return;
       switchWallet(PrivateKey.fromRandom(), false);
