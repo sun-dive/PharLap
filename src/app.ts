@@ -86,6 +86,13 @@ function renderWallet(): void {
   $('address').textContent = address
   $('pubkey').textContent = pubKeyHex
   ;($('wif') as HTMLInputElement).value = key.toWif()
+  hideWif() // re-mask on every wallet (re)load so a switched-in key is never left exposed
+}
+
+/** Mask the WIF input and reset the toggle to "Show". */
+function hideWif(): void {
+  ;($('wif') as HTMLInputElement).type = 'password'
+  $('btnWifShow').textContent = '👁 Show'
 }
 
 async function refreshBalance(): Promise<void> {
@@ -1088,6 +1095,18 @@ function init(): void {
     switchWallet(k, true) // recover this wallet's purchases from chain
   }
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)
+  $('btnWifShow').onclick = () => {
+    const el = $('wif') as HTMLInputElement
+    const showing = el.type === 'text'
+    el.type = showing ? 'password' : 'text'
+    $('btnWifShow').textContent = showing ? '👁 Show' : '🙈 Hide'
+  }
+  $('btnWifCopy').onclick = () => {
+    void navigator.clipboard?.writeText(($('wif') as HTMLInputElement).value)
+    const b = $('btnWifCopy'); const prev = b.textContent
+    b.textContent = 'Copied ✓'
+    setTimeout(() => { b.textContent = prev }, 1200)
+  }
   $('viewerClose').onclick = () => closeViewer()
   $('viewer').onclick = (e) => { if (e.target === $('viewer')) closeViewer() } // click backdrop to close
 

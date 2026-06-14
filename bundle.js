@@ -19410,6 +19410,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     $("address").textContent = address;
     $("pubkey").textContent = pubKeyHex;
     $("wif").value = key.toWif();
+    hideWif();
+  }
+  function hideWif() {
+    ;
+    $("wif").type = "password";
+    $("btnWifShow").textContent = "\u{1F441} Show";
   }
   async function refreshBalance() {
     setStatus("Fetching balance\u2026");
@@ -20469,6 +20475,21 @@ Public, one transaction, reaches every current holder. Message:`);
       switchWallet(k, true);
     };
     $("btnCopyPub").onclick = () => void navigator.clipboard?.writeText(pubKeyHex);
+    $("btnWifShow").onclick = () => {
+      const el = $("wif");
+      const showing = el.type === "text";
+      el.type = showing ? "password" : "text";
+      $("btnWifShow").textContent = showing ? "\u{1F441} Show" : "\u{1F648} Hide";
+    };
+    $("btnWifCopy").onclick = () => {
+      void navigator.clipboard?.writeText($("wif").value);
+      const b = $("btnWifCopy");
+      const prev = b.textContent;
+      b.textContent = "Copied \u2713";
+      setTimeout(() => {
+        b.textContent = prev;
+      }, 1200);
+    };
     $("viewerClose").onclick = () => closeViewer();
     $("viewer").onclick = (e) => {
       if (e.target === $("viewer")) closeViewer();
