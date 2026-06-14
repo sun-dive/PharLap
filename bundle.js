@@ -18336,7 +18336,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const tokenSats = opts.terms.tokenSats ?? PHARLAP_OUTPUT_SATS;
     const lock2 = LockingScript.fromBinary(opts.edition.lockBytes);
     const holderPub = editionOwnerPubKey(opts.edition.lockBytes);
-    const buyerPub = pubKeyBytes(opts.buyerKey);
+    const buyerPub = opts.ownerPubKey ?? pubKeyBytes(opts.buyerKey);
     const tx1RefHex = parseEditionScript(lock2)?.tx1RefHex;
     const tx = new Transaction();
     tx.version = 2;
@@ -18369,7 +18369,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       });
     }
     const changeVout = tx.outputs.length;
-    tx.addOutput({ lockingScript: new P2PKH().lock(opts.buyerKey.toAddress()), change: true });
+    tx.addOutput({ lockingScript: new P2PKH().lock(opts.changeAddress ?? opts.buyerKey.toAddress()), change: true });
     await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB));
     await tx.sign();
     const changeSats = tx.outputs[changeVout]?.satoshis ?? 0;
@@ -18381,7 +18381,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const parsed = parseEditionScriptV2(lock2);
     if (parsed == null) throw new Error("buildReplicateV2Tx: not a v2 edition covenant");
     const holderPub = editionOwnerPubKey(opts.edition.lockBytes);
-    const buyerPub = pubKeyBytes(opts.buyerKey);
+    const buyerPub = opts.ownerPubKey ?? pubKeyBytes(opts.buyerKey);
     const publisherCut = Math.floor(parsed.priceSats * parsed.terms.pBps / 1e4);
     const resellerCut = parsed.priceSats - publisherCut;
     const tx = new Transaction();
@@ -18415,7 +18415,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       });
     }
     const changeVout = tx.outputs.length;
-    tx.addOutput({ lockingScript: new P2PKH().lock(opts.buyerKey.toAddress()), change: true });
+    tx.addOutput({ lockingScript: new P2PKH().lock(opts.changeAddress ?? opts.buyerKey.toAddress()), change: true });
     await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB));
     await tx.sign();
     const changeSats = tx.outputs[changeVout]?.satoshis ?? 0;
@@ -18710,6 +18710,74 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       lockHex: utils_exports.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary()),
       publisherCut: rep.publisherCut,
       resellerCut: rep.resellerCut
+    };
+  }
+  async function createGiftVouchers(provider2, publisherKey, params) {
+    const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
+    const count = Math.max(1, Math.floor(params.count));
+    const keys = Array.from({ length: count }, () => PrivateKey.fromRandom());
+    const estFee = Math.ceil((250 + count * 35) * feePerKb / 1e3);
+    const target = count * params.fundEachSats + estFee + 500;
+    const selected = selectFunding(await getSafeUtxos(provider2), target);
+    if (selected.length === 0) throw new Error("Insufficient funds to create the gift vouchers.");
+    const funding = await toFundingInputs(provider2, selected);
+    const tx = new Transaction();
+    for (const f2 of funding) {
+      tx.addInput({ sourceTransaction: f2.sourceTx, sourceOutputIndex: f2.utxo.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(publisherKey) });
+    }
+    for (const k of keys) {
+      tx.addOutput({ lockingScript: new P2PKH().lock(k.toAddress()), satoshis: params.fundEachSats });
+    }
+    const changeVout = tx.outputs.length;
+    tx.addOutput({ lockingScript: new P2PKH().lock(publisherKey.toAddress()), change: true });
+    await tx.fee(new SatoshisPerKilobyte(feePerKb));
+    await tx.sign();
+    await provider2.broadcast(tx.toHex());
+    const txId = tx.id("hex");
+    provider2.registerPendingTx(
+      txId,
+      selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
+      (tx.outputs[changeVout]?.satoshis ?? 0) > 0 ? { outputIndex: changeVout, satoshis: tx.outputs[changeVout].satoshis ?? 0 } : void 0
+    );
+    return { fundingTxId: txId, voucherWifs: keys.map((k) => k.toWif()) };
+  }
+  async function claimGiftEdition(provider2, ownerKey, params) {
+    const giftKey = PrivateKey.fromWif(params.giftWif);
+    const giftScript = p2pkhScript(Hash_exports.hash160(giftKey.toPublicKey().encode(true)));
+    const giftUtxos = await provider2.getUnspentByScriptHash(wocScriptHash(giftScript));
+    if (giftUtxos.length === 0) throw new Error("This free copy has already been claimed.");
+    const funding = await toFundingInputs(provider2, giftUtxos);
+    const lockBytes = utils_exports.toArray(params.editionLockHex, "hex");
+    const parsed = parseEditionAny(LockingScript.fromBinary(lockBytes));
+    if (parsed == null) throw new Error("claimGiftEdition: not an edition covenant");
+    const sourceTx = params.editionSourceTx ?? await provider2.getSourceTransaction(params.editionTxId);
+    const tokenSats = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS;
+    const edition = { txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis: tokenSats, lockBytes, sourceTx };
+    const ownerPub = ownerKey.toPublicKey().encode(true);
+    const changeAddress = ownerKey.toAddress();
+    let rep;
+    if (parsed.isV2) {
+      rep = await buildReplicateV2Tx({ edition, buyerKey: giftKey, funding, ownerPubKey: ownerPub, changeAddress, note: params.note, feePerKb: params.feePerKb });
+    } else {
+      const terms = {
+        publisherPubKeyHash: parsed.terms.publisherPubKeyHash,
+        publisherFeeSats: parsed.terms.publisherFeeSats,
+        holderFeeSats: parsed.terms.holderFeeSats,
+        tokenSats
+      };
+      rep = await buildReplicateTx({ edition, terms, buyerKey: giftKey, funding, ownerPubKey: ownerPub, changeAddress, note: params.note, feePerKb: params.feePerKb });
+    }
+    await provider2.broadcast(rep.tx.toHex());
+    provider2.registerPendingTx(
+      rep.txId,
+      [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex }, ...giftUtxos.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex }))],
+      rep.changeVout != null ? { outputIndex: rep.changeVout, satoshis: rep.tx.outputs[rep.changeVout].satoshis ?? 0 } : void 0
+    );
+    return {
+      txId: rep.txId,
+      replicaOutpoint: { txId: rep.txId, outputIndex: rep.replicaVout },
+      lockHex: utils_exports.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary()),
+      isV2: parsed.isV2
     };
   }
   async function transferEdition(provider2, ownerKey, params) {
@@ -20720,7 +20788,11 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
           bc.textContent = "\u{1F4E3} Broadcast";
           bc.className = "secondary";
           bc.onclick = () => void onBroadcast(t);
-          actions.append(bc);
+          const gift = document.createElement("button");
+          gift.textContent = "\u{1F381} Gift";
+          gift.className = "secondary";
+          gift.onclick = () => void onGiftCopies(t);
+          actions.append(bc, gift);
         }
       } else {
         const send = document.createElement("button");
@@ -20749,6 +20821,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
   var cvObjectUrl = null;
   var currentCollection = null;
   var cvNote = null;
+  var cvGiftWif = null;
   function setCvStatus(msg, kind = "info") {
     const el = $("cvStatus");
     el.textContent = msg;
@@ -20760,7 +20833,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
     const params = new URLSearchParams(raw);
     const c = params.get("c");
     if (!c) return null;
-    return { c, h: params.get("h") };
+    return { c, h: params.get("h"), g: params.get("g") };
   }
   async function loadCollection(tx1Ref) {
     const tx1 = await provider.getSourceTransaction(tx1Ref);
@@ -20856,7 +20929,8 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       vb.style.display = "none";
     }
   }
-  async function openCollectionView(tx1Ref, holderPubKey) {
+  async function openCollectionView(tx1Ref, holderPubKey, giftWif = null) {
+    cvGiftWif = giftWif;
     $("collectionView").style.display = "flex";
     hideFundPrompt();
     $("cvTitle").textContent = "Loading\u2026";
@@ -20870,6 +20944,11 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       const info = await loadCollection(tx1Ref);
       currentCollection = { info, holderPubKey };
       renderCollectionView(info);
+      if (cvGiftWif) {
+        ;
+        $("cvGet").textContent = "\u{1F381} Get your free copy";
+        $("cvPrice").innerHTML = '\u{1F381} <b>A free gift from the publisher</b> <span class="muted">\u2014 claim your copy, no payment and no funds needed.</span>';
+      }
       setCvStatus("");
       void loadSellerNote(info, holderPubKey ?? info.publisherPubKeyHex);
     } catch (e) {
@@ -21062,6 +21141,35 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
         setCvStatus("This seller has no edition available right now \u2014 try another link or ask them to mint one.", "error");
         return;
       }
+      if (cvGiftWif) {
+        let giftNote = cvNote;
+        if (!giftNote) {
+          try {
+            giftNote = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref);
+          } catch {
+          }
+        }
+        setCvStatus("\u{1F381} Claiming your free copy\u2026");
+        const claimed = await claimGiftEdition(provider, key, {
+          giftWif: cvGiftWif,
+          editionTxId: tip.txId,
+          editionOutputIndex: tip.outputIndex,
+          editionLockHex: tip.lockHex,
+          note: giftNote ?? void 0
+        });
+        storeEdition(
+          { txId: claimed.replicaOutpoint.txId, outputIndex: claimed.replicaOutpoint.outputIndex, lockHex: claimed.lockHex },
+          info.tx1Ref,
+          info.name,
+          tip.terms,
+          giftNote
+        );
+        renderTokens();
+        showViewButton(info, true);
+        setCvStatus("\u{1F381} It\u2019s yours! Your free copy is now in My NFTs.", "ok");
+        cvGiftWif = null;
+        return;
+      }
       const publisherCut = tip.isV2 ? Math.floor(tip.priceSats * info.pBps / 1e4) : tip.terms.publisherFeeSats;
       const resellerCut = tip.isV2 ? tip.priceSats - publisherCut : tip.terms.holderFeeSats;
       const price = publisherCut + resellerCut;
@@ -21146,6 +21254,59 @@ Public, one transaction, reaches every current holder. Message:`);
     } catch (e) {
       setStatus(`Broadcast failed: ${e.message}`, "error");
     }
+  }
+  async function onGiftCopies(t) {
+    let claimCost = 0;
+    try {
+      const ed = parseEditionAny(LockingScript.fromHex(t.lockHex ?? ""));
+      if (ed) claimCost = ed.isV2 ? ed.priceSats : ed.terms.publisherFeeSats + ed.terms.holderFeeSats;
+    } catch {
+    }
+    const fundEach = claimCost + 700 + 800;
+    const countStr = prompt(
+      `Create free-gift links for \u201C${t.collectionName ?? "this collection"}\u201D.
+
+How many?  Each is pre-funded with ~${fundEach} sat \u2014 but the price + fees come back to you as the holder, so your real cost is \u2248 the miner fee per claim.`,
+      "10"
+    );
+    if (countStr == null) return;
+    const count = Math.max(1, Math.min(500, parseInt(countStr, 10) || 0));
+    const total = count * fundEach;
+    if (!confirm(`Fund ${count} gift link(s) at ~${fundEach} sat each (~${total} sat from your wallet; most returns on claim). Proceed?`)) return;
+    setStatus(`Creating ${count} funded gift link(s)\u2026`);
+    try {
+      const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { count, fundEachSats: fundEach });
+      const links = voucherWifs.map((wif) => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`);
+      setStatus(`\u2705 ${count} gift link(s) funded (tx ${short(fundingTxId)}). Hand them out from the popup.`, "ok");
+      showGiftLinksModal(t.collectionName ?? "Free gift", links);
+    } catch (e) {
+      setStatus(`Gift creation failed: ${e.message}`, "error");
+    }
+  }
+  function showGiftLinksModal(title, links) {
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    const rows = links.map((l, i) => `<div class="gift-row"><span class="mono gift-link">${escapeHtml(l)}</span><button class="secondary gift-qr" data-i="${i}">QR</button></div>`).join("");
+    overlay.innerHTML = `<div class="modal-box gift-modal-box"><div class="modal-head"><span>\u{1F381} ${escapeHtml(title)} \u2014 ${links.length} gift link${links.length > 1 ? "s" : ""}</span><button class="secondary gift-close">\u2715 Close</button></div><div class="row" style="margin-bottom:10px"><button class="gift-copyall">Copy all</button><button class="secondary gift-download">Download .txt</button></div><div class="gift-list">${rows}</div><p class="muted" style="font-size:11px;margin-top:10px">Each link is single-use and pre-funded. Hand them out (email, DM, in person); the recipient claims a free copy and can resell it \u2014 your publisher fee returns on every resale.</p></div>`;
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector(".gift-close")?.addEventListener("click", close);
+    overlay.querySelector(".gift-copyall")?.addEventListener("click", () => void navigator.clipboard?.writeText(links.join("\n")));
+    overlay.querySelector(".gift-download")?.addEventListener("click", () => {
+      const blob = new Blob([links.join("\n")], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "smart-nfts-gift-links.txt";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1e3);
+    });
+    overlay.querySelectorAll(".gift-qr").forEach((b) => b.addEventListener("click", () => {
+      showQrModal("Scan to claim a free copy", links[parseInt(b.dataset.i ?? "0", 10)]);
+    }));
+    document.body.append(overlay);
   }
   async function onCheckUpdates() {
     const host = $("updatesFeed");
@@ -21268,11 +21429,11 @@ Public, one transaction, reaches every current holder. Message:`);
     $("cvFundDone").onclick = () => void onGetCopy();
     window.addEventListener("hashchange", () => {
       const r2 = parseHashRoute();
-      if (r2) void openCollectionView(r2.c, r2.h);
+      if (r2) void openCollectionView(r2.c, r2.h, r2.g);
       else closeCollectionView();
     });
     const route = parseHashRoute();
-    if (route) void openCollectionView(route.c, route.h);
+    if (route) void openCollectionView(route.c, route.h, route.g);
     void refreshBalance();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

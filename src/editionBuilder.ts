@@ -19,9 +19,8 @@
  * the network, exactly like collectionBuilder. Network wrappers select funding + broadcast.
  */
 import {
-  Transaction, P2PKH, SatoshisPerKilobyte, Hash, Utils, LockingScript, UnlockingScript, TransactionSignature, PublicKey,
+  Transaction, P2PKH, SatoshisPerKilobyte, Hash, Utils, LockingScript, UnlockingScript, TransactionSignature, PublicKey, PrivateKey,
 } from '@bsv/sdk'
-import type { PrivateKey } from '@bsv/sdk'
 import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
   editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE, parseEditionScript,
@@ -254,9 +253,15 @@ export interface ReplicateResult {
 export async function buildReplicateTx(opts: {
   edition: EditionUtxo
   terms: EditionTerms
+  /** Key that SIGNS the funding inputs (the payer). For a gift claim this is the voucher key. */
   buyerKey: PrivateKey
   /** Buyer funding inputs (P2PKH), signed with buyerKey. */
   funding: FundingInput[]
+  /** Owner of the replica (decoupled from the payer). Default: the buyerKey's pubkey. A gift claim sets this
+   *  to the recipient's wallet so the voucher funds the tx but the recipient owns the copy. */
+  ownerPubKey?: number[]
+  /** Where change goes. Default: the buyerKey's address. A gift claim sends it to the recipient. */
+  changeAddress?: string
   /** Seller's note (promo + optional bonus) to echo onto the sale — hands-off propagation. */
   note?: SellerNote
   feePerKb?: number
@@ -264,7 +269,7 @@ export async function buildReplicateTx(opts: {
   const tokenSats = opts.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
   const lock = LockingScript.fromBinary(opts.edition.lockBytes)
   const holderPub = editionOwnerPubKey(opts.edition.lockBytes)
-  const buyerPub = pubKeyBytes(opts.buyerKey)
+  const buyerPub = opts.ownerPubKey ?? pubKeyBytes(opts.buyerKey)
   const tx1RefHex = parseEditionScript(lock)?.tx1RefHex
   const tx = new Transaction()
   tx.version = 2
@@ -298,7 +303,7 @@ export async function buildReplicateTx(opts: {
     })
   }
   const changeVout = tx.outputs.length
-  tx.addOutput({ lockingScript: new P2PKH().lock(opts.buyerKey.toAddress()), change: true })                  // buyer change (last)
+  tx.addOutput({ lockingScript: new P2PKH().lock(opts.changeAddress ?? opts.buyerKey.toAddress()), change: true }) // change → owner (or payer)
 
   await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB))
   await tx.sign()
@@ -314,8 +319,13 @@ export async function buildReplicateTx(opts: {
  */
 export async function buildReplicateV2Tx(opts: {
   edition: EditionUtxo
+  /** Key that SIGNS the funding inputs (the payer). For a gift claim this is the voucher key. */
   buyerKey: PrivateKey
   funding: FundingInput[]
+  /** Owner of the replica (decoupled from the payer). Default: the buyerKey's pubkey. */
+  ownerPubKey?: number[]
+  /** Where change goes. Default: the buyerKey's address. */
+  changeAddress?: string
   note?: SellerNote
   tokenSats?: number
   feePerKb?: number
@@ -325,7 +335,7 @@ export async function buildReplicateV2Tx(opts: {
   const parsed = parseEditionScriptV2(lock)
   if (parsed == null) throw new Error('buildReplicateV2Tx: not a v2 edition covenant')
   const holderPub = editionOwnerPubKey(opts.edition.lockBytes)
-  const buyerPub = pubKeyBytes(opts.buyerKey)
+  const buyerPub = opts.ownerPubKey ?? pubKeyBytes(opts.buyerKey)
   const publisherCut = Math.floor((parsed.priceSats * parsed.terms.pBps) / 10000)
   const resellerCut = parsed.priceSats - publisherCut
   const tx = new Transaction()
@@ -355,7 +365,7 @@ export async function buildReplicateV2Tx(opts: {
     })
   }
   const changeVout = tx.outputs.length
-  tx.addOutput({ lockingScript: new P2PKH().lock(opts.buyerKey.toAddress()), change: true })
+  tx.addOutput({ lockingScript: new P2PKH().lock(opts.changeAddress ?? opts.buyerKey.toAddress()), change: true }) // change → owner (or payer)
 
   await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB))
   await tx.sign()
@@ -709,6 +719,95 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
     txId: rep.txId, replicaOutpoint: { txId: rep.txId, outputIndex: rep.replicaVout },
     lockHex: Utils.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary()),
     publisherCut: rep.publisherCut, resellerCut: rep.resellerCut,
+  }
+}
+
+// ─── Free-gift vouchers (publisher pre-funds claims; recipients claim for ~a miner fee) ──────────
+
+/**
+ * Publisher: mint `count` funded "voucher" keys in ONE transaction, each holding `fundEachSats`. Returns
+ * the funding txid + the voucher WIFs (the app turns each into a `&g=` claim link). Because the recipient
+ * claims by replicating the publisher's own edition, the price + fees they "pay" flow straight back to the
+ * publisher (they are the holder) — so the publisher's real cost ≈ the miner fee × count.
+ */
+export async function createGiftVouchers(provider: WalletProvider, publisherKey: PrivateKey, params: {
+  count: number
+  fundEachSats: number
+  feePerKb?: number
+}): Promise<{ fundingTxId: string; voucherWifs: string[] }> {
+  const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
+  const count = Math.max(1, Math.floor(params.count))
+  const keys = Array.from({ length: count }, () => PrivateKey.fromRandom())
+  const estFee = Math.ceil(((250 + count * 35) * feePerKb) / 1000)
+  const target = count * params.fundEachSats + estFee + 500
+  const selected = selectFunding(await getSafeUtxos(provider), target)
+  if (selected.length === 0) throw new Error('Insufficient funds to create the gift vouchers.')
+  const funding = await toFundingInputs(provider, selected)
+
+  const tx = new Transaction()
+  for (const f of funding) {
+    tx.addInput({ sourceTransaction: f.sourceTx, sourceOutputIndex: f.utxo.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(publisherKey) })
+  }
+  for (const k of keys) {
+    tx.addOutput({ lockingScript: new P2PKH().lock(k.toAddress()), satoshis: params.fundEachSats })
+  }
+  const changeVout = tx.outputs.length
+  tx.addOutput({ lockingScript: new P2PKH().lock(publisherKey.toAddress()), change: true })
+  await tx.fee(new SatoshisPerKilobyte(feePerKb))
+  await tx.sign()
+  await provider.broadcast(tx.toHex())
+  const txId = tx.id('hex')
+  provider.registerPendingTx(txId, selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
+    (tx.outputs[changeVout]?.satoshis ?? 0) > 0 ? { outputIndex: changeVout, satoshis: tx.outputs[changeVout].satoshis ?? 0 } : undefined)
+  return { fundingTxId: txId, voucherWifs: keys.map(k => k.toWif()) }
+}
+
+/**
+ * Recipient: claim a gift edition with a funded voucher key. The voucher signs the funding (pays the fee +
+ * price), but the replica is owned by `ownerKey` (the recipient's own wallet) and change tops them up.
+ * Works for a brand-new OR existing wallet. Throws if the voucher has already been spent (single-use).
+ */
+export async function claimGiftEdition(provider: WalletProvider, ownerKey: PrivateKey, params: {
+  giftWif: string
+  editionTxId: string
+  editionOutputIndex: number
+  editionLockHex: string
+  editionSourceTx?: Transaction
+  note?: SellerNote
+  feePerKb?: number
+}): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string; isV2: boolean }> {
+  const giftKey = PrivateKey.fromWif(params.giftWif)
+  const giftScript = p2pkhScript(Hash.hash160(giftKey.toPublicKey().encode(true) as number[]))
+  const giftUtxos = await provider.getUnspentByScriptHash(wocScriptHash(giftScript))
+  if (giftUtxos.length === 0) throw new Error('This free copy has already been claimed.')
+  const funding = await toFundingInputs(provider, giftUtxos)
+
+  const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
+  const parsed = parseEditionAny(LockingScript.fromBinary(lockBytes))
+  if (parsed == null) throw new Error('claimGiftEdition: not an edition covenant')
+  const sourceTx = params.editionSourceTx ?? await provider.getSourceTransaction(params.editionTxId)
+  const tokenSats = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS
+  const edition: EditionUtxo = { txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis: tokenSats, lockBytes, sourceTx }
+  const ownerPub = ownerKey.toPublicKey().encode(true) as number[]
+  const changeAddress = ownerKey.toAddress()
+
+  let rep: ReplicateResult
+  if (parsed.isV2) {
+    rep = await buildReplicateV2Tx({ edition, buyerKey: giftKey, funding, ownerPubKey: ownerPub, changeAddress, note: params.note, feePerKb: params.feePerKb })
+  } else {
+    const terms: EditionTerms = {
+      publisherPubKeyHash: parsed.terms.publisherPubKeyHash, publisherFeeSats: parsed.terms.publisherFeeSats,
+      holderFeeSats: parsed.terms.holderFeeSats, tokenSats,
+    }
+    rep = await buildReplicateTx({ edition, terms, buyerKey: giftKey, funding, ownerPubKey: ownerPub, changeAddress, note: params.note, feePerKb: params.feePerKb })
+  }
+  await provider.broadcast(rep.tx.toHex())
+  provider.registerPendingTx(rep.txId,
+    [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex }, ...giftUtxos.map(u => ({ txId: u.txId, outputIndex: u.outputIndex }))],
+    rep.changeVout != null ? { outputIndex: rep.changeVout, satoshis: rep.tx.outputs[rep.changeVout].satoshis ?? 0 } : undefined)
+  return {
+    txId: rep.txId, replicaOutpoint: { txId: rep.txId, outputIndex: rep.replicaVout },
+    lockHex: Utils.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary()), isV2: parsed.isV2,
   }
 }
 

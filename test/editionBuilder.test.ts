@@ -6,7 +6,7 @@ import {
   buildEditionGenesisTx, buildReplicateTx, buildReplicateV2Tx, buildEditionGenesisV2Tx, buildEditionTransferTx,
   type EditionUtxo, type EditionTerms,
 } from '../src/editionBuilder.ts'
-import { buildEditionLockV2, p2pkhScript } from '../src/covenant.ts'
+import { buildEditionLockV2, p2pkhScript, parseEditionAny } from '../src/covenant.ts'
 import { readNoteFromTx } from '../src/sellerNote.ts'
 import { parseNoteScript } from '../src/tokenCodec.ts'
 import type { FundingInput } from '../src/collectionBuilder.ts'
@@ -160,6 +160,20 @@ test('v2 builder: replicate pays ⌊P·c%⌋ to publisher + remainder to reselle
   assert.deepEqual(rep.tx.outputs[3].lockingScript.toBinary(), p2pkhScript(Hash.hash160(pub(holder))))
   // The covenant input validates — builder's amounts match what the script recomputes & enforces.
   assert.equal(spendOk(rep.tx, lock, 1), true)
+})
+
+test('gift-funded replicate: a voucher key funds the tx but the RECIPIENT owns the replica (covenant accepts)', async () => {
+  const { lock, utxo } = v2Edition()
+  const giftKey = PrivateKey.fromRandom() // publisher's funded voucher key — the payer
+  const userKey = PrivateKey.fromRandom() // the recipient's own wallet — the owner
+  const rep = await buildReplicateV2Tx({
+    edition: utxo, buyerKey: giftKey, funding: [faucet(giftKey, 200000)],
+    ownerPubKey: pub(userKey), changeAddress: userKey.toAddress(),
+  })
+  // The covenant still validates — only who pays / who owns changed, not the enforced split.
+  assert.equal(spendOk(rep.tx, lock, 1), true)
+  // out[1] (the replica) is owned by the RECIPIENT, not the gift key.
+  assert.equal(parseEditionAny(rep.tx.outputs[1].lockingScript)?.ownerPubKeyHex, userKey.toPublicKey().toString())
 })
 
 test('v2 builder: replicate WITH a seller-note echoes a NOTE output to the buyer + bonus, covenant still valid', async () => {
