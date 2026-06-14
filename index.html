@@ -289,16 +289,16 @@
       <input id="edCover" type="file" accept="image/*" />
       <label>Pricing model</label>
       <select id="edMode">
-        <option value="fixed">Fixed fees — publisher + holder royalties (sat)</option>
+        <option value="fixed">Fixed fees — publisher + holder royalties (sats)</option>
         <option value="percentage">Percentage — publisher % of a reseller-set price (Covenant v2)</option>
       </select>
       <div id="edFixedFees" class="grid2" style="grid-template-columns:1fr 1fr">
-        <div><label>Publisher fee (sat)</label><input id="edPublisherFee" type="number" min="0" value="5000" /></div>
-        <div><label>Holder fee (sat)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>
+        <div><label>Publisher fee (sats)</label><input id="edPublisherFee" type="number" min="0" value="5000" /></div>
+        <div><label>Holder fee (sats)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>
       </div>
       <div id="edPctFees" class="grid2" style="grid-template-columns:1fr 1fr;display:none">
         <div><label>Publisher fee (basis points — 250 = 2.5%)</label><input id="edBps" type="number" min="0" max="10000" value="250" /></div>
-        <div><label>Reseller price (sat)</label><input id="edPrice" type="number" min="1" value="5000" /></div>
+        <div><label>Reseller price (sats)</label><input id="edPrice" type="number" min="1" value="5000" /></div>
       </div>
       <label>Editions to mint now</label>
       <input id="edCount" type="number" min="1" value="1" />

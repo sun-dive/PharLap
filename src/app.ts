@@ -101,7 +101,7 @@ async function refreshBalance(): Promise<void> {
   try {
     const safe = await getSafeUtxos(provider)
     const spendable = safe.reduce((s, u) => s + u.satoshis, 0)
-    $('balance').textContent = `${spendable} sat spendable (${safe.length} funding UTXO${safe.length === 1 ? '' : 's'})`
+    $('balance').textContent = `${spendable} sats spendable (${safe.length} funding UTXO${safe.length === 1 ? '' : 's'})`
     setStatus('Balance updated.', 'ok')
   } catch (e) {
     setStatus(`Balance error: ${(e as Error).message}`, 'error')
@@ -197,7 +197,7 @@ async function onMintEdition(): Promise<void> {
       const pBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
       const price = Math.max(1, parseInt(val('edPrice') || '5000', 10))
       const publisherPubKeyHash = Hash.hash160(key.toPublicKey().encode(true) as number[])
-      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (publisher ${(pBps / 100).toFixed(2)}%, reseller price ${price} sat)…`)
+      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (publisher ${(pBps / 100).toFixed(2)}%, reseller price ${price} sats)…`)
       const minted = await createEditionV2(provider, key, { tokenName: name, terms: { publisherPubKeyHash, pBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover })
       for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { publisherPubKeyHash, publisherFeeSats: 0, holderFeeSats: 0 })
       renderTokens()
@@ -220,7 +220,7 @@ async function onMintEdition(): Promise<void> {
 async function onV2SelfTest(): Promise<void> {
   const pBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
   const price = Math.max(1, parseInt(val('edPrice') || '50000', 10))
-  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return
+  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price ${price} sats) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return
   setStatus('v2 self-test: minting (TX1 template + TX2 v2 genesis)…')
   try {
     const publisherPubKeyHash = key.toPublicKey().toHash() as number[]
@@ -234,7 +234,7 @@ async function onV2SelfTest(): Promise<void> {
     })
     setStatus(
       `✅ v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} · TX2 ${short(minted.tx2Id)} · replicate ${short(r.txId)} ` +
-      `— publisher ${r.publisherCut} + reseller ${r.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
+      `— publisher ${r.publisherCut} + reseller ${r.resellerCut} sats. Check these txids on WhatsOnChain (expect them mined).`,
       'ok',
     )
     console.log('v2 self-test txids:', { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r.txId, publisherCut: r.publisherCut, resellerCut: r.resellerCut })
@@ -262,7 +262,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
       storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
       storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
       renderTokens()
-      setStatus(`✅ v2 replicated. Tx ${short(r.txId)} — publisher ${r.publisherCut} + reseller ${r.resellerCut} sat.`, 'ok')
+      setStatus(`✅ v2 replicated. Tx ${short(r.txId)} — publisher ${r.publisherCut} + reseller ${r.resellerCut} sats.`, 'ok')
       return
     }
     const note = await noteToPropagate(t)
@@ -459,8 +459,8 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
     const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript)
     if (ed) {
       const econ = ed.isV2
-        ? `publisher ${(ed.terms.pBps / 100).toFixed(2)}% · price ${ed.priceSats} sat`
-        : `fees ${ed.terms.publisherFeeSats}/${ed.terms.holderFeeSats} sat`
+        ? `publisher ${(ed.terms.pBps / 100).toFixed(2)}% · price ${ed.priceSats} sats`
+        : `fees ${ed.terms.publisherFeeSats}/${ed.terms.holderFeeSats} sats`
       setStatus(`✅ Valid ${ed.isV2 ? 'v2 ' : ''}edition covenant — collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, 'ok')
       return
     }
@@ -752,10 +752,10 @@ function renderCollectionView(info: CollectionInfo): void {
   $('cvPublisher').textContent = info.publisherPubKeyHex ? `by ${short(info.publisherPubKeyHex)}` : ''
   $('cvDesc').textContent = info.description || '(no description provided)'
   if (info.isV2) {
-    $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sat</b> <span class="muted">` +
-      `(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sat, plus a small network fee)</span>`
+    $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sats</b> <span class="muted">` +
+      `(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sats, plus a small network fee)</span>`
   } else if (info.fees) {
-    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.publisher + info.fees.holder} sat</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee)</span>`
+    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.publisher + info.fees.holder} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee)</span>`
   } else {
     $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
   }
@@ -945,8 +945,8 @@ async function onSaveSellerNote(): Promise<void> {
 }
 
 function showFundPrompt(needed: number, have: number): void {
-  $('cvFundNeed').textContent = `${needed} sat`
-  $('cvFundHave').textContent = `${have} sat`
+  $('cvFundNeed').textContent = `${needed} sats`
+  $('cvFundHave').textContent = `${have} sats`
   $('cvFundAddr').textContent = address
   // Inline payment QR with the amount needed (BIP21 bitcoin: URI — the BSV standard).
   $('cvFundQr').innerHTML = `<div class="qr-holder qr-fund">${qrSvg(bsvPaymentUri(address, needed))}</div>`
@@ -994,10 +994,10 @@ async function onGetCopy(): Promise<void> {
     const resellerCut = tip.isV2 ? tip.priceSats - publisherCut : tip.terms.holderFeeSats
     const price = publisherCut + resellerCut
     const ok = confirm(
-      `Buy a copy of “${info.name}” for ${price} sat?\n\n` +
+      `Buy a copy of “${info.name}” for ${price} sats?\n\n` +
       (tip.isV2
-        ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut} + reseller ${resellerCut} sat, plus a small network fee.\n`
-        : `publisher ${publisherCut} + holder ${resellerCut} sat, plus a small network fee.\n`) +
+        ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut} + reseller ${resellerCut} sats, plus a small network fee.\n`
+        : `publisher ${publisherCut} + holder ${resellerCut} sats, plus a small network fee.\n`) +
       `This is an instant, on-chain purchase.`,
     )
     if (!ok) { setCvStatus('Purchase cancelled.'); return }
@@ -1081,12 +1081,12 @@ async function onGiftCopies(t: StoredToken): Promise<void> {
   const fundEach = claimCost + 700 /* miner buffer */ + 800 /* recipient starter */
   const countStr = prompt(
     `Create free-gift links for “${t.collectionName ?? 'this collection'}”.\n\n` +
-    `How many?  Each is pre-funded with ~${fundEach} sat — but the price + fees come back to you as the holder, ` +
+    `How many?  Each is pre-funded with ~${fundEach} sats — but the price + fees come back to you as the holder, ` +
     `so your real cost is ≈ the miner fee per claim.`, '10')
   if (countStr == null) return
   const count = Math.max(1, Math.min(500, parseInt(countStr, 10) || 0))
   const total = count * fundEach
-  if (!confirm(`Fund ${count} gift link(s) at ~${fundEach} sat each (~${total} sat from your wallet; most returns on claim). Proceed?`)) return
+  if (!confirm(`Fund ${count} gift link(s) at ~${fundEach} sats each (~${total} sats from your wallet; most returns on claim). Proceed?`)) return
   setStatus(`Creating ${count} funded gift link(s)…`)
   try {
     const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { count, fundEachSats: fundEach })
