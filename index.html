@@ -166,7 +166,7 @@
            The #tab-mint panel below is kept in the DOM so btnMint wiring stays intact — re-add this
            button to surface it again. -->
       <button class="tab" data-tab="editions" role="tab">Publish</button>
-      <button class="tab" data-tab="tokens" role="tab">My tokens</button>
+      <button class="tab" data-tab="tokens" role="tab">My NFTs</button>
       <button class="tab" data-tab="messages" role="tab">Messages</button>
       <button class="tab" data-tab="updates" role="tab">Updates</button>
       <button class="tab" data-tab="help" role="tab">Help</button>
@@ -191,7 +191,7 @@
         </button>
         <button class="home-card" data-goto="tokens">
           <div class="home-art" style="--g1:#9e6a03;--g2:#5a3c02">🎴</div>
-          <div class="home-card-body"><h3>My tokens</h3><p>Your collection — share a sales page, transfer, or view.</p></div>
+          <div class="home-card-body"><h3>My NFTs</h3><p>Your collection — share a sales page, transfer, or view.</p></div>
         </button>
         <button class="home-card" data-goto="messages">
           <div class="home-art" style="--g1:#8957e5;--g2:#48247a">✉️</div>
@@ -238,7 +238,7 @@
     <section class="tabpanel" id="tab-editions" role="tabpanel">
     <div class="card warn">
       <p class="muted" style="font-size:12px;margin:0 0 8px">
-        Miner-enforced covenant tokens (OP_PUSH_TX). <b>Experimental — small-value mainnet only.</b>
+        Miner-enforced covenant NFTs (OP_PUSH_TX). <b>Experimental — small-value mainnet only.</b>
         First confirm the network accepts version-2 (Chronicle) transactions:
       </p>
       <div class="row" style="margin-bottom:10px"><button id="btnV2Probe" class="secondary">Test v2 broadcast</button></div>
@@ -271,7 +271,7 @@
         <button id="btnV2SelfTest" class="secondary" style="display:none">Self-test (mint + replicate)</button>
       </div>
       <p class="muted" style="font-size:12px;margin:8px 0 0" id="edFixedHelp">
-        Any buyer can later <b>Replicate</b> an edition (returns the token to the holder, mints their own copy,
+        Any buyer can later <b>Replicate</b> an edition (returns the NFT to the holder, mints their own copy,
         pays both fees). <b>Transfer</b> moves it owner-signed, re-creating the covenant.
       </p>
       <p class="muted" style="font-size:12px;margin:8px 0 0;display:none" id="edPctHelp">
@@ -288,7 +288,7 @@
       <input id="sendPubKey" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
       <div class="row" style="margin:10px 0"><button id="btnIncoming" class="secondary">Check incoming / recover</button></div>
       <div id="tokens"></div>
-      <p class="muted" style="font-size:12px;margin:8px 0 0">Enter a recipient public key above, then click <b>Send</b> on the token you want to transfer.</p>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Enter a recipient public key above, then click <b>Send</b> on the NFT you want to transfer.</p>
     </div>
     </section>
 
@@ -312,7 +312,7 @@
 
     <section class="tabpanel" id="tab-updates" role="tabpanel">
     <div class="card">
-      <p class="muted" style="font-size:13px;margin:0 0 10px">📣 Public announcements from the publishers of collections you hold. <b>Pulled on demand</b> — nothing is pushed to you, and you stay anonymous to the publisher. (To <i>send</i> announcements, open a collection you published in <b>My tokens</b> and use <b>📣 Broadcast</b>.)</p>
+      <p class="muted" style="font-size:13px;margin:0 0 10px">📣 Public announcements from the publishers of collections you hold. <b>Pulled on demand</b> — nothing is pushed to you, and you stay anonymous to the publisher. (To <i>send</i> announcements, open a collection you published in <b>My NFTs</b> and use <b>📣 Broadcast</b>.)</p>
       <div class="row"><button id="btnCheckUpdates">Check for updates</button></div>
       <div id="updatesFeed" style="margin-top:12px"></div>
     </div>
@@ -331,7 +331,7 @@
         <li><b>Back up your wallet.</b> In <b>Wallet</b>, copy your <b>WIF</b> (private key) somewhere safe — it restores everything on any device.</li>
         <li><b>Add a little BSV.</b> Send a small amount to your address (shown in <b>Wallet</b>) — you need it to publish and to buy.</li>
         <li><b>Publish an edition.</b> In <b>Publish</b>, set a name, cover, description, an optional file, and a price model, then mint.</li>
-        <li><b>Share it.</b> Your edition appears in <b>My tokens</b> — click <b>Sales page</b> to open its public link, then <b>Share</b> it anywhere.</li>
+        <li><b>Share it.</b> Your edition appears in <b>My NFTs</b> — click <b>Sales page</b> to open its public link, then <b>Share</b> it anywhere.</li>
         <li><b>Get paid.</b> Anyone who opens the link presses <b>Get a copy</b> and owns one instantly; you (the publisher) and the current holder are paid automatically, on-chain.</li>
       </ol>
 
@@ -342,7 +342,7 @@
       <ol>
         <li><b>Check your balance</b> — click <b>Refresh balance</b>.</li>
         <li><b>Receive BSV</b> — send funds to your <b>Address</b> (you need a little to publish or buy).</li>
-        <li><b>Share your identity</b> — <b>Copy public key</b> to give to anyone sending you tokens or messages.</li>
+        <li><b>Share your identity</b> — <b>Copy public key</b> to give to anyone sending you NFTs or messages.</li>
         <li><b>Back up</b> — copy your <b>WIF</b> and store it safely. It is the only thing that can restore this wallet.</li>
         <li><b>Restore / recover</b> — paste a WIF into <b>Restore from WIF</b> → <b>Restore</b>; your holdings and purchases rebuild from chain.</li>
         <li><b>New wallet</b> — makes a fresh key (back up the current WIF first — it gets replaced).</li>
@@ -355,15 +355,15 @@
         <li>Enter a <b>collection name</b> and <b>description</b>, and add a <b>cover image</b> (what buyers see).</li>
         <li>Pick a <b>pricing model</b>: <b>Fixed fees</b> (flat publisher + holder fee in sats), or <b>Percentage</b> (publisher takes a % of a reseller-set price).</li>
         <li>Set how many <b>editions to mint now</b>, and optionally <b>embed a file</b> — tick <b>Encrypt</b> to make it holders-only.</li>
-        <li>Click <b>Mint edition collection</b> (needs a little BSV). Your new editions appear in <b>My tokens</b>.</li>
+        <li>Click <b>Mint edition collection</b> (needs a little BSV). Your new editions appear in <b>My NFTs</b>.</li>
       </ol>
 
-      <h4>🎴 My tokens</h4>
+      <h4>🎴 My NFTs</h4>
       <p class="help-sub">Everything you hold, and what you can do with each item.</p>
       <ul>
         <li><b>Sell / share</b> — click <b>Sales page</b> on an edition to open its public buy link, then <b>Share</b> it anywhere.</li>
         <li><b>Replicate</b> — mint yourself another copy of an edition.</li>
-        <li><b>Transfer / Send</b> — paste the recipient's <b>public key</b> at the top, then <b>Transfer</b> (editions) or <b>Send</b> (plain tokens) to hand it over.</li>
+        <li><b>Transfer / Send</b> — paste the recipient's <b>public key</b> at the top, then <b>Transfer</b> (editions) or <b>Send</b> (plain NFTs) to hand it over.</li>
         <li><b>View</b> — open the embedded content (decrypts automatically if you're a holder).</li>
         <li><b>Verify</b> — prove on-chain that an item is a genuine edition of its collection.</li>
         <li><b>Check incoming / recover</b> — scan the chain for items sent to you, or rebuild your holdings after restoring a WIF.</li>
@@ -383,7 +383,7 @@
       <p class="help-sub">Public announcements from the publishers of collections you hold.</p>
       <ul>
         <li><b>As a holder:</b> click <b>Check for updates</b> to pull the latest announcements from every collection you own. Nothing is pushed — you choose when to look, and stay anonymous to the publisher.</li>
-        <li><b>As a publisher:</b> open a collection you published in <b>My tokens</b> and click <b>📣 Broadcast</b> — one message reaches <i>every</i> current holder, however far your editions have resold, for the cost of a single transaction.</li>
+        <li><b>As a publisher:</b> open a collection you published in <b>My NFTs</b> and click <b>📣 Broadcast</b> — one message reaches <i>every</i> current holder, however far your editions have resold, for the cost of a single transaction.</li>
         <li>Announcements are <b>public</b> (anyone can read them). For anything private, use <b>Messages</b> or holders-only <b>encrypted content</b>.</li>
       </ul>
 

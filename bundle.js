@@ -19443,7 +19443,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         store.add({ txId: op3.txId, outputIndex: op3.outputIndex, collectionId: result.collectionId, stateData: "", collectionName: name });
       }
       renderTokens();
-      setStatus(`Minted ${result.tokenOutpoints.length} token(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, "ok");
+      setStatus(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, "ok");
     } catch (e) {
       setStatus(`Mint failed: ${e.message}`, "error");
     }
@@ -19619,7 +19619,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
         note
       );
       renderTokens();
-      setStatus(`\u2705 Replicated. Tx ${short(r2.txId)} \u2014 token returned to holder, replica minted, fees paid.`, "ok");
+      setStatus(`\u2705 Replicated. Tx ${short(r2.txId)} \u2014 NFT returned to holder, replica minted, fees paid.`, "ok");
     } catch (e) {
       setStatus(`Replicate failed: ${e.message}`, "error");
     }
@@ -19657,7 +19657,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       setStatus("Enter the recipient's public key (33- or 65-byte hex).", "error");
       return;
     }
-    setStatus("Sending token\u2026");
+    setStatus("Sending NFT\u2026");
     try {
       const result = await createTransfer(provider, key, { tokenTxId: txId, tokenOutputIndex: outputIndex, recipientPubKeyHex: recipient });
       store.markSent(txId, outputIndex);
@@ -19754,7 +19754,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
     return name;
   }
   async function onCheckIncoming() {
-    setStatus("Scanning for incoming tokens and editions\u2026");
+    setStatus("Scanning for incoming NFTs and editions\u2026");
     let added = 0;
     let edAdded = 0;
     const errors = [];
@@ -19797,11 +19797,11 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
     if (errors.length > 0 && added === 0 && edAdded === 0) {
       setStatus(`Scan failed \u2014 ${errors.join("; ")}`, "error");
     } else {
-      setStatus(`Scan complete: ${added} token(s) + ${edAdded} edition(s) new.${errors.length ? " (" + errors.join("; ") + ")" : ""}`, "ok");
+      setStatus(`Scan complete: ${added} NFT(s) + ${edAdded} edition(s) new.${errors.length ? " (" + errors.join("; ") + ")" : ""}`, "ok");
     }
   }
   async function onVerify(txId, outputIndex) {
-    setStatus("Verifying token lineage\u2026");
+    setStatus("Verifying NFT lineage\u2026");
     try {
       const tx = await provider.getSourceTransaction(txId);
       const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript);
@@ -19924,7 +19924,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       return (b.addedAt ?? "").localeCompare(a.addedAt ?? "");
     });
     if (active.length === 0) {
-      host.innerHTML = '<p class="muted">No tokens yet. Mint a collection or Check Incoming.</p>';
+      host.innerHTML = '<p class="muted">No NFTs yet. Publish a collection or Check Incoming.</p>';
       return;
     }
     host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held \u2014 newest first</p>`;
@@ -20354,7 +20354,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       showBonus(echoNote, true);
       setCvStatus(
         `\u2705 You own a copy of \u201C${info.name}\u201D! Tx ${short(bought.txId)} \u2014 it\u2019s now in your wallet.` + (echoNote?.text ? `
-\u{1F4DD} Seller\u2019s note: ${echoNote.text}` : "") + (echoNote?.bonusValue ? "\n\u{1F381} Bonus included \u2014 claim it below / on the token card." : "")
+\u{1F4DD} Seller\u2019s note: ${echoNote.text}` : "") + (echoNote?.bonusValue ? "\n\u{1F381} Bonus included \u2014 claim it below / on the NFT card." : "")
       );
       if (info.hasContentFile) void onView(info.tx1Ref, info.name);
     } catch (e) {

@@ -120,7 +120,7 @@ async function onMint(): Promise<void> {
       store.add({ txId: op.txId, outputIndex: op.outputIndex, collectionId: result.collectionId, stateData: '', collectionName: name })
     }
     renderTokens()
-    setStatus(`Minted ${result.tokenOutpoints.length} token(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, 'ok')
+    setStatus(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, 'ok')
   } catch (e) {
     setStatus(`Mint failed: ${(e as Error).message}`, 'error')
   }
@@ -271,7 +271,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
     storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex },
       t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t), note)
     renderTokens()
-    setStatus(`✅ Replicated. Tx ${short(r.txId)} — token returned to holder, replica minted, fees paid.`, 'ok')
+    setStatus(`✅ Replicated. Tx ${short(r.txId)} — NFT returned to holder, replica minted, fees paid.`, 'ok')
   } catch (e) {
     setStatus(`Replicate failed: ${(e as Error).message}`, 'error')
   }
@@ -304,7 +304,7 @@ async function onSend(txId: string, outputIndex: number): Promise<void> {
   if (recipient.length !== 66 && recipient.length !== 130) {
     setStatus("Enter the recipient's public key (33- or 65-byte hex).", 'error'); return
   }
-  setStatus('Sending token…')
+  setStatus('Sending NFT…')
   try {
     const result = await createTransfer(provider, key, { tokenTxId: txId, tokenOutputIndex: outputIndex, recipientPubKeyHex: recipient })
     store.markSent(txId, outputIndex)
@@ -400,7 +400,7 @@ async function resolveCollectionName(tx1RefHex: string): Promise<string> {
 }
 
 async function onCheckIncoming(): Promise<void> {
-  setStatus('Scanning for incoming tokens and editions…')
+  setStatus('Scanning for incoming NFTs and editions…')
   let added = 0
   let edAdded = 0
   const errors: string[] = []
@@ -438,13 +438,13 @@ async function onCheckIncoming(): Promise<void> {
   if (errors.length > 0 && added === 0 && edAdded === 0) {
     setStatus(`Scan failed — ${errors.join('; ')}`, 'error')
   } else {
-    setStatus(`Scan complete: ${added} token(s) + ${edAdded} edition(s) new.${errors.length ? ' (' + errors.join('; ') + ')' : ''}`, 'ok')
+    setStatus(`Scan complete: ${added} NFT(s) + ${edAdded} edition(s) new.${errors.length ? ' (' + errors.join('; ') + ')' : ''}`, 'ok')
   }
 }
 
 // ─── verify ─────────────────────────────────────────────────────────
 async function onVerify(txId: string, outputIndex: number): Promise<void> {
-  setStatus('Verifying token lineage…')
+  setStatus('Verifying NFT lineage…')
   try {
     const tx = await provider.getSourceTransaction(txId)
     // Edition covenant outputs are a custom script — verify them structurally (lineage walk is future work).
@@ -563,7 +563,7 @@ function renderTokens(): void {
     if (ha !== hb) return hb - ha
     return (b.addedAt ?? '').localeCompare(a.addedAt ?? '')
   })
-  if (active.length === 0) { host.innerHTML = '<p class="muted">No tokens yet. Mint a collection or Check Incoming.</p>'; return }
+  if (active.length === 0) { host.innerHTML = '<p class="muted">No NFTs yet. Publish a collection or Check Incoming.</p>'; return }
   host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held — newest first</p>`
   const myPubKeyHashHex = Utils.toHex(Hash.hash160(key.toPublicKey().encode(true) as number[]))
   for (const t of active) {
@@ -980,7 +980,7 @@ async function onGetCopy(): Promise<void> {
     setCvStatus(
       `✅ You own a copy of “${info.name}”! Tx ${short(bought.txId)} — it’s now in your wallet.` +
       (echoNote?.text ? `\n📝 Seller’s note: ${echoNote.text}` : '') +
-      (echoNote?.bonusValue ? '\n🎁 Bonus included — claim it below / on the token card.' : ''),
+      (echoNote?.bonusValue ? '\n🎁 Bonus included — claim it below / on the NFT card.' : ''),
     )
     // Reveal the content (decrypts automatically — you're a holder now).
     if (info.hasContentFile) void onView(info.tx1Ref, info.name)
