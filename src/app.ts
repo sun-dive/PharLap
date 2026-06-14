@@ -18,6 +18,7 @@ import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, type SellerNote } from './sellerNote.ts'
 import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
+import { qrSvg, bsvPaymentUri } from './qr.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
@@ -807,14 +808,35 @@ function closeCollectionView(): void {
   if (location.hash) history.replaceState(null, '', location.pathname + location.search)
 }
 
-function shareCollectionLink(): void {
-  if (!currentCollection) return
+/** The sales-page link for the current collection, from the current seller's perspective (routed holder
+ *  else this wallet). Null if no collection is open. */
+function currentShareLink(): string | null {
+  if (!currentCollection) return null
   const { info, holderPubKey } = currentCollection
-  // Share from the perspective of the current seller: prefer the routed holder, else this wallet's pubkey.
   const h = holderPubKey ?? pubKeyHex
-  const link = `${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`
+  return `${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`
+}
+
+function shareCollectionLink(): void {
+  const link = currentShareLink()
+  if (!link) return
   void navigator.clipboard?.writeText(link)
   setCvStatus('Share link copied to clipboard.')
+}
+
+/** Pop a centered modal showing a scannable QR for `text`, with the text printed below it. */
+function showQrModal(title: string, text: string): void {
+  const overlay = document.createElement('div')
+  overlay.className = 'modal'
+  overlay.innerHTML =
+    '<div class="modal-box qr-modal-box">' +
+    `<div class="modal-head"><span>${escapeHtml(title)}</span><button class="secondary qr-close">✕ Close</button></div>` +
+    `<div class="qr-holder">${qrSvg(text)}</div>` +
+    `<div class="qr-cap mono">${escapeHtml(text)}</div></div>`
+  const close = (): void => overlay.remove()
+  overlay.addEventListener('click', e => { if (e.target === overlay) close() })
+  overlay.querySelector('.qr-close')?.addEventListener('click', close)
+  document.body.append(overlay)
 }
 
 /** Render the bonus area: a claim CTA for a holder, else a teaser; nothing if there's no bonus. */
@@ -914,6 +936,8 @@ function showFundPrompt(needed: number, have: number): void {
   $('cvFundNeed').textContent = `${needed} sat`
   $('cvFundHave').textContent = `${have} sat`
   $('cvFundAddr').textContent = address
+  // Inline payment QR with the amount needed (BIP21 bitcoin: URI — the BSV standard).
+  $('cvFundQr').innerHTML = `<div class="qr-holder qr-fund">${qrSvg(bsvPaymentUri(address, needed))}</div>`
   $('cvFund').style.display = 'block'
   setCvStatus('Not enough funds yet — send a little BSV to your wallet, then click “I’ve funded”.', 'error')
 }
@@ -1095,6 +1119,8 @@ function init(): void {
     switchWallet(k, true) // recover this wallet's purchases from chain
   }
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)
+  $('btnCopyAddr').onclick = () => void navigator.clipboard?.writeText(address)
+  $('btnQrAddr').onclick = () => showQrModal('Receive address — BSV only', address)
   $('btnWifShow').onclick = () => {
     const el = $('wif') as HTMLInputElement
     const showing = el.type === 'text'
@@ -1113,6 +1139,7 @@ function init(): void {
   // Collection / sales view (shareable links).
   $('cvWallet').onclick = () => closeCollectionView()
   $('cvShare').onclick = () => shareCollectionLink()
+  $('cvQr').onclick = () => { const l = currentShareLink(); if (l) showQrModal('Scan to open this sales page', l) }
   $('cvGet').onclick = () => void onGetCopy()
   $('cvView').onclick = () => { if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name) }
   $('cvNoteSave').onclick = () => void onSaveSellerNote()
