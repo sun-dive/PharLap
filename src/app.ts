@@ -17,6 +17,7 @@ import { parseEditionAny, parseEditionScriptV2 } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, type SellerNote } from './sellerNote.ts'
+import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
@@ -381,6 +382,8 @@ function renderInbox(msgs: IncomingMessage[]): void {
 // A received edition's token doesn't carry the collection title (that lives in TX1's template), so the
 // incoming scan defaults it to "Edition". Resolve the real name from TX1 (cached per collection).
 const nameCache = new Map<string, string>()
+/** Latest publisher announcement per collection, filled by the Updates feed; My tokens shows it inline. */
+const latestBroadcast = new Map<string, Broadcast>()
 async function resolveCollectionName(tx1RefHex: string): Promise<string> {
   const cached = nameCache.get(tx1RefHex)
   if (cached != null) return cached
@@ -562,11 +565,14 @@ function renderTokens(): void {
   })
   if (active.length === 0) { host.innerHTML = '<p class="muted">No tokens yet. Mint a collection or Check Incoming.</p>'; return }
   host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held — newest first</p>`
+  const myPubKeyHashHex = Utils.toHex(Hash.hash160(key.toPublicKey().encode(true) as number[]))
   for (const t of active) {
     const card = document.createElement('div')
     card.className = 'token'
     const stateText = t.stateData && t.stateData !== '00' ? safeUtf8(t.stateData) : ''
     const isEdition = t.kind === 'edition'
+    const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myPubKeyHashHex
+    const latest = latestBroadcast.get(t.collectionId)
     card.innerHTML = `
       <div class="token-name">${escapeHtml(t.collectionName ?? 'Collection')}${isEdition ? ' <span class="badge">edition</span>' : ''}</div>
       <div class="mono">collection ${short(t.collectionId)}</div>
@@ -576,6 +582,7 @@ function renderTokens(): void {
       ${t.bonusValue ? (t.bonusKind === 'link'
         ? `<div class="state">🎁 <a href="${escapeHtml(t.bonusValue)}" target="_blank" rel="noopener" class="bonus-claim">Claim your bonus ↗</a></div>`
         : `<div class="state">🎁 Bonus code: <span class="mono">${escapeHtml(t.bonusValue)}</span></div>`) : ''}
+      ${latest ? `<div class="state" style="color:var(--accent)">📣 ${escapeHtml(latest.text)}</div>` : ''}
     `
     const verify = document.createElement('button')
     verify.textContent = 'Verify'
@@ -601,6 +608,13 @@ function renderTokens(): void {
       sales.className = 'secondary'
       sales.onclick = () => onOpenSalesPage(t)
       actions.append(replicate, xfer, view, sales, verify)
+      if (iAmPublisher) {
+        const bc = document.createElement('button')
+        bc.textContent = '📣 Broadcast'
+        bc.className = 'secondary'
+        bc.onclick = () => void onBroadcast(t)
+        actions.append(bc)
+      }
     } else {
       const send = document.createElement('button')
       send.textContent = 'Send'
@@ -978,6 +992,55 @@ async function onGetCopy(): Promise<void> {
   }
 }
 
+/** Publisher: broadcast a public announcement to all holders of a collection (one tx, pull-delivered). */
+async function onBroadcast(t: StoredToken): Promise<void> {
+  const text = prompt(`Announce to all holders of “${t.collectionName ?? 'this collection'}”.\n\nPublic, one transaction, reaches every current holder. Message:`)
+  if (text == null) return
+  const trimmed = text.trim()
+  if (!trimmed) { setStatus('Announcement was empty.', 'error'); return }
+  setStatus('Publishing announcement to holders…')
+  try {
+    const txId = await publishBroadcast(provider, key, t.collectionId, trimmed)
+    latestBroadcast.set(t.collectionId, { text: trimmed, txId, height: 0 })
+    renderTokens()
+    setStatus(`📣 Announcement published (${short(txId)}). Holders see it when they check Updates.`, 'ok')
+  } catch (e) {
+    setStatus(`Broadcast failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Holder: pull announcements from the publishers of every collection you hold → newest-first feed. */
+async function onCheckUpdates(): Promise<void> {
+  const host = $('updatesFeed')
+  const held = [...new Set(store.active().map(t => t.collectionId))]
+  if (held.length === 0) {
+    host.innerHTML = '<p class="muted">No collections held yet — buy or mint an edition to receive publisher updates.</p>'
+    return
+  }
+  host.innerHTML = '<p class="muted">Checking for updates…</p>'
+  const feed: Array<Broadcast & { name: string }> = []
+  for (const collectionId of held) {
+    try {
+      const info = await loadCollection(collectionId)
+      if (!info.publisherPubKeyHex) continue
+      const list = await resolveBroadcasts(provider, info.publisherPubKeyHex, collectionId)
+      if (list.length > 0) latestBroadcast.set(collectionId, list[0])
+      for (const b of list) feed.push({ ...b, name: info.name })
+    } catch { /* skip a collection that fails to load */ }
+  }
+  feed.sort((a, b) => (b.height || 1e12) - (a.height || 1e12)) // newest first; unconfirmed → top
+  renderTokens() // surface any newly-cached latest announcements inline on the tokens
+  if (feed.length === 0) {
+    host.innerHTML = '<p class="muted">No announcements yet from the publishers of your collections.</p>'
+    return
+  }
+  host.innerHTML = feed.map(b =>
+    `<div class="token"><div class="token-name">📣 ${escapeHtml(b.name || 'Collection')}</div>` +
+    `<div class="state" style="color:var(--accent);white-space:pre-wrap">${escapeHtml(b.text)}</div>` +
+    `<div class="mono">${short(b.txId)}</div></div>`,
+  ).join('')
+}
+
 /** Wire the wallet section tabs (show one panel at a time) and restore the last-viewed tab. */
 function initTabs(): void {
   const tabs = Array.from(document.querySelectorAll<HTMLElement>('.tab'))
@@ -1013,6 +1076,7 @@ function init(): void {
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()
+  $('btnCheckUpdates').onclick = () => void onCheckUpdates()
   $('btnNewWallet').onclick = () => {
     if (!confirm('Replace the current wallet with a new random key? Your current key is in the WIF box — back it up first.')) return
     switchWallet(PrivateKey.fromRandom(), false)

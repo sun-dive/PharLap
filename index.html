@@ -168,6 +168,7 @@
       <button class="tab" data-tab="editions" role="tab">Publish</button>
       <button class="tab" data-tab="tokens" role="tab">My tokens</button>
       <button class="tab" data-tab="messages" role="tab">Messages</button>
+      <button class="tab" data-tab="updates" role="tab">Updates</button>
       <button class="tab" data-tab="help" role="tab">Help</button>
     </nav>
 
@@ -309,6 +310,14 @@
     </div>
     </section>
 
+    <section class="tabpanel" id="tab-updates" role="tabpanel">
+    <div class="card">
+      <p class="muted" style="font-size:13px;margin:0 0 10px">📣 Public announcements from the publishers of collections you hold. <b>Pulled on demand</b> — nothing is pushed to you, and you stay anonymous to the publisher. (To <i>send</i> announcements, open a collection you published in <b>My tokens</b> and use <b>📣 Broadcast</b>.)</p>
+      <div class="row"><button id="btnCheckUpdates">Check for updates</button></div>
+      <div id="updatesFeed" style="margin-top:12px"></div>
+    </div>
+    </section>
+
     <section class="tabpanel" id="tab-help" role="tabpanel">
     <div class="card help">
       <h3>What is SMART NFTs?</h3>
@@ -369,6 +378,14 @@
         <li>Click <b>Send message</b> — it's delivered on-chain to their key.</li>
         <li>Click <b>Check messages</b> to read messages others have sent you.</li>
       </ol>
+
+      <h4>📣 Updates</h4>
+      <p class="help-sub">Public announcements from the publishers of collections you hold.</p>
+      <ul>
+        <li><b>As a holder:</b> click <b>Check for updates</b> to pull the latest announcements from every collection you own. Nothing is pushed — you choose when to look, and stay anonymous to the publisher.</li>
+        <li><b>As a publisher:</b> open a collection you published in <b>My tokens</b> and click <b>📣 Broadcast</b> — one message reaches <i>every</i> current holder, however far your editions have resold, for the cost of a single transaction.</li>
+        <li>Announcements are <b>public</b> (anyone can read them). For anything private, use <b>Messages</b> or holders-only <b>encrypted content</b>.</li>
+      </ul>
 
       <h3>How selling works</h3>
       <p>Editions are <b>"unlimited mints"</b>: a buyer doesn't take your copy — they mint their <i>own</i> copy from

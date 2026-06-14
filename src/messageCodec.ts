@@ -150,3 +150,14 @@ export function openEnvelope(envelope: number[], recipientPriv: PrivateKey): Ope
   if (parts == null) return null
   return { senderPubKeyHex, encrypted, parts }
 }
+
+/** Open a PUBLIC (unencrypted) envelope with no key — for broadcasts/announcements anyone can read.
+ *  Returns null for encrypted envelopes (those need `openEnvelope` with the recipient's key). */
+export function openPublicEnvelope(envelope: number[]): OpenedMessage | null {
+  if (envelope.length < 35 || envelope[0] !== ENVELOPE_VERSION) return null
+  if ((envelope[1] & FLAG_ENCRYPTED) !== 0) return null
+  const senderPubKeyHex = Utils.toHex(envelope.slice(2, 35))
+  const parts = decodeParts(envelope.slice(35))
+  if (parts == null) return null
+  return { senderPubKeyHex, encrypted: false, parts }
+}
