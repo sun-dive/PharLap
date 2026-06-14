@@ -87,6 +87,13 @@
     .foot a { color:var(--accent2); }
     .woc-badge { height:56px; width:auto; opacity:.9; }
     .woc-badge:hover { opacity:1; }
+    /* BSV branding */
+    .bsv-coin { width:18px; height:18px; vertical-align:-4px; flex:none; }
+    .bsv-tag { display:inline-block; background:#eab300; color:#1a1206; font-size:10px; font-weight:800; letter-spacing:.5px; padding:1px 7px; border-radius:999px; vertical-align:middle; margin-left:7px; }
+    .bsv-built { display:flex; align-items:center; justify-content:center; gap:7px; color:var(--muted); font-size:12px; margin-bottom:12px; }
+    .bsv-built b { color:#eab300; font-weight:700; }
+    .wallet-warn { margin:10px 0 0; padding:9px 12px; border:1px solid #9e6a03; border-left:3px solid #eab300;
+      border-radius:8px; background:rgba(234,179,0,.06); font-size:12px; line-height:1.5; color:var(--fg); }
     /* ─── Collection / sales view (shareable link landing) — premium storefront ─── */
     .cview { position:fixed; inset:0; background:
         radial-gradient(1200px 600px at 50% -10%, #16202c 0%, rgba(22,32,44,0) 60%),
@@ -203,9 +210,10 @@
 
     <section class="tabpanel" id="tab-wallet" role="tabpanel">
     <div class="card">
-      <div class="kv"><b>Address</b><span id="address" class="mono"></span></div>
+      <div class="kv"><b>Receive address <span class="bsv-tag">BSV ONLY</span></b><span id="address" class="mono"></span></div>
       <div class="kv"><b>Public key (give this to senders)</b><span id="pubkey" class="mono"></span></div>
-      <div class="kv"><b>Balance</b><span id="balance" class="mono">—</span></div>
+      <div class="kv"><b>Balance <span class="muted" style="font-weight:400">(BSV)</span></b><span id="balance" class="mono">—</span></div>
+      <p class="wallet-warn">⚠️ Send only <b>Bitcoin SV (BSV)</b> to your address above. BTC, BCH and other coins share this address format but live on a <b>different blockchain</b> — they will not arrive in this wallet.</p>
       <div class="row" style="margin-top:8px">
         <button id="btnRefresh" class="secondary">Refresh balance</button>
         <button id="btnCopyPub" class="secondary">Copy public key</button>
@@ -412,6 +420,7 @@
     </section>
 
     <footer class="foot">
+      <div class="bsv-built"><svg viewBox="0 0 32 32" class="bsv-coin" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="#eab300"/><text x="16" y="22" text-anchor="middle" font-size="15" font-weight="800" fill="#1a1206" font-family="system-ui,sans-serif">SV</text></svg> Built on the <b>Bitcoin SV</b> Blockchain</div>
       <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
         <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
       </a>
@@ -472,7 +481,7 @@
 
       <div id="cvFund" class="cv-fund" style="display:none">
         <div>Fund your wallet to buy — need <b id="cvFundNeed"></b>, have <span id="cvFundHave" class="muted"></span>.</div>
-        <div style="margin-top:8px">Send a little BSV to your wallet address:</div>
+        <div style="margin-top:8px">Send a little <b>Bitcoin SV (BSV)</b> — not BTC — to your wallet address:</div>
         <div class="row" style="margin-top:4px">
           <span id="cvFundAddr" class="mono"></span>
           <button id="cvFundCopy" class="secondary">Copy</button>
@@ -482,6 +491,7 @@
       </div>
 
       <footer class="foot">
+        <div class="bsv-built"><svg viewBox="0 0 32 32" class="bsv-coin" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="#eab300"/><text x="16" y="22" text-anchor="middle" font-size="15" font-weight="800" fill="#1a1206" font-family="system-ui,sans-serif">SV</text></svg> Built on the <b>Bitcoin SV</b> Blockchain</div>
         <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
           <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
         </a>
