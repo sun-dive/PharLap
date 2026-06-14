@@ -20231,7 +20231,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     try {
       const safe = await getSafeUtxos(provider);
       const spendable = safe.reduce((s2, u) => s2 + u.satoshis, 0);
-      $("balance").textContent = `${spendable} sat spendable (${safe.length} funding UTXO${safe.length === 1 ? "" : "s"})`;
+      $("balance").textContent = `${spendable} sats spendable (${safe.length} funding UTXO${safe.length === 1 ? "" : "s"})`;
       setStatus("Balance updated.", "ok");
     } catch (e) {
       setStatus(`Balance error: ${e.message}`, "error");
@@ -20337,7 +20337,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const pBps = Math.max(0, Math.min(1e4, parseInt(val("edBps") || "250", 10)));
         const price = Math.max(1, parseInt(val("edPrice") || "5000", 10));
         const publisherPubKeyHash = Hash_exports.hash160(key.toPublicKey().encode(true));
-        setStatus(`Minting ${encrypt ? "encrypted " : ""}percentage-pricing collection (publisher ${(pBps / 100).toFixed(2)}%, reseller price ${price} sat)\u2026`);
+        setStatus(`Minting ${encrypt ? "encrypted " : ""}percentage-pricing collection (publisher ${(pBps / 100).toFixed(2)}%, reseller price ${price} sats)\u2026`);
         const minted = await createEditionV2(provider, key, { tokenName: name, terms: { publisherPubKeyHash, pBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover });
         for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { publisherPubKeyHash, publisherFeeSats: 0, holderFeeSats: 0 });
         renderTokens();
@@ -20359,7 +20359,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const price = Math.max(1, parseInt(val("edPrice") || "50000", 10));
     if (!confirm(`MAINNET v2 self-test \u2014 spends real BSV.
 
-Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price ${price} sat) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return;
+Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price ${price} sats) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return;
     setStatus("v2 self-test: minting (TX1 template + TX2 v2 genesis)\u2026");
     try {
       const publisherPubKeyHash = key.toPublicKey().toHash();
@@ -20377,7 +20377,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
         editionSourceTx: minted.tx2
       });
       setStatus(
-        `\u2705 v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} \xB7 TX2 ${short(minted.tx2Id)} \xB7 replicate ${short(r2.txId)} \u2014 publisher ${r2.publisherCut} + reseller ${r2.resellerCut} sat. Check these txids on WhatsOnChain (expect them mined).`,
+        `\u2705 v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} \xB7 TX2 ${short(minted.tx2Id)} \xB7 replicate ${short(r2.txId)} \u2014 publisher ${r2.publisherCut} + reseller ${r2.resellerCut} sats. Check these txids on WhatsOnChain (expect them mined).`,
         "ok"
       );
       console.log("v2 self-test txids:", { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r2.txId, publisherCut: r2.publisherCut, resellerCut: r2.resellerCut });
@@ -20407,7 +20407,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
         storeEdition({ txId: r3.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         storeEdition({ txId: r3.replicaOutpoint.txId, outputIndex: r3.replicaOutpoint.outputIndex, lockHex: r3.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         renderTokens();
-        setStatus(`\u2705 v2 replicated. Tx ${short(r3.txId)} \u2014 publisher ${r3.publisherCut} + reseller ${r3.resellerCut} sat.`, "ok");
+        setStatus(`\u2705 v2 replicated. Tx ${short(r3.txId)} \u2014 publisher ${r3.publisherCut} + reseller ${r3.resellerCut} sats.`, "ok");
         return;
       }
       const note = await noteToPropagate(t);
@@ -20621,7 +20621,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       const tx = await provider.getSourceTransaction(txId);
       const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript);
       if (ed) {
-        const econ = ed.isV2 ? `publisher ${(ed.terms.pBps / 100).toFixed(2)}% \xB7 price ${ed.priceSats} sat` : `fees ${ed.terms.publisherFeeSats}/${ed.terms.holderFeeSats} sat`;
+        const econ = ed.isV2 ? `publisher ${(ed.terms.pBps / 100).toFixed(2)}% \xB7 price ${ed.priceSats} sats` : `fees ${ed.terms.publisherFeeSats}/${ed.terms.holderFeeSats} sats`;
         setStatus(`\u2705 Valid ${ed.isV2 ? "v2 " : ""}edition covenant \u2014 collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, "ok");
         return;
       }
@@ -20908,9 +20908,9 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
     $("cvPublisher").textContent = info.publisherPubKeyHex ? `by ${short(info.publisherPubKeyHex)}` : "";
     $("cvDesc").textContent = info.description || "(no description provided)";
     if (info.isV2) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sat</b> <span class="muted">(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sat, plus a small network fee)</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sats</b> <span class="muted">(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee)</span>`;
     } else if (info.fees) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.publisher + info.fees.holder} sat</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee)</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.publisher + info.fees.holder} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee)</span>`;
     } else {
       $("cvPrice").innerHTML = '<span class="muted">This collection is not a replicable edition.</span>';
     }
@@ -21109,8 +21109,8 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
     }
   }
   function showFundPrompt(needed, have) {
-    $("cvFundNeed").textContent = `${needed} sat`;
-    $("cvFundHave").textContent = `${have} sat`;
+    $("cvFundNeed").textContent = `${needed} sats`;
+    $("cvFundHave").textContent = `${have} sats`;
     $("cvFundAddr").textContent = address;
     $("cvFundQr").innerHTML = `<div class="qr-holder qr-fund">${qrSvg(bsvPaymentUri(address, needed))}</div>`;
     $("cvFund").style.display = "block";
@@ -21174,10 +21174,10 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
       const resellerCut = tip.isV2 ? tip.priceSats - publisherCut : tip.terms.holderFeeSats;
       const price = publisherCut + resellerCut;
       const ok = confirm(
-        `Buy a copy of \u201C${info.name}\u201D for ${price} sat?
+        `Buy a copy of \u201C${info.name}\u201D for ${price} sats?
 
-` + (tip.isV2 ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut} + reseller ${resellerCut} sat, plus a small network fee.
-` : `publisher ${publisherCut} + holder ${resellerCut} sat, plus a small network fee.
+` + (tip.isV2 ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut} + reseller ${resellerCut} sats, plus a small network fee.
+` : `publisher ${publisherCut} + holder ${resellerCut} sats, plus a small network fee.
 `) + `This is an instant, on-chain purchase.`
       );
       if (!ok) {
@@ -21266,13 +21266,13 @@ Public, one transaction, reaches every current holder. Message:`);
     const countStr = prompt(
       `Create free-gift links for \u201C${t.collectionName ?? "this collection"}\u201D.
 
-How many?  Each is pre-funded with ~${fundEach} sat \u2014 but the price + fees come back to you as the holder, so your real cost is \u2248 the miner fee per claim.`,
+How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees come back to you as the holder, so your real cost is \u2248 the miner fee per claim.`,
       "10"
     );
     if (countStr == null) return;
     const count = Math.max(1, Math.min(500, parseInt(countStr, 10) || 0));
     const total = count * fundEach;
-    if (!confirm(`Fund ${count} gift link(s) at ~${fundEach} sat each (~${total} sat from your wallet; most returns on claim). Proceed?`)) return;
+    if (!confirm(`Fund ${count} gift link(s) at ~${fundEach} sats each (~${total} sats from your wallet; most returns on claim). Proceed?`)) return;
     setStatus(`Creating ${count} funded gift link(s)\u2026`);
     try {
       const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { count, fundEachSats: fundEach });
