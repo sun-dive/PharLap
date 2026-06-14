@@ -97,6 +97,13 @@
     .bsv-built b { color:#eab300; font-weight:700; }
     .wallet-warn { margin:10px 0 0; padding:9px 12px; border:1px solid #9e6a03; border-left:3px solid #eab300;
       border-radius:8px; background:rgba(234,179,0,.06); font-size:12px; line-height:1.5; color:var(--fg); }
+    /* QR codes */
+    .qr-holder { background:#fff; border-radius:10px; padding:12px; display:inline-block; line-height:0; }
+    .qr-holder svg { width:100%; height:auto; display:block; }
+    .qr-modal-box { max-width:320px; text-align:center; }
+    .qr-modal-box .qr-holder { width:248px; max-width:74vw; }
+    .qr-cap { margin-top:10px; font-size:11px; word-break:break-all; color:var(--muted); }
+    .qr-fund { width:160px; margin-top:8px; }
     /* ─── Collection / sales view (shareable link landing) — premium storefront ─── */
     .cview { position:fixed; inset:0; background:
         radial-gradient(1200px 600px at 50% -10%, #16202c 0%, rgba(22,32,44,0) 60%),
@@ -213,13 +220,23 @@
 
     <section class="tabpanel" id="tab-wallet" role="tabpanel">
     <div class="card">
-      <div class="kv"><b>Receive address <span class="bsv-tag">BSV ONLY</span></b><span id="address" class="mono"></span></div>
-      <div class="kv"><b>Public key (give this to senders)</b><span id="pubkey" class="mono"></span></div>
+      <div class="kv"><b>Receive address <span class="bsv-tag">BSV ONLY</span></b>
+        <div class="row" style="flex-wrap:nowrap;align-items:center;gap:6px;margin-top:2px">
+          <span id="address" class="mono" style="flex:1;min-width:0"></span>
+          <button id="btnCopyAddr" class="secondary">Copy</button>
+          <button id="btnQrAddr" class="secondary">QR</button>
+        </div>
+      </div>
+      <div class="kv"><b>Public key (give this to senders)</b>
+        <div class="row" style="flex-wrap:nowrap;align-items:center;gap:6px;margin-top:2px">
+          <span id="pubkey" class="mono" style="flex:1;min-width:0"></span>
+          <button id="btnCopyPub" class="secondary">Copy</button>
+        </div>
+      </div>
       <div class="kv"><b>Balance <span class="muted" style="font-weight:400">(BSV)</span></b><span id="balance" class="mono">—</span></div>
       <p class="wallet-warn">⚠️ Send only <b>Bitcoin SV (BSV)</b> to your address above. BTC, BCH and other coins share this address format but live on a <b>different blockchain</b> — they will not arrive in this wallet.</p>
       <div class="row" style="margin-top:8px">
         <button id="btnRefresh" class="secondary">Refresh balance</button>
-        <button id="btnCopyPub" class="secondary">Copy public key</button>
         <button id="btnNewWallet" class="secondary">New wallet</button>
       </div>
       <label>WIF (private key — back this up; keep it secret)</label>
@@ -478,6 +495,7 @@
           <button id="cvGet" class="cv-cta">Get a copy</button>
           <button id="cvView" class="secondary" style="display:none">View content</button>
           <button id="cvShare" class="secondary">Share</button>
+          <button id="cvQr" class="secondary">QR</button>
         </div>
         <div id="cvStatus" class="cv-status"></div>
       </section>
