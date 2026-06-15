@@ -78,6 +78,13 @@
     .token-thumb-ph { width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:30px; opacity:.5; }
     .token-body { flex:1 1 auto; min-width:0; }
     .token-name { font-weight:600; margin-bottom:4px; }
+    .token-group { flex-direction:column; align-items:stretch; }
+    .token-group-head { display:flex; gap:12px; align-items:flex-start; cursor:pointer; }
+    .token-group-head .chev { margin-left:auto; align-self:center; color:var(--muted); font-size:14px; }
+    .token-name .count { color:var(--muted); font-weight:500; font-size:12px; margin-left:4px; }
+    .token-group-items { margin-top:10px; display:flex; flex-direction:column; gap:8px; }
+    .token-copy { padding-top:8px; border-top:1px dashed var(--line); }
+    .token-copy:first-child { border-top:none; padding-top:0; }
     .token-ids { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .copy-id { cursor:pointer; border-bottom:1px dotted var(--line); }
     .copy-id:hover { color:var(--fg); border-bottom-color:var(--accent2); }

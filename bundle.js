@@ -20564,76 +20564,126 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       return;
     }
     host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held \u2014 newest first</p>`;
-    const myPubKeyHashHex = utils_exports.toHex(Hash_exports.hash160(key.toPublicKey().encode(true)));
+    const myHash = utils_exports.toHex(Hash_exports.hash160(key.toPublicKey().encode(true)));
+    const groups = /* @__PURE__ */ new Map();
     for (const t of active) {
-      const card = document.createElement("div");
-      card.className = "token";
-      const thumb = document.createElement("div");
-      thumb.className = "token-thumb";
-      thumb.innerHTML = '<div class="token-thumb-ph">\u{1F3B4}</div>';
-      const body = document.createElement("div");
-      body.className = "token-body";
-      const stateText = t.stateData && t.stateData !== "00" ? safeUtf8(t.stateData) : "";
-      const isEdition = t.kind === "edition";
-      const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myPubKeyHashHex;
-      const latest = latestBroadcast.get(t.collectionId);
-      body.innerHTML = `
-      <div class="token-name">${escapeHtml(t.collectionName ?? "Collection")}${isEdition ? ' <span class="badge">edition</span>' : ""}</div>
-      <div class="mono token-ids">collection <span class="copy-id" data-copy="${t.collectionId}" title="${t.collectionId} \u2014 click to copy">${short(t.collectionId)}</span> \xB7 utxo <span class="copy-id" data-copy="${t.txId}" title="${t.txId} \u2014 click to copy">${short(t.txId)}</span>:${t.outputIndex}</div>
-      ${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ""}
-      ${t.sellerNote ? `<div class="state" style="color:var(--accent2)">\u{1F4DD} ${escapeHtml(t.sellerNote)}</div>` : ""}
-      ${t.bonusValue ? t.bonusKind === "link" ? `<div class="state">\u{1F381} <a href="${escapeHtml(t.bonusValue)}" target="_blank" rel="noopener" class="bonus-claim">Claim your bonus \u2197</a></div>` : `<div class="state">\u{1F381} Bonus code: <span class="mono">${escapeHtml(t.bonusValue)}</span></div>` : ""}
-      ${latest ? `<div class="state" style="color:var(--accent)">\u{1F4E3} ${escapeHtml(latest.text)}</div>` : ""}
-    `;
-      const verify2 = document.createElement("button");
-      verify2.textContent = "Verify";
-      verify2.className = "secondary";
-      verify2.onclick = () => void onVerify(t.txId, t.outputIndex);
-      const actions = document.createElement("div");
-      actions.className = "actions";
-      if (isEdition) {
-        const replicate = document.createElement("button");
-        replicate.textContent = "Replicate";
-        replicate.onclick = () => void onReplicate(t);
-        const xfer = document.createElement("button");
-        xfer.textContent = "Transfer";
-        xfer.className = "secondary";
-        xfer.onclick = () => void onTransferEdition(t);
-        const view = document.createElement("button");
-        view.textContent = "View";
-        view.className = "secondary";
-        view.onclick = () => void onView(t.collectionId, t.collectionName ?? "Edition");
-        const sales = document.createElement("button");
-        sales.textContent = "Sales page";
-        sales.className = "secondary";
-        sales.onclick = () => onOpenSalesPage(t);
-        actions.append(replicate, xfer, view, sales, verify2);
-        if (iAmPublisher) {
-          const bc = document.createElement("button");
-          bc.textContent = "\u{1F4E3} Broadcast";
-          bc.className = "secondary";
-          bc.onclick = () => void onBroadcast(t);
-          const gift = document.createElement("button");
-          gift.textContent = "\u{1F381} Gift";
-          gift.className = "secondary";
-          gift.onclick = () => void onGiftCopies(t);
-          actions.append(bc, gift);
-        }
-      } else {
-        const send = document.createElement("button");
-        send.textContent = "Send";
-        send.onclick = () => void onSend(t.txId, t.outputIndex);
-        const view = document.createElement("button");
-        view.textContent = "View";
-        view.className = "secondary";
-        view.onclick = () => void onView(t.collectionId, t.collectionName ?? "Collection");
-        actions.append(send, verify2, view);
-      }
-      body.append(actions);
-      card.append(thumb, body);
-      host.append(card);
-      void fillCardThumb(thumb, t.collectionId);
+      const g = groups.get(t.collectionId);
+      if (g != null) g.push(t);
+      else groups.set(t.collectionId, [t]);
     }
+    for (const [collectionId, copies] of groups) {
+      host.append(copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash));
+    }
+  }
+  function tokenThumbEl(collectionId) {
+    const thumb = document.createElement("div");
+    thumb.className = "token-thumb";
+    thumb.innerHTML = '<div class="token-thumb-ph">\u{1F3B4}</div>';
+    void fillCardThumb(thumb, collectionId);
+    return thumb;
+  }
+  function tokenExtrasHtml(t) {
+    const stateText = t.stateData && t.stateData !== "00" ? safeUtf8(t.stateData) : "";
+    const latest = latestBroadcast.get(t.collectionId);
+    return `${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ""}${t.sellerNote ? `<div class="state" style="color:var(--accent2)">\u{1F4DD} ${escapeHtml(t.sellerNote)}</div>` : ""}${t.bonusValue ? t.bonusKind === "link" ? `<div class="state">\u{1F381} <a href="${escapeHtml(t.bonusValue)}" target="_blank" rel="noopener" class="bonus-claim">Claim your bonus \u2197</a></div>` : `<div class="state">\u{1F381} Bonus code: <span class="mono">${escapeHtml(t.bonusValue)}</span></div>` : ""}${latest ? `<div class="state" style="color:var(--accent)">\u{1F4E3} ${escapeHtml(latest.text)}</div>` : ""}`;
+  }
+  function tokenActions(t, myHash) {
+    const isEdition = t.kind === "edition";
+    const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myHash;
+    const verify2 = document.createElement("button");
+    verify2.textContent = "Verify";
+    verify2.className = "secondary";
+    verify2.onclick = () => void onVerify(t.txId, t.outputIndex);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    if (isEdition) {
+      const replicate = document.createElement("button");
+      replicate.textContent = "Replicate";
+      replicate.onclick = () => void onReplicate(t);
+      const xfer = document.createElement("button");
+      xfer.textContent = "Transfer";
+      xfer.className = "secondary";
+      xfer.onclick = () => void onTransferEdition(t);
+      const view = document.createElement("button");
+      view.textContent = "View";
+      view.className = "secondary";
+      view.onclick = () => void onView(t.collectionId, t.collectionName ?? "Edition");
+      const sales = document.createElement("button");
+      sales.textContent = "Sales page";
+      sales.className = "secondary";
+      sales.onclick = () => onOpenSalesPage(t);
+      actions.append(replicate, xfer, view, sales, verify2);
+      if (iAmPublisher) {
+        const bc = document.createElement("button");
+        bc.textContent = "\u{1F4E3} Broadcast";
+        bc.className = "secondary";
+        bc.onclick = () => void onBroadcast(t);
+        const gift = document.createElement("button");
+        gift.textContent = "\u{1F381} Gift";
+        gift.className = "secondary";
+        gift.onclick = () => void onGiftCopies(t);
+        actions.append(bc, gift);
+      }
+    } else {
+      const send = document.createElement("button");
+      send.textContent = "Send";
+      send.onclick = () => void onSend(t.txId, t.outputIndex);
+      const view = document.createElement("button");
+      view.textContent = "View";
+      view.className = "secondary";
+      view.onclick = () => void onView(t.collectionId, t.collectionName ?? "Collection");
+      actions.append(send, verify2, view);
+    }
+    return actions;
+  }
+  function singleCard(t, myHash) {
+    const card = document.createElement("div");
+    card.className = "token";
+    const body = document.createElement("div");
+    body.className = "token-body";
+    const isEdition = t.kind === "edition";
+    body.innerHTML = `
+    <div class="token-name">${escapeHtml(t.collectionName ?? "Collection")}${isEdition ? ' <span class="badge">edition</span>' : ""}</div>
+    <div class="mono token-ids">collection <span class="copy-id" data-copy="${t.collectionId}" title="${t.collectionId} \u2014 click to copy">${short(t.collectionId)}</span> \xB7 utxo <span class="copy-id" data-copy="${t.txId}" title="${t.txId} \u2014 click to copy">${short(t.txId)}</span>:${t.outputIndex}</div>
+    ${tokenExtrasHtml(t)}`;
+    body.append(tokenActions(t, myHash));
+    card.append(tokenThumbEl(t.collectionId), body);
+    return card;
+  }
+  function groupCard(collectionId, copies, myHash) {
+    const t0 = copies[0];
+    const isEdition = t0.kind === "edition";
+    const card = document.createElement("div");
+    card.className = "token token-group";
+    const head = document.createElement("div");
+    head.className = "token-group-head";
+    const headBody = document.createElement("div");
+    headBody.className = "token-body";
+    headBody.innerHTML = `
+    <div class="token-name">${escapeHtml(t0.collectionName ?? "Collection")}${isEdition ? ' <span class="badge">edition</span>' : ""} <span class="count">\xD7${copies.length}</span></div>
+    <div class="mono token-ids">collection <span class="copy-id" data-copy="${collectionId}" title="${collectionId} \u2014 click to copy">${short(collectionId)}</span> \xB7 ${copies.length} copies held</div>`;
+    const chev = document.createElement("span");
+    chev.className = "chev";
+    chev.textContent = "\u25B8";
+    head.append(tokenThumbEl(collectionId), headBody, chev);
+    const items = document.createElement("div");
+    items.className = "token-group-items";
+    items.hidden = true;
+    for (const t of copies) {
+      const row = document.createElement("div");
+      row.className = "token-copy";
+      row.innerHTML = `<div class="mono token-ids">utxo <span class="copy-id" data-copy="${t.txId}" title="${t.txId} \u2014 click to copy">${short(t.txId)}</span>:${t.outputIndex}</div>${tokenExtrasHtml(t)}`;
+      row.append(tokenActions(t, myHash));
+      items.append(row);
+    }
+    head.onclick = (e) => {
+      if (e.target.closest(".copy-id") != null) return;
+      items.hidden = !items.hidden;
+      chev.textContent = items.hidden ? "\u25B8" : "\u25BE";
+      card.classList.toggle("open", !items.hidden);
+    };
+    card.append(head, items);
+    return card;
   }
   var thumbInFlight = /* @__PURE__ */ new Map();
   async function fillCardThumb(thumbEl, collectionId) {
