@@ -24,6 +24,7 @@ import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
 import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
+import { decompress } from './compress.ts'
 
 const WIF_KEY = 'p:wallet:wif'
 
@@ -451,29 +452,31 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
       setStatus(`"${collectionName}" has no embedded file.`, 'info')
       return
     }
-    // The stored bytes (cipher- or plain-text) are what fileHash binds.
+    // The stored bytes (cipher- or plain-text, possibly compressed) are what fileHash binds.
     const verified = template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
-    const encrypted = template != null && decodeTokenRules(template.tokenRules).isEncrypted
+    const rules = template != null ? decodeTokenRules(template.tokenRules) : null
+    const encrypted = rules?.isEncrypted ?? false
 
+    // Unwind the stored bytes in the reverse of how they were made: decrypt first, then decompress.
+    let bytes = file.fileBytes
     if (encrypted) {
       if (template?.wrappedKey == null || template?.keySalt == null) {
         setStatus('Encrypted collection is missing its wrapped key — cannot decrypt.', 'error'); return
       }
       const K = unwrapContentKey(template.wrappedKey, template.keySalt)
       if (K == null) { setStatus('Could not unwrap the content key.', 'error'); return }
-      let plain: number[]
-      try { plain = decryptContent(file.fileBytes, K) } catch { setStatus('Decryption failed (wrong key or corrupt ciphertext).', 'error'); return }
-      showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: plain }, verified)
-      setStatus(verified ? '🔓 Decrypted — ciphertext matches the collection commitment ✓.' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!', verified ? 'ok' : 'error')
-    } else {
-      showFile(collectionName, file, verified)
-      setStatus(
-        verified
-          ? 'File loaded — SHA-256 matches the collection (bound to identity ✓).'
-          : '⚠ File loaded, but its hash does NOT match the collection commitment!',
-        verified ? 'ok' : 'error',
-      )
+      try { bytes = decryptContent(bytes, K) } catch { setStatus('Decryption failed (wrong key or corrupt ciphertext).', 'error'); return }
     }
+    if (rules?.isCompressed) {
+      try { bytes = await decompress(bytes) } catch { setStatus('Decompression failed (corrupt data).', 'error'); return }
+    }
+    showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes }, verified)
+    setStatus(
+      encrypted
+        ? (verified ? '🔓 Decrypted — ciphertext matches the collection commitment ✓.' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!')
+        : (verified ? 'File loaded — SHA-256 matches the collection (bound to identity ✓).' : '⚠ File loaded, but its hash does NOT match the collection commitment!'),
+      verified ? 'ok' : 'error',
+    )
   } catch (e) {
     setStatus(`View failed: ${(e as Error).message}`, 'error')
   }

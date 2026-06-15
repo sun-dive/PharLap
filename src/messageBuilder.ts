@@ -91,7 +91,7 @@ export async function sendMessage(provider: WalletProvider, key: PrivateKey, par
   feePerKb?: number
 }): Promise<{ txId: string; messageOutpoint: { txId: string; outputIndex: number } }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
-  const envelope = buildEnvelope({
+  const envelope = await buildEnvelope({
     senderPriv: key, recipientPubKeyHex: params.toPubKeyHex, parts: params.parts, encrypt: params.encrypt,
   })
   const estFee = Math.ceil(((350 + envelope.length) * feePerKb) / 1000)
@@ -133,19 +133,19 @@ export async function scanIncomingMessages(provider: WalletProvider, recipientPr
   for (const txId of candidateTxIds) {
     let tx: Transaction
     try { tx = await provider.getSourceTransaction(txId) } catch { continue }
-    tx.outputs.forEach((o, i) => {
-      const parsed = parseMessageScript(o.lockingScript)
-      if (parsed == null || parsed.recipientPubKeyHex.toLowerCase() !== myPub) return
+    for (let i = 0; i < tx.outputs.length; i++) {
+      const parsed = parseMessageScript(tx.outputs[i].lockingScript)
+      if (parsed == null || parsed.recipientPubKeyHex.toLowerCase() !== myPub) continue
       const key = `${txId}:${i}`
-      if (seen.has(key)) return
+      if (seen.has(key)) continue
       seen.add(key)
-      const opened = openEnvelope(parsed.fields.envelope, recipientPriv)
-      if (opened == null) return // not openable with our key
+      const opened = await openEnvelope(parsed.fields.envelope, recipientPriv)
+      if (opened == null) continue // not openable with our key
       found.push({
         txId, outputIndex: i, ref: parsed.fields.ref,
         senderPubKeyHex: opened.senderPubKeyHex, encrypted: opened.encrypted, parts: opened.parts,
       })
-    })
+    }
   }
   return found
 }

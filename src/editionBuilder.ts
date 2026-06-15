@@ -29,7 +29,8 @@ import {
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
 } from './collectionBuilder.ts'
-import { encodeTokenRules, buildNoteScript, RESTRICTION_REPLICABLE, RESTRICTION_ENCRYPTED } from './tokenCodec.ts'
+import { encodeTokenRules, buildNoteScript, RESTRICTION_REPLICABLE, RESTRICTION_ENCRYPTED, RESTRICTION_COMPRESSED } from './tokenCodec.ts'
+import { compressIfSmaller } from './compress.ts'
 import { readNoteFromTx, type SellerNote } from './sellerNote.ts'
 import { newContentKey, newKeySalt, encryptContent, wrapContentKey } from './contentCrypto.ts'
 import type { WalletProvider, Utxo } from './walletProvider.ts'
@@ -488,18 +489,25 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     holderFeeSats: params.terms.holderFeeSats, tokenSats,
   })
 
-  // Tier-1 encrypt the file: store ciphertext, carry the wrapped content key + keySalt in the template.
+  // Smart-compress (keep only if smaller), then optionally Tier-1 encrypt. Order matters: compress BEFORE
+  // encrypt (ciphertext is incompressible). The FILE output stores the final bytes; fileHash binds them.
   const encrypt = params.encrypt === true && params.file != null
   let storedBytes = params.file?.bytes
+  let compressed = false
   let wrappedKey: number[] | undefined
   let keySalt: number[] | undefined
-  if (encrypt && params.file != null) {
-    const K = newContentKey()
-    keySalt = newKeySalt()
-    storedBytes = encryptContent(params.file.bytes, K)
-    wrappedKey = wrapContentKey(K, keySalt)
+  if (params.file != null) {
+    const z = await compressIfSmaller(params.file.bytes)
+    storedBytes = z.bytes
+    compressed = z.compressed
+    if (encrypt) {
+      const K = newContentKey()
+      keySalt = newKeySalt()
+      storedBytes = encryptContent(storedBytes, K)
+      wrappedKey = wrapContentKey(K, keySalt)
+    }
   }
-  const restrictions = RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0)
+  const restrictions = RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0) | (compressed ? RESTRICTION_COMPRESSED : 0)
   const template = {
     tokenName: params.tokenName,
     tokenRules: encodeTokenRules(0, 0, restrictions, 1), // supply 0 = unlimited / replicable
@@ -625,20 +633,26 @@ export async function createEditionV2(provider: WalletProvider, key: PrivateKey,
     publisherPubKeyHash: params.terms.publisherPubKeyHash, pBps: params.terms.pBps, tokenSats,
   })
 
-  // Tier-1 encrypt the file: store ciphertext, carry the wrapped content key + keySalt in the template.
+  // Smart-compress (keep only if smaller), then optionally Tier-1 encrypt — compress BEFORE encrypt.
   const encrypt = params.encrypt === true && params.file != null
   let storedBytes = params.file?.bytes
+  let compressed = false
   let wrappedKey: number[] | undefined
   let keySalt: number[] | undefined
-  if (encrypt && params.file != null) {
-    const K = newContentKey()
-    keySalt = newKeySalt()
-    storedBytes = encryptContent(params.file.bytes, K)
-    wrappedKey = wrapContentKey(K, keySalt)
+  if (params.file != null) {
+    const z = await compressIfSmaller(params.file.bytes)
+    storedBytes = z.bytes
+    compressed = z.compressed
+    if (encrypt) {
+      const K = newContentKey()
+      keySalt = newKeySalt()
+      storedBytes = encryptContent(storedBytes, K)
+      wrappedKey = wrapContentKey(K, keySalt)
+    }
   }
   const template = {
     tokenName: params.tokenName,
-    tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0), 1),
+    tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0) | (compressed ? RESTRICTION_COMPRESSED : 0), 1),
     covenantScript: Utils.toHex(templateLock.toBinary()),
     fileHash: storedBytes != null ? sha256Hex(storedBytes) : undefined,
     wrappedKey,
