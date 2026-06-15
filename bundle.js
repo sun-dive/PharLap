@@ -16372,11 +16372,11 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var FAILURE_BACKOFF_GRACE = 2;
   var STORAGE_KEY = "bsvsdk_overlay_host_reputation_v1";
   var HostReputationTracker = class {
-    constructor(store2) {
+    constructor(store3) {
       __publicField(this, "stats");
       __publicField(this, "store");
       this.stats = /* @__PURE__ */ new Map();
-      this.store = store2 ?? this.getLocalStorageAdapter();
+      this.store = store3 ?? this.getLocalStorageAdapter();
       this.loadFromStorage();
     }
     reset() {
@@ -19974,13 +19974,67 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     };
   }
 
+  // src/thumbs.ts
+  var PREFIX = "p:thumb:";
+  var MAX_EDGE = 256;
+  var NONE = "-";
+  function cachedThumb(collectionId) {
+    try {
+      const v = localStorage.getItem(PREFIX + collectionId);
+      return v != null && v !== NONE ? v : null;
+    } catch {
+      return null;
+    }
+  }
+  function thumbResolved(collectionId) {
+    try {
+      return localStorage.getItem(PREFIX + collectionId) != null;
+    } catch {
+      return false;
+    }
+  }
+  function store(collectionId, value) {
+    try {
+      localStorage.setItem(PREFIX + collectionId, value);
+    } catch {
+    }
+  }
+  function cacheNoThumb(collectionId) {
+    store(collectionId, NONE);
+  }
+  async function makeThumb(collectionId, bytes2, mimeType) {
+    if (typeof createImageBitmap === "undefined" || typeof document === "undefined") return null;
+    try {
+      const blob = new Blob([new Uint8Array(bytes2)], { type: mimeType || "application/octet-stream" });
+      const bmp = await createImageBitmap(blob);
+      const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (ctx == null) {
+        bmp.close?.();
+        return null;
+      }
+      ctx.drawImage(bmp, 0, 0, w, h);
+      bmp.close?.();
+      const url = canvas.toDataURL("image/webp", 0.8);
+      store(collectionId, url);
+      return url;
+    } catch {
+      return null;
+    }
+  }
+
   // src/app.ts
   var WIF_KEY = "p:wallet:wif";
   var key;
   var pubKeyHex;
   var address;
   var provider;
-  var store;
+  var store2;
   var $ = (id) => {
     const el = document.getElementById(id);
     if (!el) throw new Error(`missing #${id}`);
@@ -20014,7 +20068,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function switchWallet(k, recover) {
     localStorage.setItem(WIF_KEY, k.toWif());
-    store.clear();
+    store2.clear();
     useKey(k);
     renderTokens();
     void refreshBalance();
@@ -20063,7 +20117,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       const file = await readFile($("mintFile"));
       const result = await createCollection(provider, key, { tokenName: name, supply: count, mintCount: count, file });
       for (const op3 of result.tokenOutpoints) {
-        store.add({ txId: op3.txId, outputIndex: op3.outputIndex, collectionId: result.collectionId, stateData: "", collectionName: name });
+        store2.add({ txId: op3.txId, outputIndex: op3.outputIndex, collectionId: result.collectionId, stateData: "", collectionName: name });
       }
       renderTokens();
       setStatus(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, "ok");
@@ -20088,7 +20142,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     };
   }
   function storeEdition(o, collectionId, name, terms, note) {
-    store.add({
+    store2.add({
       txId: o.txId,
       outputIndex: o.outputIndex,
       collectionId,
@@ -20157,7 +20211,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     try {
       if (parseEditionScriptV2(LockingScript.fromHex(t.lockHex)) != null) {
         const r3 = await replicateEditionV2(provider, key, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex });
-        store.markSent(t.txId, t.outputIndex);
+        store2.markSent(t.txId, t.outputIndex);
         storeEdition({ txId: r3.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         storeEdition({ txId: r3.replicaOutpoint.txId, outputIndex: r3.replicaOutpoint.outputIndex, lockHex: r3.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         renderTokens();
@@ -20172,7 +20226,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         terms: termsFromToken(t),
         note
       });
-      store.markSent(t.txId, t.outputIndex);
+      store2.markSent(t.txId, t.outputIndex);
       storeEdition(
         { txId: r2.txId, outputIndex: 0, lockHex: t.lockHex },
         t.collectionId,
@@ -20213,7 +20267,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         newOwnerPubKey: utils_exports.toArray(recipient, "hex"),
         note
       });
-      store.markSent(t.txId, t.outputIndex);
+      store2.markSent(t.txId, t.outputIndex);
       renderTokens();
       setStatus(`\u2705 Transferred. Tx ${short(r2.txId)} \u2014 covenant re-created for the new owner.`, "ok");
     } catch (e) {
@@ -20229,7 +20283,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     setStatus("Sending NFT\u2026");
     try {
       const result = await createTransfer(provider, key, { tokenTxId: txId, tokenOutputIndex: outputIndex, recipientPubKeyHex: recipient });
-      store.markSent(txId, outputIndex);
+      store2.markSent(txId, outputIndex);
       renderTokens();
       setStatus(`Sent. Transfer tx ${short(result.txId)} (recipient notified at output ${result.notifyVout}).`, "ok");
     } catch (e) {
@@ -20333,7 +20387,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const tx = await provider.getSourceTransaction(t.txId);
         const v = await verifyTokenLineage(tx, t.outputIndex, { getRawTransaction: (id) => provider.getSourceTransaction(id) });
         if (!v.valid) continue;
-        if (store.add({ txId: t.txId, outputIndex: t.outputIndex, collectionId: t.fields.tx1Ref, stateData: t.fields.stateData })) added++;
+        if (store2.add({ txId: t.txId, outputIndex: t.outputIndex, collectionId: t.fields.tx1Ref, stateData: t.fields.stateData })) added++;
       }
     } catch (e) {
       errors.push(`tokens: ${e.message}`);
@@ -20342,7 +20396,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       const editions = await scanIncomingEditions(provider, pubKeyHex);
       for (const e of editions) {
         const name = await resolveCollectionName(e.tx1RefHex);
-        if (store.add({
+        if (store2.add({
           txId: e.txId,
           outputIndex: e.outputIndex,
           collectionId: e.tx1RefHex,
@@ -20357,7 +20411,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           ...e.sellerNote?.bonusValue ? { bonusKind: e.sellerNote.bonusKind, bonusValue: e.sellerNote.bonusValue } : {},
           ...e.height ? { heightHint: e.height } : {}
         })) edAdded++;
-        else store.setCollectionName(e.txId, e.outputIndex, name);
+        else store2.setCollectionName(e.txId, e.outputIndex, name);
       }
     } catch (e) {
       errors.push(`editions: ${e.message}`);
@@ -20499,7 +20553,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function renderTokens() {
     const host = $("tokens");
-    const active = [...store.active()].sort((a, b) => {
+    const active = [...store2.active()].sort((a, b) => {
       const ha = a.heightHint ?? Infinity;
       const hb = b.heightHint ?? Infinity;
       if (ha !== hb) return hb - ha;
@@ -20514,11 +20568,16 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     for (const t of active) {
       const card = document.createElement("div");
       card.className = "token";
+      const thumb = document.createElement("div");
+      thumb.className = "token-thumb";
+      thumb.innerHTML = '<div class="token-thumb-ph">\u{1F3B4}</div>';
+      const body = document.createElement("div");
+      body.className = "token-body";
       const stateText = t.stateData && t.stateData !== "00" ? safeUtf8(t.stateData) : "";
       const isEdition = t.kind === "edition";
       const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myPubKeyHashHex;
       const latest = latestBroadcast.get(t.collectionId);
-      card.innerHTML = `
+      body.innerHTML = `
       <div class="token-name">${escapeHtml(t.collectionName ?? "Collection")}${isEdition ? ' <span class="badge">edition</span>' : ""}</div>
       <div class="mono">collection ${short(t.collectionId)}</div>
       <div class="mono">utxo ${short(t.txId)}:${t.outputIndex}</div>
@@ -20571,8 +20630,76 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         view.onclick = () => void onView(t.collectionId, t.collectionName ?? "Collection");
         actions.append(send, verify2, view);
       }
-      card.append(actions);
+      body.append(actions);
+      card.append(thumb, body);
       host.append(card);
+      void fillCardThumb(thumb, t.collectionId);
+    }
+  }
+  var thumbInFlight = /* @__PURE__ */ new Map();
+  async function fillCardThumb(thumbEl, collectionId) {
+    const url = await resolveThumb(collectionId);
+    if (url == null) return;
+    const img = document.createElement("img");
+    img.className = "token-thumb-img";
+    img.loading = "lazy";
+    img.src = url;
+    thumbEl.innerHTML = "";
+    thumbEl.append(img);
+  }
+  async function resolveThumb(collectionId) {
+    const cached = cachedThumb(collectionId);
+    if (cached != null) return cached;
+    if (thumbResolved(collectionId)) return null;
+    let p = thumbInFlight.get(collectionId);
+    if (p == null) {
+      p = fetchAndMakeThumb(collectionId);
+      thumbInFlight.set(collectionId, p);
+    }
+    try {
+      return await p;
+    } finally {
+      thumbInFlight.delete(collectionId);
+    }
+  }
+  async function fetchAndMakeThumb(collectionId) {
+    try {
+      const tx1 = await provider.getSourceTransaction(collectionId);
+      let coverBytes;
+      let coverMime = "application/octet-stream";
+      let file = null;
+      let template;
+      for (const o of tx1.outputs) {
+        const s2 = parseStorefrontScript(o.lockingScript);
+        if (s2?.fields.coverBytes?.length) {
+          coverBytes = s2.fields.coverBytes;
+          coverMime = s2.fields.coverMimeType ?? coverMime;
+        }
+        const f2 = parseFileScript(o.lockingScript);
+        if (f2) file = f2.fields;
+        const t = parseTemplateScript(o.lockingScript);
+        if (t) template = t.fields;
+      }
+      if (coverBytes?.length) {
+        const u = await makeThumb(collectionId, coverBytes, coverMime);
+        if (u != null) return u;
+      }
+      const rules = template != null ? decodeTokenRules(template.tokenRules) : null;
+      if (file != null && !rules?.isEncrypted && file.mimeType.startsWith("image/")) {
+        let bytes2 = file.fileBytes;
+        if (rules?.isCompressed) {
+          try {
+            bytes2 = await decompress(bytes2);
+          } catch {
+          }
+        }
+        const u = await makeThumb(collectionId, bytes2, file.mimeType);
+        if (u != null) return u;
+      }
+      cacheNoThumb(collectionId);
+      return null;
+    } catch {
+      return null;
     }
   }
   function safeUtf8(hex) {
@@ -20683,7 +20810,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     ;
     $("cvGet").disabled = info.fees == null && !info.isV2;
-    const holdsIt = store.active().some((t) => t.collectionId === info.tx1Ref);
+    const holdsIt = store2.active().some((t) => t.collectionId === info.tx1Ref);
     showViewButton(info, holdsIt);
     $("collectionView").style.display = "flex";
   }
@@ -20801,7 +20928,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     noteBox.style.display = "none";
     hideBonus();
     const isMine = sellerPub != null && sellerPub === pubKeyHex;
-    const holdsIt = store.active().some((t) => t.collectionId === info.tx1Ref);
+    const holdsIt = store2.active().some((t) => t.collectionId === info.tx1Ref);
     $("cvNoteEdit").style.display = isMine ? "block" : "none";
     $("cvNoteText").value = "";
     $("cvBonusValue").value = "";
@@ -20822,7 +20949,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       }
     }
     if (current == null && isMine) {
-      const held = store.active().find((t) => t.collectionId === info.tx1Ref && (t.sellerNote || t.bonusValue));
+      const held = store2.active().find((t) => t.collectionId === info.tx1Ref && (t.sellerNote || t.bonusValue));
       if (held) {
         current = { text: held.sellerNote ?? "", bonusKind: held.bonusKind, bonusValue: held.bonusValue };
         $("cvNoteStatus").textContent = "This is what you received when you bought \u2014 Publish to pass it on.";
@@ -21077,7 +21204,7 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
   }
   async function onCheckUpdates() {
     const host = $("updatesFeed");
-    const held = [...new Set(store.active().map((t) => t.collectionId))];
+    const held = [...new Set(store2.active().map((t) => t.collectionId))];
     if (held.length === 0) {
       host.innerHTML = '<p class="muted">No collections held yet \u2014 buy or mint an edition to receive publisher updates.</p>';
       return;
@@ -21129,7 +21256,7 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     if (saved && tabs.some((t) => t.dataset.tab === saved)) activate(saved);
   }
   function init() {
-    store = new PharLapStore();
+    store2 = new PharLapStore();
     useKey(loadKey());
     renderTokens();
     initTabs();

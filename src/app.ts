@@ -23,6 +23,7 @@ import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
 import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
+import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb } from './thumbs.ts'
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
 import { decompress } from './compress.ts'
 
@@ -545,11 +546,16 @@ function renderTokens(): void {
   for (const t of active) {
     const card = document.createElement('div')
     card.className = 'token'
+    const thumb = document.createElement('div')
+    thumb.className = 'token-thumb'
+    thumb.innerHTML = '<div class="token-thumb-ph">🎴</div>'
+    const body = document.createElement('div')
+    body.className = 'token-body'
     const stateText = t.stateData && t.stateData !== '00' ? safeUtf8(t.stateData) : ''
     const isEdition = t.kind === 'edition'
     const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myPubKeyHashHex
     const latest = latestBroadcast.get(t.collectionId)
-    card.innerHTML = `
+    body.innerHTML = `
       <div class="token-name">${escapeHtml(t.collectionName ?? 'Collection')}${isEdition ? ' <span class="badge">edition</span>' : ''}</div>
       <div class="mono">collection ${short(t.collectionId)}</div>
       <div class="mono">utxo ${short(t.txId)}:${t.outputIndex}</div>
@@ -605,8 +611,64 @@ function renderTokens(): void {
       view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Collection')
       actions.append(send, verify, view)
     }
-    card.append(actions)
+    body.append(actions)
+    card.append(thumb, body)
     host.append(card)
+    void fillCardThumb(thumb, t.collectionId)
+  }
+}
+
+// Thumbnails are derived from a collection's PUBLIC cover image (or a public image file) and cached locally
+// (see thumbs.ts) — never stored on-chain. The fetch is deduped per collection and runs async so the card
+// list renders instantly; the placeholder stays for collections with no thumbnailable image.
+const thumbInFlight = new Map<string, Promise<string | null>>()
+
+async function fillCardThumb(thumbEl: HTMLElement, collectionId: string): Promise<void> {
+  const url = await resolveThumb(collectionId)
+  if (url == null) return // keep the placeholder
+  const img = document.createElement('img')
+  img.className = 'token-thumb-img'
+  img.loading = 'lazy'
+  img.src = url
+  thumbEl.innerHTML = ''
+  thumbEl.append(img)
+}
+
+async function resolveThumb(collectionId: string): Promise<string | null> {
+  const cached = cachedThumb(collectionId)
+  if (cached != null) return cached
+  if (thumbResolved(collectionId)) return null // negative-cached: no image for this collection
+  let p = thumbInFlight.get(collectionId)
+  if (p == null) { p = fetchAndMakeThumb(collectionId); thumbInFlight.set(collectionId, p) }
+  try { return await p } finally { thumbInFlight.delete(collectionId) }
+}
+
+/** Fetch TX1, pick the best public image (cover → public image file), and downscale it to a cached thumb. */
+async function fetchAndMakeThumb(collectionId: string): Promise<string | null> {
+  try {
+    const tx1 = await provider.getSourceTransaction(collectionId)
+    let coverBytes: number[] | undefined
+    let coverMime = 'application/octet-stream'
+    let file: { mimeType: string; fileName: string; fileBytes: number[] } | null = null
+    let template: TemplateFields | undefined
+    for (const o of tx1.outputs) {
+      const s = parseStorefrontScript(o.lockingScript)
+      if (s?.fields.coverBytes?.length) { coverBytes = s.fields.coverBytes; coverMime = s.fields.coverMimeType ?? coverMime }
+      const f = parseFileScript(o.lockingScript); if (f) file = f.fields
+      const t = parseTemplateScript(o.lockingScript); if (t) template = t.fields
+    }
+    // Prefer the public storefront cover; else a public, image-typed embedded file (decompress if needed).
+    if (coverBytes?.length) { const u = await makeThumb(collectionId, coverBytes, coverMime); if (u != null) return u }
+    const rules = template != null ? decodeTokenRules(template.tokenRules) : null
+    if (file != null && !(rules?.isEncrypted) && file.mimeType.startsWith('image/')) {
+      let bytes = file.fileBytes
+      if (rules?.isCompressed) { try { bytes = await decompress(bytes) } catch { /* use raw */ } }
+      const u = await makeThumb(collectionId, bytes, file.mimeType); if (u != null) return u
+    }
+    cacheNoThumb(collectionId)
+    return null
+  } catch {
+    return null // transient fetch/parse error — don't negative-cache, allow a retry on the next render
   }
 }
 
