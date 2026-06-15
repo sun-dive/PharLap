@@ -741,3 +741,30 @@ seller-note from the resolved token); (4) "Get a copy" wired to existing replica
 Covenant/codec work: add the immutable title+description + cover-image-hash to the TX1 template, and the capped
 mutable seller-note field at the tail of the edition state (settable on transfer, carried verbatim on replicate).
 Mint UI gains the storefront fields (title/description/cover image); a "seller-note" editor sets it via transfer.
+
+---
+
+## ⭐ PRE-LAUNCH TASK LIST — settle before PUBLIC live testing [started 2026-06-15]
+
+The on-chain token format effectively locks once real users adopt it. Per-tx fees on BSV are a rounding error,
+but at scale (hundreds of millions of editions) byte-level footprint + a clean format matter collectively — so
+these are worth doing now, while the user is the only tester.
+
+- [ ] **V1 covenant trim — drop `price` + `stateData` from v1 editions** (≈ 11–12 B/edition output).
+      Both are dead weight in v1: `price` (8 B) is read only by v2's percentage split — inert in v1; `stateData`
+      is covenant-PINNED (the `suffix` after the owner pubkey is reproduced VERBATIM on every transfer/replicate,
+      so it's immutable, and editions always mint it empty) → it carries no information in an edition. Trim the
+      data fields 7 → 5 (`P, ver, RECORD_EDITION, tx1Ref, ownerPubKey`) and the drop seq `OP_2DROP×3+OP_DROP` →
+      `OP_2DROP×2+OP_DROP`. COST: covenant change → re-run the Spend suite + a fresh mainnet self-test; v1 and v2
+      layouts then diverge (fine — v2 keeps its own layout for the future ranged-pricing work). Saving is
+      FOOTPRINT/elegance, not fee cost — but compounds across millions of txs. (Requested by user 2026-06-15.)
+- [ ] **Hide v2 (percentage) from the mint UI** (app-layer only, NO covenant change). Ranged pricing — the only
+      thing that needs v2 — is postponed; a fixed "publisher %" is a UX convenience v1 can do (compute a fixed
+      fee from a %, store/enforce fixed, DISPLAY as %). Keep all v2 code + tests intact but unreachable from the
+      UI until ranged pricing is built. Enables the V1 trim above (v1 becomes the only minted format).
+- [ ] **Remove dead legacy MPT modules** (~2,999 LOC, zero functional risk — not bundled, not tested):
+      `tokenBuilder.ts` (2153), `opReturnCodec.ts` (483), `tokenStore.ts` (248), `fileCache.ts` (115). They form
+      a closed dead loop (only `tokenBuilder` imports `opReturnCodec`/`tokenStore`; nothing imports `tokenBuilder`
+      or `fileCache`). KEEP `tokenProtocol.ts` — `walletProvider.ts` (live) imports its SPV/Merkle types. Confirms
+      ON-CHAIN data is all binary (no JSON; the only `JSON.*` is off-chain: localStorage caches + WoC HTTP + logs).
+- (add further pre-launch items here as they surface: onboarding, deploy/host decision, WoC-terms check, etc.)
