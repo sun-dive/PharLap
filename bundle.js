@@ -18368,8 +18368,11 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       tokenRules: encodeTokenRules(0, 0, restrictions, 1),
       // supply 0 = unlimited / replicable
       covenantScript: utils_exports.toHex(templateLock.toBinary()),
-      fileHash: storedBytes != null ? sha256Hex(storedBytes) : void 0,
-      // binds the stored (cipher)text
+      // fileHash semantics: PUBLIC content binds the ORIGINAL plaintext (provenance — a verifier decompresses
+      // the on-chain blob and matches H(plaintext); DEFLATE decompression is deterministic so the proof is
+      // independent of the non-reproducible gzip encoding). ENCRYPTED content binds the ciphertext (privacy —
+      // a public plaintext hash would be a confirmation oracle).
+      fileHash: params.file == null ? void 0 : encrypt ? sha256Hex(storedBytes) : sha256Hex(params.file.bytes),
       wrappedKey,
       keySalt
     };
@@ -20412,9 +20415,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         setStatus(`"${collectionName}" has no embedded file.`, "info");
         return;
       }
-      const verified = template?.fileHash === utils_exports.toHex(Hash_exports.sha256(file.fileBytes));
       const rules = template != null ? decodeTokenRules(template.tokenRules) : null;
       const encrypted = rules?.isEncrypted ?? false;
+      const ciphertextOk = encrypted && template?.fileHash === utils_exports.toHex(Hash_exports.sha256(file.fileBytes));
       let bytes2 = file.fileBytes;
       if (encrypted) {
         if (template?.wrappedKey == null || template?.keySalt == null) {
@@ -20441,23 +20444,30 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           return;
         }
       }
-      showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes2 }, verified);
-      setStatus(
-        encrypted ? verified ? "\u{1F513} Decrypted \u2014 ciphertext matches the collection commitment \u2713." : "\u26A0 Decrypted, but the ciphertext hash does NOT match the collection!" : verified ? "File loaded \u2014 SHA-256 matches the collection (bound to identity \u2713)." : "\u26A0 File loaded, but its hash does NOT match the collection commitment!",
-        verified ? "ok" : "error"
-      );
+      const verified = encrypted ? ciphertextOk : template?.fileHash === utils_exports.toHex(Hash_exports.sha256(bytes2));
+      const msg = encrypted ? verified ? "\u{1F513} Decrypted \u2014 ciphertext matches the on-chain commitment \u2713" : "\u26A0 Decrypted, but the ciphertext hash does NOT match the collection!" : verified ? "\u2713 Verified exact replica \u2014 SHA-256 of the content matches the on-chain commitment (timestamped on mint)" : "\u26A0 File loaded, but its hash does NOT match the on-chain commitment!";
+      showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes2 }, verified, msg);
+      setStatus(msg, verified ? "ok" : "error");
     } catch (e) {
       setStatus(`View failed: ${e.message}`, "error");
     }
   }
-  function showFile(title, file, verified) {
+  function showFile(title, file, verified, note) {
     const content = $("viewerContent");
     if (viewerUrl) {
       URL.revokeObjectURL(viewerUrl);
       viewerUrl = null;
     }
     viewerUrl = URL.createObjectURL(new Blob([new Uint8Array(file.fileBytes)], { type: file.mimeType }));
-    $("viewerTitle").textContent = `${title} \u2014 ${file.fileName} \xB7 ${file.mimeType} \xB7 ${file.fileBytes.length} bytes ${verified ? "\u2713" : "\u26A0 hash mismatch"}`;
+    $("viewerTitle").textContent = `${title} \u2014 ${file.fileName} \xB7 ${file.mimeType} \xB7 ${file.fileBytes.length} bytes`;
+    const banner = $("viewerProvenance");
+    if (note) {
+      banner.textContent = note;
+      banner.className = `viewer-banner ${verified ? "ok" : "error"}`;
+      banner.style.display = "block";
+    } else {
+      banner.style.display = "none";
+    }
     content.innerHTML = "";
     if (file.mimeType.startsWith("image/")) {
       const img = document.createElement("img");
