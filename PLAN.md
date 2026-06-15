@@ -750,24 +750,26 @@ The on-chain token format effectively locks once real users adopt it. Per-tx fee
 but at scale (hundreds of millions of editions) byte-level footprint + a clean format matter collectively — so
 these are worth doing now, while the user is the only tester.
 
-- [ ] **V1 covenant trim — drop `price` + `stateData` from v1 editions** (≈ 11–12 B/edition output).
-      Both are dead weight in v1: `price` (8 B) is read only by v2's percentage split — inert in v1; `stateData`
-      is covenant-PINNED (the `suffix` after the owner pubkey is reproduced VERBATIM on every transfer/replicate,
-      so it's immutable, and editions always mint it empty) → it carries no information in an edition. Trim the
-      data fields 7 → 5 (`P, ver, RECORD_EDITION, tx1Ref, ownerPubKey`) and the drop seq `OP_2DROP×3+OP_DROP` →
-      `OP_2DROP×2+OP_DROP`. COST: covenant change → re-run the Spend suite + a fresh mainnet self-test; v1 and v2
-      layouts then diverge (fine — v2 keeps its own layout for the future ranged-pricing work). Saving is
-      FOOTPRINT/elegance, not fee cost — but compounds across millions of txs. (Requested by user 2026-06-15.)
-- [ ] **Hide v2 (percentage) from the mint UI** (app-layer only, NO covenant change). Ranged pricing — the only
+- [x] **V1 covenant trim — drop `price` + `stateData` from v1 editions** ✅ DONE 2026-06-15 (offline-validated;
+      v1 lock 775 → **763 B**, −12 B/edition). Both were dead weight in v1: `price` (8 B) is read only by v2's
+      percentage split — inert in v1; `stateData` is covenant-PINNED (the `suffix` after the owner pubkey is
+      reproduced VERBATIM on every transfer/replicate, so it's immutable, and editions always mint it empty) → it
+      carried no information in an edition. Trimmed the data fields 7 → 5 (`P, ver, RECORD_EDITION, tx1Ref,
+      ownerPubKey`) + drop seq `OP_2DROP×3+OP_DROP` → `OP_2DROP×2+OP_DROP`. v1/v2 layouts now diverge cleanly:
+      `editionFieldChunks` = 5 (v1), `editionFieldChunksV2` = 7 (v2 keeps price+stateData for future ranged
+      pricing). Owner offset stays 40 (trimmed fields sat after it), so all offset/reconstruction logic is
+      unchanged. 126/126 tests green incl. the Spend-interpreter mint→replicate/transfer enforcement.
+      ⚠ STILL NEEDS: a fresh mainnet self-test (mint trimmed v1 edition + replicate) before publishing Step 3.
+- [x] **Hide v2 (percentage) from the mint UI** ✅ DONE 2026-06-15 (published to origin/main, Steps 1&2). Ranged pricing — the only
       thing that needs v2 — is postponed; a fixed "publisher %" is a UX convenience v1 can do (compute a fixed
       fee from a %, store/enforce fixed, DISPLAY as %). Keep all v2 code + tests intact but unreachable from the
       UI until ranged pricing is built. Enables the V1 trim above (v1 becomes the only minted format).
-- [ ] **Remove dead legacy MPT modules** (~2,999 LOC, zero functional risk — not bundled, not tested):
+- [x] **Remove dead legacy MPT modules** ✅ DONE (prior commit). (~2,999 LOC, zero functional risk — not bundled, not tested):
       `tokenBuilder.ts` (2153), `opReturnCodec.ts` (483), `tokenStore.ts` (248), `fileCache.ts` (115). They form
       a closed dead loop (only `tokenBuilder` imports `opReturnCodec`/`tokenStore`; nothing imports `tokenBuilder`
       or `fileCache`). KEEP `tokenProtocol.ts` — `walletProvider.ts` (live) imports its SPV/Merkle types. Confirms
       ON-CHAIN data is all binary (no JSON; the only `JSON.*` is off-chain: localStorage caches + WoC HTTP + logs).
-- [ ] **Smart compression — GENERAL, applied wherever bytes go on-chain** (one mechanism, gated by
+- [x] **Smart compression — GENERAL, applied wherever bytes go on-chain** ✅ DONE 2026-06-15 (published, Steps 1&2). (one mechanism, gated by
       keep-only-if-smaller). gzip via the browser-native `CompressionStream`/`DecompressionStream` (zero deps),
       ALWAYS compress-before-encrypt (ciphertext is incompressible). Two attach points:
       • **Embedded edition files** — set a new `RESTRICTION_COMPRESSED` bit in `tokenRules` (room beside

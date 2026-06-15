@@ -341,8 +341,9 @@ export interface EditionFields {
    *  the percentage split). Carried verbatim into replicas. Default 0. Placed AFTER the owner pubkey so the
    *  owner offset (40) stays fixed. */
   price?: number[]
-  /** Mutable per-token state (cloned verbatim into replicas). */
-  stateData: number[]
+  /** v2-only: per-token state, cloned verbatim into replicas (covenant-pinned, so immutable post-mint).
+   *  Omitted entirely from the v1 lean layout. Default []. */
+  stateData?: number[]
 }
 
 /** Normalize a price to the fixed 8-byte LE field the covenant carries (pad LE with zeros; default 0). */
@@ -374,7 +375,10 @@ export interface EditionV2Params extends EditionFields {
   c?: PushTxConstants
 }
 
-/** Edition data-field chunks: [P, version, RECORD_EDITION, tx1Ref, ownerPubKey, price(8), stateData]. */
+/** v1 edition data-field chunks (lean): [P, version, RECORD_EDITION, tx1Ref, ownerPubKey].
+ *  No price/stateData: price is v2-only (inert in v1); stateData is covenant-PINNED (reproduced verbatim in
+ *  the suffix on every spend → immutable, always minted empty) so it carried no information. Owner stays at
+ *  offset 40 (the trimmed fields sat AFTER it), so all offset logic is unchanged. v2 keeps the full layout. */
 function editionFieldChunks(f: EditionFields): ScriptChunk[] {
   return [
     pushData(f.prefix ?? [0x50]),
@@ -382,14 +386,21 @@ function editionFieldChunks(f: EditionFields): ScriptChunk[] {
     pushData([RECORD_EDITION]),
     pushData(f.tx1Ref),
     pushData(f.ownerPubKey),
+  ]
+}
+
+/** v2 edition data-field chunks: [P, version, RECORD_EDITION, tx1Ref, ownerPubKey, price(8), stateData]. */
+function editionFieldChunksV2(f: EditionFields): ScriptChunk[] {
+  return [
+    ...editionFieldChunks(f),
     pushData(editionPriceField(f.price)),
-    pushData(f.stateData),
+    pushData(f.stateData ?? []),
   ]
 }
 
 /**
  * Full edition-token locking script ops:
- *   <7 data fields> OP_2DROP OP_2DROP OP_2DROP OP_DROP  (carry token metadata on-chain, then clear the stack)
+ *   <5 data fields> OP_2DROP OP_2DROP OP_DROP    (carry token metadata on-chain, then clear the stack)
  *   <shared covenant prefix>                     (verify preimage; extract hashOutputs + scriptCode pieces)
  *   <selector> OP_IF <transfer tail> OP_ELSE <replicate tail> OP_ENDIF
  * Use `buildEditionLock` instead of calling this directly — it computes `fieldPubkeyOffset` for you.
@@ -398,7 +409,7 @@ export function editionLockOps(p: EditionParams): ScriptChunk[] {
   const c = p.c ?? pushTxConstants(EDITION_SCOPE)
   return [
     ...editionFieldChunks(p),
-    op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_DROP), // 7 fields
+    op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_DROP), // 5 fields
     ...covenantPrefixOps(p.fieldPubkeyOffset, c),
     pushData([3]), op(OP.OP_ROLL),                          // bring the branch selector to the top
     op(OP.OP_IF),
@@ -427,7 +438,7 @@ export function buildEditionLock(p: Omit<EditionParams, 'fieldPubkeyOffset'>): L
 export function editionLockV2Ops(p: EditionV2Params): ScriptChunk[] {
   const c = p.c ?? pushTxConstants(EDITION_SCOPE)
   return [
-    ...editionFieldChunks(p),
+    ...editionFieldChunksV2(p),
     op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_DROP), // 7 fields
     ...covenantPrefixOps(p.fieldPubkeyOffset, c),
     pushData([3]), op(OP.OP_ROLL),
@@ -540,17 +551,16 @@ function leToNum(b: number[]): number {
  */
 export function parseEditionScript(script: LockingScript): ParsedEdition | null {
   const ch = script.chunks
-  if (ch == null || ch.length < 11) return null
+  if (ch == null || ch.length < 8) return null
   const P = chunkBytes(ch[0]); const ver = chunkBytes(ch[1]); const rec = chunkBytes(ch[2])
   const tx1Ref = chunkBytes(ch[3]); const ownerPub = chunkBytes(ch[4])
-  const price = chunkBytes(ch[5]); const stateData = chunkBytes(ch[6]) ?? []
   if (P == null || P.length !== 1 || P[0] !== 0x50) return null
   if (ver == null || ver[0] !== 0x03) return null
   if (rec == null || rec[0] !== RECORD_EDITION) return null
   if (tx1Ref == null || tx1Ref.length !== 32) return null
   if (ownerPub == null || ownerPub.length !== 33) return null
-  if (price == null || price.length !== 8) return null
-  if (ch[7].op !== OP.OP_2DROP || ch[8].op !== OP.OP_2DROP || ch[9].op !== OP.OP_2DROP || ch[10].op !== OP.OP_DROP) return null
+  // v1 lean layout: 5 fields, then OP_2DROP OP_2DROP OP_DROP (no price/stateData fields).
+  if (ch[5].op !== OP.OP_2DROP || ch[6].op !== OP.OP_2DROP || ch[7].op !== OP.OP_DROP) return null
   // Recover fees/publisher from the OUT2 (34B) and C3pre (12B) constants — both carry the P2PKH
   // signature 0x19 0x76 0xa9 0x14 (varint(25) ‖ OP_DUP OP_HASH160 PUSH20) at offset 8.
   let publisherFeeSats = 0, holderFeeSats = 0
@@ -564,8 +574,8 @@ export function parseEditionScript(script: LockingScript): ParsedEdition | null 
   }
   if (publisherPubKeyHash == null) return null
   return {
-    tx1RefHex: Utils.toHex(tx1Ref), ownerPubKeyHex: Utils.toHex(ownerPub), priceSats: leToNum(price),
-    stateDataHex: Utils.toHex(stateData), terms: { publisherPubKeyHash, publisherFeeSats, holderFeeSats },
+    tx1RefHex: Utils.toHex(tx1Ref), ownerPubKeyHex: Utils.toHex(ownerPub), priceSats: 0,
+    stateDataHex: '', terms: { publisherPubKeyHash, publisherFeeSats, holderFeeSats },
   }
 }
 
