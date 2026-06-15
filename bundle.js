@@ -17772,20 +17772,13 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (data.length < 65536) return 3 + data.length;
     return 5 + data.length;
   }
-  function editionPriceField(price) {
-    const p = price ?? [];
-    if (p.length > 8) throw new Error("editionPriceField: price must be \u2264 8 bytes");
-    return [...p, ...new Array(8 - p.length).fill(0)];
-  }
   function editionFieldChunks(f2) {
     return [
       pushData(f2.prefix ?? [80]),
       pushData(f2.version ?? [3]),
       pushData([RECORD_EDITION]),
       pushData(f2.tx1Ref),
-      pushData(f2.ownerPubKey),
-      pushData(editionPriceField(f2.price)),
-      pushData(f2.stateData)
+      pushData(f2.ownerPubKey)
     ];
   }
   function editionLockOps(p) {
@@ -17794,9 +17787,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       ...editionFieldChunks(p),
       op2(OP_default.OP_2DROP),
       op2(OP_default.OP_2DROP),
-      op2(OP_default.OP_2DROP),
       op2(OP_default.OP_DROP),
-      // 7 fields
+      // 5 fields
       ...covenantPrefixOps(p.fieldPubkeyOffset, c),
       pushData([3]),
       op2(OP_default.OP_ROLL),
@@ -17849,21 +17841,18 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function parseEditionScript(script) {
     const ch = script.chunks;
-    if (ch == null || ch.length < 11) return null;
+    if (ch == null || ch.length < 8) return null;
     const P2 = chunkBytes(ch[0]);
     const ver = chunkBytes(ch[1]);
     const rec = chunkBytes(ch[2]);
     const tx1Ref = chunkBytes(ch[3]);
     const ownerPub = chunkBytes(ch[4]);
-    const price = chunkBytes(ch[5]);
-    const stateData = chunkBytes(ch[6]) ?? [];
     if (P2 == null || P2.length !== 1 || P2[0] !== 80) return null;
     if (ver == null || ver[0] !== 3) return null;
     if (rec == null || rec[0] !== RECORD_EDITION) return null;
     if (tx1Ref == null || tx1Ref.length !== 32) return null;
     if (ownerPub == null || ownerPub.length !== 33) return null;
-    if (price == null || price.length !== 8) return null;
-    if (ch[7].op !== OP_default.OP_2DROP || ch[8].op !== OP_default.OP_2DROP || ch[9].op !== OP_default.OP_2DROP || ch[10].op !== OP_default.OP_DROP) return null;
+    if (ch[5].op !== OP_default.OP_2DROP || ch[6].op !== OP_default.OP_2DROP || ch[7].op !== OP_default.OP_DROP) return null;
     let publisherFeeSats = 0, holderFeeSats = 0;
     let publisherPubKeyHash = null;
     const isP2pkhValue = (d) => d[8] === 25 && d[9] === 118 && d[10] === 169 && d[11] === 20;
@@ -17881,8 +17870,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return {
       tx1RefHex: utils_exports.toHex(tx1Ref),
       ownerPubKeyHex: utils_exports.toHex(ownerPub),
-      priceSats: leToNum(price),
-      stateDataHex: utils_exports.toHex(stateData),
+      priceSats: 0,
+      stateDataHex: "",
       terms: { publisherPubKeyHash, publisherFeeSats, holderFeeSats }
     };
   }
