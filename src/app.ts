@@ -557,8 +557,7 @@ function renderTokens(): void {
     const latest = latestBroadcast.get(t.collectionId)
     body.innerHTML = `
       <div class="token-name">${escapeHtml(t.collectionName ?? 'Collection')}${isEdition ? ' <span class="badge">edition</span>' : ''}</div>
-      <div class="mono">collection ${short(t.collectionId)}</div>
-      <div class="mono">utxo ${short(t.txId)}:${t.outputIndex}</div>
+      <div class="mono token-ids">collection <span class="copy-id" data-copy="${t.collectionId}" title="${t.collectionId} — click to copy">${short(t.collectionId)}</span> · utxo <span class="copy-id" data-copy="${t.txId}" title="${t.txId} — click to copy">${short(t.txId)}</span>:${t.outputIndex}</div>
       ${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ''}
       ${t.sellerNote ? `<div class="state" style="color:var(--accent2)">📝 ${escapeHtml(t.sellerNote)}</div>` : ''}
       ${t.bonusValue ? (t.bonusKind === 'link'
@@ -674,6 +673,28 @@ async function fetchAndMakeThumb(collectionId: string): Promise<string | null> {
 
 function safeUtf8(hex: string): string {
   try { return Utils.toUTF8(Utils.toArray(hex, 'hex')) } catch { return hex }
+}
+
+// Truncated ids (collection / tx / utxo) are shown abbreviated to save space but carry the FULL value in
+// data-copy, so a click copies the whole string (e.g. to paste into WhatsOnChain). One delegated listener
+// handles every [data-copy] element in the app.
+function onCopyClick(e: MouseEvent): void {
+  const el = (e.target as HTMLElement | null)?.closest('[data-copy]') as HTMLElement | null
+  if (el == null) return
+  const value = el.dataset.copy ?? ''
+  if (value === '') return
+  void navigator.clipboard?.writeText(value)
+  toast('Copied to clipboard')
+}
+
+let toastTimer: ReturnType<typeof setTimeout> | undefined
+function toast(message: string): void {
+  let el = document.getElementById('toast')
+  if (el == null) { el = document.createElement('div'); el.id = 'toast'; document.body.append(el) }
+  el.textContent = message
+  el.classList.add('show')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => el?.classList.remove('show'), 1400)
 }
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
@@ -1216,6 +1237,7 @@ function init(): void {
   useKey(loadKey())
   renderTokens()
   initTabs()
+  document.addEventListener('click', onCopyClick) // click-to-copy for any [data-copy] element
 
   $('btnRefresh').onclick = () => void refreshBalance()
   $('btnMint').onclick = () => void onMint()
