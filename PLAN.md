@@ -767,4 +767,15 @@ these are worth doing now, while the user is the only tester.
       a closed dead loop (only `tokenBuilder` imports `opReturnCodec`/`tokenStore`; nothing imports `tokenBuilder`
       or `fileCache`). KEEP `tokenProtocol.ts` — `walletProvider.ts` (live) imports its SPV/Merkle types. Confirms
       ON-CHAIN data is all binary (no JSON; the only `JSON.*` is off-chain: localStorage caches + WoC HTTP + logs).
+- [ ] **Smart compression — GENERAL, applied wherever bytes go on-chain** (one mechanism, gated by
+      keep-only-if-smaller). gzip via the browser-native `CompressionStream`/`DecompressionStream` (zero deps),
+      ALWAYS compress-before-encrypt (ciphertext is incompressible). Two attach points:
+      • **Embedded edition files** — set a new `RESTRICTION_COMPRESSED` bit in `tokenRules` (room beside
+        ENCRYPTED/REPLICABLE); decompress after decrypt at view. Text/markup → 50–90% (halves mint fee);
+        already-compressed media (jpg/png/mp4/pdf/zip) fail the "smaller?" test → stay raw → no-op.
+      • **Message envelopes (DMs + broadcasts + message file-attachments)** — add `FLAG_COMPRESSED` (0x02)
+        beside `FLAG_ENCRYPTED` in the envelope flags byte; compress the TLV body if smaller. NOTE: typical
+        short messages won't compress (gzip's ~18 B overhead > gain at <~150 B, and notes/broadcasts are capped
+        280/480 B) — the keep-if-smaller guard auto-skips them, so it's safe but only really helps long messages
+        + file attachments. App-layer, covenant untouched, adds on-chain format flags → do pre-launch.
 - (add further pre-launch items here as they surface: onboarding, deploy/host decision, WoC-terms check, etc.)
