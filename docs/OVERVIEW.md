@@ -1,7 +1,7 @@
 # PHAR LAP — Functional Overview
 
-A plain-language tour of what PHAR LAP is and what it does. For the deep protocol design see
-`PLAN.md`; for how it differs from its MPT predecessor see `docs/DEVIATIONS_FROM_MPT.md`.
+A plain-language tour of what PHAR LAP is and what it does. For the deep covenant/protocol internals see
+[`docs/COVENANT_INTERNALS.md`](./COVENANT_INTERNALS.md).
 
 ---
 
@@ -11,7 +11,7 @@ PHAR LAP is a **standalone browser wallet for tokenized content on BSV**. You mi
 as a token, optionally embed a file with it, and share, sell, or transfer it — with no server, no
 install, and no account. Everything is a single HTML page talking to the public blockchain.
 
-It is built around two ideas that make it different from a typical token wallet:
+It is built around three ideas that make it different from a typical token wallet:
 
 1. **The data lives in a spendable output (PushDrop), not an OP_RETURN.** OP_RETURN data can be pruned
    by miners; a PushDrop output stays in the live UTXO set, so the token — and any embedded file — is
@@ -20,6 +20,9 @@ It is built around two ideas that make it different from a typical token wallet:
    themselves*, permissionlessly, paying a fixed fee — enforced by the miners, with no action from the
    publisher or current holder. This is the headline feature, and it is powered by a hand-rolled
    **covenant** (a script that constrains how it may be spent).
+3. **Provable, timestamped content.** A public embedded file is committed by the SHA-256 of its
+   *original* bytes, so anyone can later prove the on-chain copy is a byte-exact, block-timestamped
+   replica of an off-chain file — a built-in notary. (This is the "proof token" in PHAR LAP's origins.)
 
 ---
 
@@ -49,6 +52,31 @@ So every token points back to its collection by txid. Changing the embedded file
 txid, which would break every token's reference — that is what makes the file *bound to identity*.
 There is no central registry: a token is a genuine member of a collection if it traces back to the real
 TX1 (verified by standard SPV / Merkle proofs, fetched on demand).
+
+---
+
+## Provenance: a timestamped exact replica
+
+One core use of PHAR LAP is as a **notary** — proving that an on-chain object is a byte-exact,
+time-stamped copy of an off-chain file.
+
+When a **public** file is embedded, the collection commits to the **SHA-256 of the original file** (its
+plaintext bytes, before any compression). To verify later, anyone:
+
+1. fetches the on-chain object and reverses the storage encoding (decompresses it) to recover the bytes,
+2. hashes those bytes and checks the result against the on-chain commitment, and
+3. reads the **mint transaction's block time** for the timestamp.
+
+A match proves the file existed, and was fixed on-chain, no later than that block — and is byte-for-byte
+the file in front of you. The viewer does this automatically and shows **"✓ Verified exact replica —
+SHA-256 of the content matches the on-chain commitment (timestamped on mint)."**
+
+The proof survives compression: gzip *compression* isn't byte-reproducible across tools, but gzip
+*decompression* is exactly defined — so the commitment is to the recovered content, never to the
+particular compressed bytes that happened to be stored.
+
+**Encrypted** content commits to the **ciphertext** instead. That stops the public commitment from
+acting as a "guess-the-file" oracle, while holders still verify integrity the moment they decrypt.
 
 ---
 
@@ -111,7 +139,7 @@ external smart-contract toolchain — and runs under BSV's post-Chronicle (versi
 | **Check incoming / recover** | Discover tokens / editions / messages sent to you, and rebuild your holdings from chain. |
 | **Restore from WIF** | Recover your wallet **and** purchases on any browser/device from your private key. |
 | **Verify** | Confirm a token/edition is structurally valid and which collection it belongs to. |
-| **View** | Open the embedded file — **decrypting it** if the collection is encrypted — and check its hash against the collection commitment. |
+| **View** | Open the embedded file — decompressing and **decrypting** it as needed — and verify it against the collection commitment (public files show a **✓ verified exact replica** proof). |
 | **Test v2 broadcast** | Sanity-check that the network accepts version-2 (Chronicle) transactions. |
 
 Receiving wallets find tokens through a small **1-sat P2PKH notification** to the recipient's address
@@ -182,6 +210,21 @@ The bonus value is **public on the chain** (it's part of the note), so gating is
 for links and shareable coupons; don't put a one-time secret there. On-chain (encrypted) and *time-locked*
 bonuses are designed for later.
 
+## Compact by default
+
+Everything PHAR LAP writes on-chain is kept as small as it safely can be:
+
+- **Embedded files and messages are gzip-compressed** whenever that actually shrinks them — a
+  keep-only-if-smaller check, so already-compressed media (JPEG, MP4, PDF…) and very short text are left
+  untouched. For documents and text this can roughly **halve the mint cost**. Compression always happens
+  *before* encryption (ciphertext doesn't compress) and is transparently reversed on view.
+- **The edition covenant is lean.** Every byte of an edition's lock is repeated into each replica, so
+  the on-chain format carries only what the rules strictly need. At the scale of a popular collection,
+  trimmed bytes compound across every copy ever minted.
+
+It's invisible in use — files and messages go in and come back out unchanged — but it lowers fees and
+on-chain footprint.
+
 ## Recovering on a new device
 
 The wallet is **self-custodial**: the local list of tokens is just a **cache**, and the **WIF private key
@@ -212,6 +255,9 @@ Validated on **BSV mainnet**:
 - ✅ Collection mint (single + multi), embedded-file binding, transfer, discovery, verification, viewer
 - ✅ **Edition covenant**: mint, **permissionless replicate** (confirmed in a block), owner-signed
   transfer, file embed/view, discovery
+- ✅ **Provenance** — public embedded files committed by plaintext hash, verified as a **timestamped
+  exact replica** on view
+- ✅ **Smart compression** of embedded files + messages (gzip, keep-only-if-smaller, compress-before-encrypt)
 - ✅ **Encrypted, authenticated messaging** (text / file / content key)
 - ✅ **Tier-1 encrypted content** (holder-only embedded files, decrypt-on-view)
 - ✅ **Shareable sales pages + one-click "Get a copy"** (storefront, cover/description, deterministic
