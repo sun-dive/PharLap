@@ -23,7 +23,7 @@ const parts: Part[] = [
 ]
 
 test('buildMessageTx: valid tx, message output opens for the recipient, notification to recipient addr', async () => {
-  const envelope = buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts })
+  const envelope = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts })
   const funding = faucet(sender, 100000)
   const r = await buildMessageTx({ key: sender, funding: [funding], recipientPubKeyHex: recipientPubHex, envelope })
 
@@ -41,7 +41,7 @@ test('buildMessageTx: valid tx, message output opens for the recipient, notifica
   const parsed = parseMessageScript(r.tx.outputs[r.messageVout].lockingScript)
   assert.ok(parsed)
   assert.equal(parsed!.recipientPubKeyHex, recipientPubHex)
-  const opened = openEnvelope(parsed!.fields.envelope, recipient)
+  const opened = await openEnvelope(parsed!.fields.envelope, recipient)
   assert.ok(opened)
   assert.equal(opened!.senderPubKeyHex, sender.toPublicKey().toString())
   assert.deepEqual(opened!.parts, parts)
@@ -53,8 +53,8 @@ test('buildMessageTx: valid tx, message output opens for the recipient, notifica
 })
 
 test('buildMessageTx: a stranger cannot open the message', async () => {
-  const envelope = buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts })
+  const envelope = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts })
   const r = await buildMessageTx({ key: sender, funding: [faucet(sender, 100000)], recipientPubKeyHex: recipientPubHex, envelope })
   const parsed = parseMessageScript(r.tx.outputs[r.messageVout].lockingScript)
-  assert.equal(openEnvelope(parsed!.fields.envelope, PrivateKey.fromRandom()), null)
+  assert.equal(await openEnvelope(parsed!.fields.envelope, PrivateKey.fromRandom()), null)
 })

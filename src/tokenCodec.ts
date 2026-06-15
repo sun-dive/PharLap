@@ -52,6 +52,9 @@ export const RESTRICTION_TRACK_TRANSFERS = 0x0004
 /** The embedded file is Tier-1 encrypted: the FILE output holds ciphertext; the template carries the
  *  wrapped content key + keySalt (see contentCrypto / PLAN.md Addendum F). */
 export const RESTRICTION_ENCRYPTED = 0x0008
+/** The embedded file is gzip-compressed (see compress.ts). Decompress on view, AFTER decrypting if also
+ *  encrypted (we always compress before encrypting). Set only when compression actually shrank the file. */
+export const RESTRICTION_COMPRESSED = 0x0010
 
 // ─── Byte / hex / utf8 helpers ──────────────────────────────────────
 
@@ -470,6 +473,8 @@ export interface DecodedTokenRules {
   isTracked: boolean
   /** The embedded file is Tier-1 encrypted (RESTRICTION_ENCRYPTED) — see Addendum F. */
   isEncrypted: boolean
+  /** The embedded file is gzip-compressed (RESTRICTION_COMPRESSED) — decompress after decrypt. */
+  isCompressed: boolean
 }
 
 export function decodeTokenRules(rulesHex: string): DecodedTokenRules {
@@ -487,6 +492,7 @@ export function decodeTokenRules(rulesHex: string): DecodedTokenRules {
     isUnlimited: supply === 0,
     isTracked: (restrictions & RESTRICTION_TRACK_TRANSFERS) !== 0,
     isEncrypted: (restrictions & RESTRICTION_ENCRYPTED) !== 0,
+    isCompressed: (restrictions & RESTRICTION_COMPRESSED) !== 0,
   }
 }
 

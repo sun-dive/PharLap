@@ -21,34 +21,34 @@ test('TLV: parts round-trip (text/key/file/fileRef, composite)', () => {
   assert.deepEqual(decoded, sampleParts)
 })
 
-test('envelope: encrypted round-trip recovers parts + authenticates sender', () => {
-  const env = buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts })
-  const opened = openEnvelope(env, recipient)
+test('envelope: encrypted round-trip recovers parts + authenticates sender', async () => {
+  const env = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts })
+  const opened = await openEnvelope(env, recipient)
   assert.ok(opened)
   assert.equal(opened!.encrypted, true)
   assert.equal(opened!.senderPubKeyHex, senderPubHex)
   assert.deepEqual(opened!.parts, sampleParts)
 })
 
-test('envelope: a different recipient cannot open it', () => {
-  const env = buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts })
+test('envelope: a different recipient cannot open it', async () => {
+  const env = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts })
   const stranger = PrivateKey.fromRandom()
-  assert.equal(openEnvelope(env, stranger), null)
+  assert.equal(await openEnvelope(env, stranger), null)
 })
 
-test('envelope: plaintext (unencrypted) round-trip', () => {
-  const env = buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: [{ kind: 'text', text: 'public note' }], encrypt: false })
-  const opened = openEnvelope(env, PrivateKey.fromRandom()) // anyone can read a plaintext envelope
+test('envelope: plaintext (unencrypted) round-trip', async () => {
+  const env = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: [{ kind: 'text', text: 'public note' }], encrypt: false })
+  const opened = await openEnvelope(env, PrivateKey.fromRandom()) // anyone can read a plaintext envelope
   assert.ok(opened)
   assert.equal(opened!.encrypted, false)
   assert.equal(opened!.senderPubKeyHex, senderPubHex)
   assert.deepEqual(opened!.parts, [{ kind: 'text', text: 'public note' }])
 })
 
-test('envelope: a key-only message (the encrypted-content delivery case)', () => {
+test('envelope: a key-only message (the encrypted-content delivery case)', async () => {
   const contentKey = [...Hash.sha256([0xde, 0xad, 0xbe, 0xef])]
-  const env = buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: [{ kind: 'key', key: contentKey }] })
-  const opened = openEnvelope(env, recipient)
+  const env = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: [{ kind: 'key', key: contentKey }] })
+  const opened = await openEnvelope(env, recipient)
   assert.ok(opened)
   const keyPart = opened!.parts.find(p => p.kind === 'key')
   assert.ok(keyPart && keyPart.kind === 'key')

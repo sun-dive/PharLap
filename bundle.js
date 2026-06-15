@@ -17067,6 +17067,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var RESTRICTION_REPLICABLE = 2;
   var RESTRICTION_TRACK_TRANSFERS = 4;
   var RESTRICTION_ENCRYPTED = 8;
+  var RESTRICTION_COMPRESSED = 16;
   function hexToBytes(hex) {
     return hex.length === 0 ? [] : utils_exports.toArray(hex, "hex");
   }
@@ -17318,7 +17319,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       isReplicable: (restrictions & RESTRICTION_REPLICABLE) !== 0,
       isUnlimited: supply === 0,
       isTracked: (restrictions & RESTRICTION_TRACK_TRANSFERS) !== 0,
-      isEncrypted: (restrictions & RESTRICTION_ENCRYPTED) !== 0
+      isEncrypted: (restrictions & RESTRICTION_ENCRYPTED) !== 0,
+      isCompressed: (restrictions & RESTRICTION_COMPRESSED) !== 0
     };
   }
 
@@ -17762,98 +17764,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       op2(OP_default.OP_EQUAL)
     ];
   }
-  function replicateTailV2Ops(p) {
-    const VALUE1 = u64le(p.tokenSats ?? 1);
-    const PUBLISHER_P2PKH = [25, ...p2pkhScript(p.publisherPubKeyHash)];
-    const RESELLER_PRE = [25, 118, 169, 20];
-    const RESELLER_SUF = [136, 172];
-    return [
-      // out0 = VALUE1 ‖ pre ‖ ownerPub ‖ suffix (token back to holder, verbatim)
-      pushData(VALUE1),
-      pushData([3]),
-      op2(OP_default.OP_PICK),
-      op2(OP_default.OP_CAT),
-      pushData([2]),
-      op2(OP_default.OP_PICK),
-      op2(OP_default.OP_CAT),
-      pushData([1]),
-      op2(OP_default.OP_PICK),
-      op2(OP_default.OP_CAT),
-      // out1 = VALUE1 ‖ pre ‖ buyerPub ‖ suffix (replica to buyer; price carried in suffix)
-      pushData(VALUE1),
-      pushData([4]),
-      op2(OP_default.OP_PICK),
-      op2(OP_default.OP_CAT),
-      pushData([5]),
-      op2(OP_default.OP_PICK),
-      op2(OP_default.OP_CAT),
-      pushData([2]),
-      op2(OP_default.OP_PICK),
-      op2(OP_default.OP_CAT),
-      op2(OP_default.OP_CAT),
-      // out0‖out1   stack: [.., suffix, out0out1]
-      // Extract P from a COPY of suffix (price = first field; skip its 1-byte push opcode, take 8 bytes).
-      pushData([1]),
-      op2(OP_default.OP_PICK),
-      pushData([1]),
-      op2(OP_default.OP_SPLIT),
-      op2(OP_default.OP_NIP),
-      pushData([8]),
-      op2(OP_default.OP_SPLIT),
-      op2(OP_default.OP_DROP),
-      op2(OP_default.OP_BIN2NUM),
-      // [.., out0out1, P]
-      // publisherCut = ⌊P×pBps/10000⌋ ; resellerCut = P − publisherCut
-      op2(OP_default.OP_DUP),
-      pushData(numLE(p.pBps)),
-      op2(OP_default.OP_MUL),
-      pushData(numLE(1e4)),
-      op2(OP_default.OP_DIV),
-      op2(OP_default.OP_TUCK),
-      op2(OP_default.OP_SUB),
-      // [.., out0out1, publisherCut, resellerCut]
-      op2(OP_default.OP_8),
-      op2(OP_default.OP_NUM2BIN),
-      // resellerCut → 8-byte LE
-      op2(OP_default.OP_SWAP),
-      op2(OP_default.OP_8),
-      op2(OP_default.OP_NUM2BIN),
-      // [.., out0out1, resellerCut8, publisherCut8]
-      // out2 = publisherCut8 ‖ PUBLISHER_P2PKH ; prepend out0out1
-      pushData(PUBLISHER_P2PKH),
-      op2(OP_default.OP_CAT),
-      // [.., out0out1, resellerCut8, out2]
-      pushData([2]),
-      op2(OP_default.OP_ROLL),
-      op2(OP_default.OP_SWAP),
-      op2(OP_default.OP_CAT),
-      // out0out1‖out2   [.., resellerCut8, out012]
-      // out3 = resellerCut8 ‖ RESELLER_PRE ‖ HASH160(ownerPub) ‖ RESELLER_SUF ; append
-      op2(OP_default.OP_SWAP),
-      op2(OP_default.OP_CAT),
-      // out012‖resellerCut8
-      pushData(RESELLER_PRE),
-      op2(OP_default.OP_CAT),
-      pushData([2]),
-      op2(OP_default.OP_PICK),
-      op2(OP_default.OP_HASH160),
-      op2(OP_default.OP_CAT),
-      pushData(RESELLER_SUF),
-      op2(OP_default.OP_CAT),
-      // → out0123   [.., suffix, ..., out0123]
-      // ‖ buyerChange → expected ; compare HASH256 to hashOutputs
-      pushData([5]),
-      op2(OP_default.OP_ROLL),
-      op2(OP_default.OP_CAT),
-      op2(OP_default.OP_TOALTSTACK),
-      op2(OP_default.OP_2DROP),
-      op2(OP_default.OP_2DROP),
-      op2(OP_default.OP_FROMALTSTACK),
-      op2(OP_default.OP_HASH256),
-      op2(OP_default.OP_FROMALTSTACK),
-      op2(OP_default.OP_EQUAL)
-    ];
-  }
   var EDITION_SCOPE = 193;
   var RECORD_EDITION = 5;
   function serializedPushLen(data) {
@@ -17905,34 +17815,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5;
     return new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: varIntSize + O }));
   }
-  function editionLockV2Ops(p) {
-    const c = p.c ?? pushTxConstants(EDITION_SCOPE);
-    return [
-      ...editionFieldChunks(p),
-      op2(OP_default.OP_2DROP),
-      op2(OP_default.OP_2DROP),
-      op2(OP_default.OP_2DROP),
-      op2(OP_default.OP_DROP),
-      // 7 fields
-      ...covenantPrefixOps(p.fieldPubkeyOffset, c),
-      pushData([3]),
-      op2(OP_default.OP_ROLL),
-      op2(OP_default.OP_IF),
-      ...transferTailOps({ tokenSats: p.tokenSats }),
-      op2(OP_default.OP_ELSE),
-      ...replicateTailV2Ops({ tokenSats: p.tokenSats, publisherPubKeyHash: p.publisherPubKeyHash, pBps: p.pBps, c }),
-      op2(OP_default.OP_ENDIF)
-    ];
-  }
   var EDITION_VERSION_V2 = 4;
-  function buildEditionLockV2(p) {
-    const pv = { ...p, version: p.version ?? [EDITION_VERSION_V2] };
-    const before = [pv.prefix ?? [80], pv.version, [RECORD_EDITION], pv.tx1Ref];
-    const O = before.reduce((s2, f2) => s2 + serializedPushLen(f2), 0) + 1;
-    const probeLen = new LockingScript(editionLockV2Ops({ ...pv, fieldPubkeyOffset: 1 })).toBinary().length;
-    const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5;
-    return new LockingScript(editionLockV2Ops({ ...pv, fieldPubkeyOffset: varIntSize + O }));
-  }
   var EDITION_OWNER_SCRIPT_OFFSET = 40;
   function swapEditionOwner(lockBytes, newOwnerPub) {
     if (newOwnerPub.length !== 33) throw new Error("swapEditionOwner: owner pubkey must be 33 bytes");
@@ -18072,6 +17955,24 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function editionTransferUnlockChunks(p) {
     return [pushData(p.change), pushData(p.newOwnerPubKey), pushData(p.ownerSig), op2(OP_default.OP_1), pushData(p.preimage)];
+  }
+
+  // src/compress.ts
+  var MIN_COMPRESS = 64;
+  async function run(bytes2, stream) {
+    const writer = stream.writable.getWriter();
+    void writer.write(new Uint8Array(bytes2));
+    void writer.close();
+    const buf = await new Response(stream.readable).arrayBuffer();
+    return Array.from(new Uint8Array(buf));
+  }
+  async function compressIfSmaller(bytes2) {
+    if (bytes2.length < MIN_COMPRESS || typeof CompressionStream === "undefined") return { bytes: bytes2, compressed: false };
+    const z = await run(bytes2, new CompressionStream("gzip"));
+    return z.length < bytes2.length ? { bytes: z, compressed: true } : { bytes: bytes2, compressed: false };
+  }
+  async function decompress(bytes2) {
+    return run(bytes2, new DecompressionStream("gzip"));
   }
 
   // src/sellerNote.ts
@@ -18218,42 +18119,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         publisherPubKeyHash: opts.terms.publisherPubKeyHash,
         publisherFeeSats: opts.terms.publisherFeeSats,
         holderFeeSats: opts.terms.holderFeeSats,
-        tokenSats
-      });
-      editionVouts.push(tx.outputs.length);
-      tx.addOutput({ lockingScript: lock2, satoshis: tokenSats });
-    }
-    const changeVout = tx.outputs.length;
-    tx.addOutput({ lockingScript: new P2PKH().lock(opts.key.toAddress()), change: true });
-    await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB));
-    await tx.sign();
-    const changeSats = tx.outputs[changeVout]?.satoshis ?? 0;
-    return { tx, txId: tx.id("hex"), editionVouts, changeVout: changeSats > 0 ? changeVout : null, changeSats };
-  }
-  async function buildEditionGenesisV2Tx(opts) {
-    const tokenSats = opts.terms.tokenSats ?? PHARLAP_OUTPUT_SATS;
-    const ownerPub = opts.ownerPubKey ?? pubKeyBytes(opts.key);
-    const tx1Ref = utils_exports.toArray(opts.tx1Ref, "hex");
-    if (tx1Ref.length !== 32) throw new Error("buildEditionGenesisV2Tx: tx1Ref must be a 32-byte txid hex");
-    const price = u64le(opts.initialPriceSats);
-    const tx = new Transaction();
-    tx.version = 2;
-    for (const f2 of opts.funding) {
-      tx.addInput({
-        sourceTransaction: f2.sourceTx,
-        sourceOutputIndex: f2.utxo.outputIndex,
-        unlockingScriptTemplate: new P2PKH().unlock(opts.key)
-      });
-    }
-    const editionVouts = [];
-    for (let i = 0; i < (opts.mintCount ?? 1); i++) {
-      const lock2 = buildEditionLockV2({
-        tx1Ref,
-        ownerPubKey: ownerPub,
-        price,
-        stateData: opts.stateData ?? [],
-        publisherPubKeyHash: opts.terms.publisherPubKeyHash,
-        pBps: opts.terms.pBps,
         tokenSats
       });
       editionVouts.push(tx.outputs.length);
@@ -18494,15 +18359,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     });
     const encrypt = params.encrypt === true && params.file != null;
     let storedBytes = params.file?.bytes;
+    let compressed = false;
     let wrappedKey;
     let keySalt;
-    if (encrypt && params.file != null) {
-      const K2 = newContentKey();
-      keySalt = newKeySalt();
-      storedBytes = encryptContent(params.file.bytes, K2);
-      wrappedKey = wrapContentKey(K2, keySalt);
+    if (params.file != null) {
+      const z = await compressIfSmaller(params.file.bytes);
+      storedBytes = z.bytes;
+      compressed = z.compressed;
+      if (encrypt) {
+        const K2 = newContentKey();
+        keySalt = newKeySalt();
+        storedBytes = encryptContent(storedBytes, K2);
+        wrappedKey = wrapContentKey(K2, keySalt);
+      }
     }
-    const restrictions = RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0);
+    const restrictions = RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0) | (compressed ? RESTRICTION_COMPRESSED : 0);
     const template = {
       tokenName: params.tokenName,
       tokenRules: encodeTokenRules(0, 0, restrictions, 1),
@@ -18595,85 +18466,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       replicaOutpoint: { txId: rep.txId, outputIndex: rep.replicaVout },
       lockHex: utils_exports.toHex(rep.tx.outputs[rep.replicaVout].lockingScript.toBinary())
     };
-  }
-  async function createEditionV2(provider2, key2, params) {
-    const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
-    const mintCount = params.mintCount ?? 1;
-    const ownerPub = params.ownerPubKey ?? pubKeyBytes(key2);
-    const tokenSats = params.terms.tokenSats ?? PHARLAP_OUTPUT_SATS;
-    const stateData = params.stateData ?? [];
-    const price = u64le(params.initialPriceSats);
-    const templateLock = buildEditionLockV2({
-      tx1Ref: new Array(32).fill(0),
-      ownerPubKey: new Array(33).fill(0),
-      price,
-      stateData,
-      publisherPubKeyHash: params.terms.publisherPubKeyHash,
-      pBps: params.terms.pBps,
-      tokenSats
-    });
-    const encrypt = params.encrypt === true && params.file != null;
-    let storedBytes = params.file?.bytes;
-    let wrappedKey;
-    let keySalt;
-    if (encrypt && params.file != null) {
-      const K2 = newContentKey();
-      keySalt = newKeySalt();
-      storedBytes = encryptContent(params.file.bytes, K2);
-      wrappedKey = wrapContentKey(K2, keySalt);
-    }
-    const template = {
-      tokenName: params.tokenName,
-      tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0), 1),
-      covenantScript: utils_exports.toHex(templateLock.toBinary()),
-      fileHash: storedBytes != null ? sha256Hex(storedBytes) : void 0,
-      wrappedKey,
-      keySalt
-    };
-    const file = params.file != null ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes } : void 0;
-    const hasStorefront = params.description != null && params.description.length > 0 || params.cover != null;
-    const storefront = hasStorefront ? { description: params.description ?? "", coverMimeType: params.cover?.mimeType, coverFileName: params.cover?.fileName, coverBytes: params.cover?.bytes } : void 0;
-    const tx1Bytes = 500 + templateLock.toBinary().length + (file ? file.fileBytes.length : 0) + (params.cover ? params.cover.bytes.length : 0);
-    const tx2Bytes = 300 + mintCount * 900;
-    const estFee = Math.ceil((tx1Bytes + tx2Bytes) * feePerKb / 1e3);
-    const target = (1 + mintCount) * tokenSats + estFee + Math.max(1e3, Math.ceil(estFee * 0.2));
-    const selected = selectFunding(await getSafeUtxos(provider2), target);
-    const funding = await toFundingInputs(provider2, selected);
-    const t1 = await buildTemplateTx({ key: key2, funding, template, file, storefront, outputSats: tokenSats, feePerKb });
-    if (t1.changeVout == null) throw new Error("Insufficient funding: template tx left no change to fund the v2 mint.");
-    const t2Funding = [{
-      utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: "" },
-      sourceTx: t1.tx
-    }];
-    const t2 = await buildEditionGenesisV2Tx({
-      key: key2,
-      funding: t2Funding,
-      tx1Ref: t1.tx1Id,
-      terms: params.terms,
-      initialPriceSats: params.initialPriceSats,
-      ownerPubKey: ownerPub,
-      stateData,
-      mintCount,
-      feePerKb
-    });
-    await provider2.broadcast(t1.tx.toHex());
-    provider2.registerPendingTx(
-      t1.tx1Id,
-      selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
-      { outputIndex: t1.changeVout, satoshis: t1.changeSats }
-    );
-    await provider2.broadcast(t2.tx.toHex());
-    provider2.registerPendingTx(
-      t2.txId,
-      [{ txId: t1.tx1Id, outputIndex: t1.changeVout }],
-      t2.changeVout != null ? { outputIndex: t2.changeVout, satoshis: t2.changeSats } : void 0
-    );
-    const editions = t2.editionVouts.map((v) => ({
-      txId: t2.txId,
-      outputIndex: v,
-      lockHex: utils_exports.toHex(t2.tx.outputs[v].lockingScript.toBinary())
-    }));
-    return { collectionId: t1.tx1Id, tx1Id: t1.tx1Id, tx2Id: t2.txId, editions, tx2: t2.tx };
   }
   async function replicateEditionV2(provider2, buyerKey, params) {
     const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
@@ -19052,6 +18844,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   // src/messageCodec.ts
   var ENVELOPE_VERSION = 1;
   var FLAG_ENCRYPTED = 1;
+  var FLAG_COMPRESSED = 2;
   var PART_TEXT = 1;
   var PART_KEY = 2;
   var PART_FILE_INLINE = 3;
@@ -19138,18 +18931,26 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     return parts;
   }
-  function buildEnvelope(opts) {
+  async function buildEnvelope(opts) {
     const encrypt = opts.encrypt ?? true;
     const senderPub = opts.senderPriv.toPublicKey().encode(true);
     if (senderPub.length !== 33) throw new Error("senderPub must be 33 bytes");
-    const tlv = encodeParts(opts.parts);
-    const body = encrypt ? ECIES.electrumEncrypt(tlv, PublicKey.fromString(opts.recipientPubKeyHex), opts.senderPriv, true) : tlv;
-    return [ENVELOPE_VERSION, encrypt ? FLAG_ENCRYPTED : 0, ...senderPub, ...body];
+    let payload = encodeParts(opts.parts);
+    let flags = 0;
+    const c = await compressIfSmaller(payload);
+    if (c.compressed) {
+      payload = c.bytes;
+      flags |= FLAG_COMPRESSED;
+    }
+    const body = encrypt ? ECIES.electrumEncrypt(payload, PublicKey.fromString(opts.recipientPubKeyHex), opts.senderPriv, true) : payload;
+    if (encrypt) flags |= FLAG_ENCRYPTED;
+    return [ENVELOPE_VERSION, flags, ...senderPub, ...body];
   }
-  function openEnvelope(envelope, recipientPriv) {
+  async function openEnvelope(envelope, recipientPriv) {
     if (envelope.length < 35) return null;
     if (envelope[0] !== ENVELOPE_VERSION) return null;
     const encrypted = (envelope[1] & FLAG_ENCRYPTED) !== 0;
+    const compressed = (envelope[1] & FLAG_COMPRESSED) !== 0;
     const senderPub = envelope.slice(2, 35);
     const senderPubKeyHex = utils_exports.toHex(senderPub);
     const body = envelope.slice(35);
@@ -19163,15 +18964,30 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     } else {
       tlv = body;
     }
+    if (compressed) {
+      try {
+        tlv = await decompress(tlv);
+      } catch {
+        return null;
+      }
+    }
     const parts = decodeParts(tlv);
     if (parts == null) return null;
     return { senderPubKeyHex, encrypted, parts };
   }
-  function openPublicEnvelope(envelope) {
+  async function openPublicEnvelope(envelope) {
     if (envelope.length < 35 || envelope[0] !== ENVELOPE_VERSION) return null;
     if ((envelope[1] & FLAG_ENCRYPTED) !== 0) return null;
     const senderPubKeyHex = utils_exports.toHex(envelope.slice(2, 35));
-    const parts = decodeParts(envelope.slice(35));
+    let tlv = envelope.slice(35);
+    if ((envelope[1] & FLAG_COMPRESSED) !== 0) {
+      try {
+        tlv = await decompress(tlv);
+      } catch {
+        return null;
+      }
+    }
+    const parts = decodeParts(tlv);
     if (parts == null) return null;
     return { senderPubKeyHex, encrypted: false, parts };
   }
@@ -19212,7 +19028,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   async function sendMessage(provider2, key2, params) {
     const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
-    const envelope = buildEnvelope({
+    const envelope = await buildEnvelope({
       senderPriv: key2,
       recipientPubKeyHex: params.toPubKeyHex,
       parts: params.parts,
@@ -19258,14 +19074,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       } catch {
         continue;
       }
-      tx.outputs.forEach((o, i) => {
-        const parsed = parseMessageScript(o.lockingScript);
-        if (parsed == null || parsed.recipientPubKeyHex.toLowerCase() !== myPub) return;
+      for (let i = 0; i < tx.outputs.length; i++) {
+        const parsed = parseMessageScript(tx.outputs[i].lockingScript);
+        if (parsed == null || parsed.recipientPubKeyHex.toLowerCase() !== myPub) continue;
         const key2 = `${txId}:${i}`;
-        if (seen.has(key2)) return;
+        if (seen.has(key2)) continue;
         seen.add(key2);
-        const opened = openEnvelope(parsed.fields.envelope, recipientPriv);
-        if (opened == null) return;
+        const opened = await openEnvelope(parsed.fields.envelope, recipientPriv);
+        if (opened == null) continue;
         found.push({
           txId,
           outputIndex: i,
@@ -19274,7 +19090,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           encrypted: opened.encrypted,
           parts: opened.parts
         });
-      });
+      }
     }
     return found;
   }
@@ -19289,7 +19105,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       throw new Error(`announcement exceeds ${MAX_BROADCAST_BYTES} bytes`);
     }
     const pubHex = key2.toPublicKey().toString();
-    const envelope = buildEnvelope({
+    const envelope = await buildEnvelope({
       senderPriv: key2,
       recipientPubKeyHex: pubHex,
       parts: [{ kind: "text", text: trimmed }],
@@ -19353,7 +19169,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         if (m == null) continue;
         if (m.recipientPubKeyHex.toLowerCase() !== publisher) continue;
         if (m.fields.ref.toLowerCase() !== want) continue;
-        const opened = openPublicEnvelope(m.fields.envelope);
+        const opened = await openPublicEnvelope(m.fields.envelope);
         if (opened == null || opened.senderPubKeyHex.toLowerCase() !== publisher) continue;
         const textPart = opened.parts.find((p) => p.kind === "text");
         if (textPart && textPart.kind === "text") out.push({ text: textPart.text, txId, height });
@@ -20305,24 +20121,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       setStatus(`v2 probe rejected: ${e.message}`, "error");
     }
   }
-  function syncMintMode() {
-    const pct = $("edMode").value === "percentage";
-    const show = (id, on) => {
-      $(id).style.display = on ? "" : "none";
-    };
-    show("edFixedFees", !pct);
-    show("edFixedHelp", !pct);
-    show("edPctFees", pct);
-    show("edPctHelp", pct);
-    show("btnV2SelfTest", pct);
-  }
   async function onMintEdition() {
     const name = val("edName");
     if (!name) {
       setStatus("Enter an edition collection name.", "error");
       return;
     }
-    const mode = $("edMode").value;
     const count = Math.max(1, parseInt(val("edCount") || "1", 10));
     const encrypt = $("edEncrypt").checked;
     const description = val("edDescription");
@@ -20333,17 +20137,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         setStatus("Encryption needs a file \u2014 attach one or uncheck encrypt.", "error");
         return;
       }
-      if (mode === "percentage") {
-        const pBps = Math.max(0, Math.min(1e4, parseInt(val("edBps") || "250", 10)));
-        const price = Math.max(1, parseInt(val("edPrice") || "5000", 10));
-        const publisherPubKeyHash = Hash_exports.hash160(key.toPublicKey().encode(true));
-        setStatus(`Minting ${encrypt ? "encrypted " : ""}percentage-pricing collection (publisher ${(pBps / 100).toFixed(2)}%, reseller price ${price} sats)\u2026`);
-        const minted = await createEditionV2(provider, key, { tokenName: name, terms: { publisherPubKeyHash, pBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover });
-        for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { publisherPubKeyHash, publisherFeeSats: 0, holderFeeSats: 0 });
-        renderTokens();
-        setStatus(`Minted ${minted.editions.length} edition(s). Collection ${short(minted.collectionId)} (TX2 ${short(minted.tx2Id)}). Open a Sales page to share a buy link.`, "ok");
-        return;
-      }
       const terms = ownTerms();
       setStatus(`Minting ${encrypt ? "encrypted " : ""}edition collection (TX1 template + TX2 covenant editions)\u2026`);
       const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt, description, cover });
@@ -20352,37 +20145,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, "ok");
     } catch (e) {
       setStatus(`Edition mint failed: ${e.message}`, "error");
-    }
-  }
-  async function onV2SelfTest() {
-    const pBps = Math.max(0, Math.min(1e4, parseInt(val("edBps") || "250", 10)));
-    const price = Math.max(1, parseInt(val("edPrice") || "50000", 10));
-    if (!confirm(`MAINNET v2 self-test \u2014 spends real BSV.
-
-Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price ${price} sats) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return;
-    setStatus("v2 self-test: minting (TX1 template + TX2 v2 genesis)\u2026");
-    try {
-      const publisherPubKeyHash = key.toPublicKey().toHash();
-      const minted = await createEditionV2(provider, key, {
-        tokenName: "v2 mainnet test",
-        terms: { publisherPubKeyHash, pBps },
-        initialPriceSats: price
-      });
-      const ed = minted.editions[0];
-      setStatus(`Minted v2 collection ${short(minted.tx1Id)} \xB7 edition ${short(ed.txId)}:${ed.outputIndex}. Replicating (computed split)\u2026`);
-      const r2 = await replicateEditionV2(provider, key, {
-        editionTxId: ed.txId,
-        editionOutputIndex: ed.outputIndex,
-        editionLockHex: ed.lockHex,
-        editionSourceTx: minted.tx2
-      });
-      setStatus(
-        `\u2705 v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} \xB7 TX2 ${short(minted.tx2Id)} \xB7 replicate ${short(r2.txId)} \u2014 publisher ${r2.publisherCut} + reseller ${r2.resellerCut} sats. Check these txids on WhatsOnChain (expect them mined).`,
-        "ok"
-      );
-      console.log("v2 self-test txids:", { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r2.txId, publisherCut: r2.publisherCut, resellerCut: r2.resellerCut });
-    } catch (e) {
-      setStatus(`v2 self-test failed: ${e.message}`, "error");
     }
   }
   async function noteToPropagate(t) {
@@ -20662,7 +20424,9 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
         return;
       }
       const verified = template?.fileHash === utils_exports.toHex(Hash_exports.sha256(file.fileBytes));
-      const encrypted = template != null && decodeTokenRules(template.tokenRules).isEncrypted;
+      const rules = template != null ? decodeTokenRules(template.tokenRules) : null;
+      const encrypted = rules?.isEncrypted ?? false;
+      let bytes2 = file.fileBytes;
       if (encrypted) {
         if (template?.wrappedKey == null || template?.keySalt == null) {
           setStatus("Encrypted collection is missing its wrapped key \u2014 cannot decrypt.", "error");
@@ -20673,22 +20437,26 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
           setStatus("Could not unwrap the content key.", "error");
           return;
         }
-        let plain;
         try {
-          plain = decryptContent(file.fileBytes, K2);
+          bytes2 = decryptContent(bytes2, K2);
         } catch {
           setStatus("Decryption failed (wrong key or corrupt ciphertext).", "error");
           return;
         }
-        showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: plain }, verified);
-        setStatus(verified ? "\u{1F513} Decrypted \u2014 ciphertext matches the collection commitment \u2713." : "\u26A0 Decrypted, but the ciphertext hash does NOT match the collection!", verified ? "ok" : "error");
-      } else {
-        showFile(collectionName, file, verified);
-        setStatus(
-          verified ? "File loaded \u2014 SHA-256 matches the collection (bound to identity \u2713)." : "\u26A0 File loaded, but its hash does NOT match the collection commitment!",
-          verified ? "ok" : "error"
-        );
       }
+      if (rules?.isCompressed) {
+        try {
+          bytes2 = await decompress(bytes2);
+        } catch {
+          setStatus("Decompression failed (corrupt data).", "error");
+          return;
+        }
+      }
+      showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes2 }, verified);
+      setStatus(
+        encrypted ? verified ? "\u{1F513} Decrypted \u2014 ciphertext matches the collection commitment \u2713." : "\u26A0 Decrypted, but the ciphertext hash does NOT match the collection!" : verified ? "File loaded \u2014 SHA-256 matches the collection (bound to identity \u2713)." : "\u26A0 File loaded, but its hash does NOT match the collection commitment!",
+        verified ? "ok" : "error"
+      );
     } catch (e) {
       setStatus(`View failed: ${e.message}`, "error");
     }
@@ -20825,7 +20593,7 @@ Mint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price 
   function setCvStatus(msg, kind = "info") {
     const el = $("cvStatus");
     el.textContent = msg;
-    el.className = `cv-status ${kind === "error" ? "error" : ""}`.trim();
+    el.className = `cv-status ${kind === "info" ? "" : kind}`.trim();
   }
   function parseHashRoute() {
     const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
@@ -21370,9 +21138,6 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     $("btnMint").onclick = () => void onMint();
     $("btnV2Probe").onclick = () => void onV2Probe();
     $("btnMintEdition").onclick = () => void onMintEdition();
-    $("btnV2SelfTest").onclick = () => void onV2SelfTest();
-    $("edMode").onchange = syncMintMode;
-    syncMintMode();
     $("btnIncoming").onclick = () => void onCheckIncoming();
     $("btnSendMessage").onclick = () => void onSendMessage();
     $("btnCheckMessages").onclick = () => void onCheckMessages();

@@ -17,9 +17,11 @@
  * permanently decryptable — an inconvenience, not DRM.
  */
 import { ECIES, PublicKey, type PrivateKey, Utils } from '@bsv/sdk'
+import { compressIfSmaller, decompress } from './compress.ts'
 
 export const ENVELOPE_VERSION = 0x01
 const FLAG_ENCRYPTED = 0x01
+const FLAG_COMPRESSED = 0x02
 
 /** Part type bytes. */
 export const PART_TEXT = 0x01
@@ -106,22 +108,27 @@ export function decodeParts(bytes: number[]): Part[] | null {
 }
 
 // ─── Envelope (header + body) ───────────────────────────────────────
-export function buildEnvelope(opts: {
+export async function buildEnvelope(opts: {
   senderPriv: PrivateKey
   recipientPubKeyHex: string
   parts: Part[]
   /** Default true (authenticated ECIES to the recipient). */
   encrypt?: boolean
-}): number[] {
+}): Promise<number[]> {
   const encrypt = opts.encrypt ?? true
   const senderPub = opts.senderPriv.toPublicKey().encode(true) as number[]
   if (senderPub.length !== 33) throw new Error('senderPub must be 33 bytes')
-  const tlv = encodeParts(opts.parts)
+  // Smart-compress the TLV (keep only if smaller), BEFORE encrypting — ciphertext is incompressible.
+  let payload = encodeParts(opts.parts)
+  let flags = 0
+  const c = await compressIfSmaller(payload)
+  if (c.compressed) { payload = c.bytes; flags |= FLAG_COMPRESSED }
   // noKey=true: we already carry senderPub in the header, so don't duplicate it in the ciphertext.
   const body = encrypt
-    ? ECIES.electrumEncrypt(tlv, PublicKey.fromString(opts.recipientPubKeyHex), opts.senderPriv, true)
-    : tlv
-  return [ENVELOPE_VERSION, encrypt ? FLAG_ENCRYPTED : 0, ...senderPub, ...body]
+    ? ECIES.electrumEncrypt(payload, PublicKey.fromString(opts.recipientPubKeyHex), opts.senderPriv, true)
+    : payload
+  if (encrypt) flags |= FLAG_ENCRYPTED
+  return [ENVELOPE_VERSION, flags, ...senderPub, ...body]
 }
 
 export interface OpenedMessage {
@@ -131,10 +138,11 @@ export interface OpenedMessage {
 }
 
 /** Open (and, if encrypted, decrypt + authenticate) an envelope with the recipient's private key. */
-export function openEnvelope(envelope: number[], recipientPriv: PrivateKey): OpenedMessage | null {
+export async function openEnvelope(envelope: number[], recipientPriv: PrivateKey): Promise<OpenedMessage | null> {
   if (envelope.length < 35) return null
   if (envelope[0] !== ENVELOPE_VERSION) return null
   const encrypted = (envelope[1] & FLAG_ENCRYPTED) !== 0
+  const compressed = (envelope[1] & FLAG_COMPRESSED) !== 0
   const senderPub = envelope.slice(2, 35)
   const senderPubKeyHex = Utils.toHex(senderPub)
   const body = envelope.slice(35)
@@ -146,6 +154,7 @@ export function openEnvelope(envelope: number[], recipientPriv: PrivateKey): Ope
   } else {
     tlv = body
   }
+  if (compressed) { try { tlv = await decompress(tlv) } catch { return null } } // decompress AFTER decrypt
   const parts = decodeParts(tlv)
   if (parts == null) return null
   return { senderPubKeyHex, encrypted, parts }
@@ -153,11 +162,13 @@ export function openEnvelope(envelope: number[], recipientPriv: PrivateKey): Ope
 
 /** Open a PUBLIC (unencrypted) envelope with no key — for broadcasts/announcements anyone can read.
  *  Returns null for encrypted envelopes (those need `openEnvelope` with the recipient's key). */
-export function openPublicEnvelope(envelope: number[]): OpenedMessage | null {
+export async function openPublicEnvelope(envelope: number[]): Promise<OpenedMessage | null> {
   if (envelope.length < 35 || envelope[0] !== ENVELOPE_VERSION) return null
   if ((envelope[1] & FLAG_ENCRYPTED) !== 0) return null
   const senderPubKeyHex = Utils.toHex(envelope.slice(2, 35))
-  const parts = decodeParts(envelope.slice(35))
+  let tlv = envelope.slice(35)
+  if ((envelope[1] & FLAG_COMPRESSED) !== 0) { try { tlv = await decompress(tlv) } catch { return null } }
+  const parts = decodeParts(tlv)
   if (parts == null) return null
   return { senderPubKeyHex, encrypted: false, parts }
 }

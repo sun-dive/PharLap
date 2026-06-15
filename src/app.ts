@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, createEditionV2, replicateEditionV2, createGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2 } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -24,6 +24,7 @@ import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
 import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
+import { decompress } from './compress.ts'
 
 const WIF_KEY = 'p:wallet:wif'
 
@@ -174,18 +175,9 @@ async function onV2Probe(): Promise<void> {
   }
 }
 
-/** Toggle the mint form between fixed-fee (v1) and percentage (v2) inputs based on the pricing-mode select. */
-function syncMintMode(): void {
-  const pct = ($('edMode') as HTMLSelectElement).value === 'percentage'
-  const show = (id: string, on: boolean) => { ($(id) as HTMLElement).style.display = on ? '' : 'none' }
-  show('edFixedFees', !pct); show('edFixedHelp', !pct)
-  show('edPctFees', pct); show('edPctHelp', pct); show('btnV2SelfTest', pct)
-}
-
 async function onMintEdition(): Promise<void> {
   const name = val('edName')
   if (!name) { setStatus('Enter an edition collection name.', 'error'); return }
-  const mode = ($('edMode') as HTMLSelectElement).value
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
   const description = val('edDescription')
@@ -193,17 +185,8 @@ async function onMintEdition(): Promise<void> {
     const file = await readFile($('edFile') as HTMLInputElement)
     const cover = await readFile($('edCover') as HTMLInputElement)
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
-    if (mode === 'percentage') {
-      const pBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
-      const price = Math.max(1, parseInt(val('edPrice') || '5000', 10))
-      const publisherPubKeyHash = Hash.hash160(key.toPublicKey().encode(true) as number[])
-      setStatus(`Minting ${encrypt ? 'encrypted ' : ''}percentage-pricing collection (publisher ${(pBps / 100).toFixed(2)}%, reseller price ${price} sats)…`)
-      const minted = await createEditionV2(provider, key, { tokenName: name, terms: { publisherPubKeyHash, pBps }, initialPriceSats: price, mintCount: count, file, encrypt, description, cover })
-      for (const e of minted.editions) storeEdition(e, minted.collectionId, name, { publisherPubKeyHash, publisherFeeSats: 0, holderFeeSats: 0 })
-      renderTokens()
-      setStatus(`Minted ${minted.editions.length} edition(s). Collection ${short(minted.collectionId)} (TX2 ${short(minted.tx2Id)}). Open a Sales page to share a buy link.`, 'ok')
-      return
-    }
+    // v1 fixed-fee editions only. Covenant v2 (percentage/ranged pricing) stays in the codebase
+    // (createEditionV2 / replicateEditionV2 / parseEditionScriptV2) but is hidden from the UI until built out.
     const terms = ownTerms()
     setStatus(`Minting ${encrypt ? 'encrypted ' : ''}edition collection (TX1 template + TX2 covenant editions)…`)
     const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt, description, cover })
@@ -212,34 +195,6 @@ async function onMintEdition(): Promise<void> {
     setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
   } catch (e) {
     setStatus(`Edition mint failed: ${(e as Error).message}`, 'error')
-  }
-}
-
-/** Covenant v2 mainnet self-test: mint a percentage-pricing edition, then permissionlessly replicate it.
- *  A dev-only tool surfaced when the mint form is in percentage mode; reads the same bps/price inputs. */
-async function onV2SelfTest(): Promise<void> {
-  const pBps = Math.max(0, Math.min(10000, parseInt(val('edBps') || '250', 10)))
-  const price = Math.max(1, parseInt(val('edPrice') || '50000', 10))
-  if (!confirm(`MAINNET v2 self-test — spends real BSV.\n\nMint a percentage-pricing edition (publisher ${(pBps / 100).toFixed(2)}%, price ${price} sats) then permissionlessly replicate it (you are publisher = holder = buyer). Proceed?`)) return
-  setStatus('v2 self-test: minting (TX1 template + TX2 v2 genesis)…')
-  try {
-    const publisherPubKeyHash = key.toPublicKey().toHash() as number[]
-    const minted = await createEditionV2(provider, key, {
-      tokenName: 'v2 mainnet test', terms: { publisherPubKeyHash, pBps }, initialPriceSats: price,
-    })
-    const ed = minted.editions[0]
-    setStatus(`Minted v2 collection ${short(minted.tx1Id)} · edition ${short(ed.txId)}:${ed.outputIndex}. Replicating (computed split)…`)
-    const r = await replicateEditionV2(provider, key, {
-      editionTxId: ed.txId, editionOutputIndex: ed.outputIndex, editionLockHex: ed.lockHex, editionSourceTx: minted.tx2,
-    })
-    setStatus(
-      `✅ v2 MAINNET broadcast! TX1 ${short(minted.tx1Id)} · TX2 ${short(minted.tx2Id)} · replicate ${short(r.txId)} ` +
-      `— publisher ${r.publisherCut} + reseller ${r.resellerCut} sats. Check these txids on WhatsOnChain (expect them mined).`,
-      'ok',
-    )
-    console.log('v2 self-test txids:', { tx1: minted.tx1Id, tx2: minted.tx2Id, replicate: r.txId, publisherCut: r.publisherCut, resellerCut: r.resellerCut })
-  } catch (e) {
-    setStatus(`v2 self-test failed: ${(e as Error).message}`, 'error')
   }
 }
 
@@ -497,29 +452,31 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
       setStatus(`"${collectionName}" has no embedded file.`, 'info')
       return
     }
-    // The stored bytes (cipher- or plain-text) are what fileHash binds.
+    // The stored bytes (cipher- or plain-text, possibly compressed) are what fileHash binds.
     const verified = template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
-    const encrypted = template != null && decodeTokenRules(template.tokenRules).isEncrypted
+    const rules = template != null ? decodeTokenRules(template.tokenRules) : null
+    const encrypted = rules?.isEncrypted ?? false
 
+    // Unwind the stored bytes in the reverse of how they were made: decrypt first, then decompress.
+    let bytes = file.fileBytes
     if (encrypted) {
       if (template?.wrappedKey == null || template?.keySalt == null) {
         setStatus('Encrypted collection is missing its wrapped key — cannot decrypt.', 'error'); return
       }
       const K = unwrapContentKey(template.wrappedKey, template.keySalt)
       if (K == null) { setStatus('Could not unwrap the content key.', 'error'); return }
-      let plain: number[]
-      try { plain = decryptContent(file.fileBytes, K) } catch { setStatus('Decryption failed (wrong key or corrupt ciphertext).', 'error'); return }
-      showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: plain }, verified)
-      setStatus(verified ? '🔓 Decrypted — ciphertext matches the collection commitment ✓.' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!', verified ? 'ok' : 'error')
-    } else {
-      showFile(collectionName, file, verified)
-      setStatus(
-        verified
-          ? 'File loaded — SHA-256 matches the collection (bound to identity ✓).'
-          : '⚠ File loaded, but its hash does NOT match the collection commitment!',
-        verified ? 'ok' : 'error',
-      )
+      try { bytes = decryptContent(bytes, K) } catch { setStatus('Decryption failed (wrong key or corrupt ciphertext).', 'error'); return }
     }
+    if (rules?.isCompressed) {
+      try { bytes = await decompress(bytes) } catch { setStatus('Decompression failed (corrupt data).', 'error'); return }
+    }
+    showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes }, verified)
+    setStatus(
+      encrypted
+        ? (verified ? '🔓 Decrypted — ciphertext matches the collection commitment ✓.' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!')
+        : (verified ? 'File loaded — SHA-256 matches the collection (bound to identity ✓).' : '⚠ File loaded, but its hash does NOT match the collection commitment!'),
+      verified ? 'ok' : 'error',
+    )
   } catch (e) {
     setStatus(`View failed: ${(e as Error).message}`, 'error')
   }
@@ -681,10 +638,10 @@ let cvNote: SellerNote | null = null
 /** Funded voucher WIF from a `&g=` gift link — when set, "Get a copy" claims free (the voucher pays). */
 let cvGiftWif: string | null = null
 
-function setCvStatus(msg: string, kind: 'info' | 'error' = 'info'): void {
+function setCvStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
   const el = $('cvStatus')
   el.textContent = msg
-  el.className = `cv-status ${kind === 'error' ? 'error' : ''}`.trim()
+  el.className = `cv-status ${kind === 'info' ? '' : kind}`.trim()
 }
 
 /** Read a `#c=…&h=…` hash route, or null if absent. */
@@ -1191,9 +1148,6 @@ function init(): void {
   $('btnMint').onclick = () => void onMint()
   $('btnV2Probe').onclick = () => void onV2Probe()
   $('btnMintEdition').onclick = () => void onMintEdition()
-  $('btnV2SelfTest').onclick = () => void onV2SelfTest()
-  ;($('edMode') as HTMLSelectElement).onchange = syncMintMode
-  syncMintMode()
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()

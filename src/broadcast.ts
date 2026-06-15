@@ -48,7 +48,7 @@ export async function publishBroadcast(
   }
   const pubHex = key.toPublicKey().toString()
   // Public envelope (encrypt:false → recipientPubKeyHex is unused; anyone can read it).
-  const envelope = buildEnvelope({
+  const envelope = await buildEnvelope({
     senderPriv: key, recipientPubKeyHex: pubHex, parts: [{ kind: 'text', text: trimmed }], encrypt: false,
   })
 
@@ -115,7 +115,7 @@ export async function resolveBroadcasts(
       if (m == null) continue
       if (m.recipientPubKeyHex.toLowerCase() !== publisher) continue   // locked to the publisher
       if (m.fields.ref.toLowerCase() !== want) continue                // for this collection
-      const opened = openPublicEnvelope(m.fields.envelope)
+      const opened = await openPublicEnvelope(m.fields.envelope)
       if (opened == null || opened.senderPubKeyHex.toLowerCase() !== publisher) continue // sent by the publisher
       const textPart = opened.parts.find(p => p.kind === 'text')
       if (textPart && textPart.kind === 'text') out.push({ text: textPart.text, txId, height })
