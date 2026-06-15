@@ -78,6 +78,13 @@
     .token-thumb-ph { width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:30px; opacity:.5; }
     .token-body { flex:1 1 auto; min-width:0; }
     .token-name { font-weight:600; margin-bottom:4px; }
+    .token-ids { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .copy-id { cursor:pointer; border-bottom:1px dotted var(--line); }
+    .copy-id:hover { color:var(--fg); border-bottom-color:var(--accent2); }
+    #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(8px); background:#161b22;
+             border:1px solid var(--line); color:var(--fg); padding:8px 14px; border-radius:8px; font-size:13px;
+             opacity:0; pointer-events:none; transition:opacity .15s, transform .15s; z-index:100; }
+    #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
     .token .state { color:var(--accent); font-size:12px; margin-top:4px; }
     .token .actions { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
     .token .actions button { padding:5px 12px; font-size:13px; }

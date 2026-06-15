@@ -20579,8 +20579,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       const latest = latestBroadcast.get(t.collectionId);
       body.innerHTML = `
       <div class="token-name">${escapeHtml(t.collectionName ?? "Collection")}${isEdition ? ' <span class="badge">edition</span>' : ""}</div>
-      <div class="mono">collection ${short(t.collectionId)}</div>
-      <div class="mono">utxo ${short(t.txId)}:${t.outputIndex}</div>
+      <div class="mono token-ids">collection <span class="copy-id" data-copy="${t.collectionId}" title="${t.collectionId} \u2014 click to copy">${short(t.collectionId)}</span> \xB7 utxo <span class="copy-id" data-copy="${t.txId}" title="${t.txId} \u2014 click to copy">${short(t.txId)}</span>:${t.outputIndex}</div>
       ${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ""}
       ${t.sellerNote ? `<div class="state" style="color:var(--accent2)">\u{1F4DD} ${escapeHtml(t.sellerNote)}</div>` : ""}
       ${t.bonusValue ? t.bonusKind === "link" ? `<div class="state">\u{1F381} <a href="${escapeHtml(t.bonusValue)}" target="_blank" rel="noopener" class="bonus-claim">Claim your bonus \u2197</a></div>` : `<div class="state">\u{1F381} Bonus code: <span class="mono">${escapeHtml(t.bonusValue)}</span></div>` : ""}
@@ -20708,6 +20707,27 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     } catch {
       return hex;
     }
+  }
+  function onCopyClick(e) {
+    const el = e.target?.closest("[data-copy]");
+    if (el == null) return;
+    const value = el.dataset.copy ?? "";
+    if (value === "") return;
+    void navigator.clipboard?.writeText(value);
+    toast("Copied to clipboard");
+  }
+  var toastTimer;
+  function toast(message) {
+    let el = document.getElementById("toast");
+    if (el == null) {
+      el = document.createElement("div");
+      el.id = "toast";
+      document.body.append(el);
+    }
+    el.textContent = message;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el?.classList.remove("show"), 1400);
   }
   function escapeHtml(s2) {
     return s2.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -21260,6 +21280,7 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     useKey(loadKey());
     renderTokens();
     initTabs();
+    document.addEventListener("click", onCopyClick);
     $("btnRefresh").onclick = () => void refreshBalance();
     $("btnMint").onclick = () => void onMint();
     $("btnV2Probe").onclick = () => void onV2Probe();
