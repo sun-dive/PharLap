@@ -512,7 +512,11 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     tokenName: params.tokenName,
     tokenRules: encodeTokenRules(0, 0, restrictions, 1), // supply 0 = unlimited / replicable
     covenantScript: Utils.toHex(templateLock.toBinary()),
-    fileHash: storedBytes != null ? sha256Hex(storedBytes) : undefined, // binds the stored (cipher)text
+    // fileHash semantics: PUBLIC content binds the ORIGINAL plaintext (provenance — a verifier decompresses
+    // the on-chain blob and matches H(plaintext); DEFLATE decompression is deterministic so the proof is
+    // independent of the non-reproducible gzip encoding). ENCRYPTED content binds the ciphertext (privacy —
+    // a public plaintext hash would be a confirmation oracle).
+    fileHash: params.file == null ? undefined : encrypt ? sha256Hex(storedBytes!) : sha256Hex(params.file.bytes),
     wrappedKey,
     keySalt,
   }
@@ -654,7 +658,8 @@ export async function createEditionV2(provider: WalletProvider, key: PrivateKey,
     tokenName: params.tokenName,
     tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE | (encrypt ? RESTRICTION_ENCRYPTED : 0) | (compressed ? RESTRICTION_COMPRESSED : 0), 1),
     covenantScript: Utils.toHex(templateLock.toBinary()),
-    fileHash: storedBytes != null ? sha256Hex(storedBytes) : undefined,
+    // PUBLIC → bind original plaintext (provenance); ENCRYPTED → bind ciphertext (privacy). See createEdition.
+    fileHash: params.file == null ? undefined : encrypt ? sha256Hex(storedBytes!) : sha256Hex(params.file.bytes),
     wrappedKey,
     keySalt,
   }

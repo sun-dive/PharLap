@@ -452,10 +452,12 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
       setStatus(`"${collectionName}" has no embedded file.`, 'info')
       return
     }
-    // The stored bytes (cipher- or plain-text, possibly compressed) are what fileHash binds.
-    const verified = template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
     const rules = template != null ? decodeTokenRules(template.tokenRules) : null
     const encrypted = rules?.isEncrypted ?? false
+    // fileHash binds the ciphertext for encrypted content (privacy) but the ORIGINAL plaintext for public
+    // content (provenance) — so the encrypted check runs on the raw stored blob, while the public check runs
+    // AFTER the unwind below, against the recovered plaintext.
+    const ciphertextOk = encrypted && template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
 
     // Unwind the stored bytes in the reverse of how they were made: decrypt first, then decompress.
     let bytes = file.fileBytes
@@ -470,24 +472,33 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
     if (rules?.isCompressed) {
       try { bytes = await decompress(bytes) } catch { setStatus('Decompression failed (corrupt data).', 'error'); return }
     }
-    showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes }, verified)
-    setStatus(
-      encrypted
-        ? (verified ? '🔓 Decrypted — ciphertext matches the collection commitment ✓.' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!')
-        : (verified ? 'File loaded — SHA-256 matches the collection (bound to identity ✓).' : '⚠ File loaded, but its hash does NOT match the collection commitment!'),
-      verified ? 'ok' : 'error',
-    )
+    // Public: verify the recovered plaintext against the on-chain commitment — this is the "exact replica"
+    // proof. Decompression is deterministic, so H(recovered) == fileHash holds regardless of the gzip encoding.
+    const verified = encrypted ? ciphertextOk : (template?.fileHash === Utils.toHex(Hash.sha256(bytes)))
+    const msg = encrypted
+      ? (verified ? '🔓 Decrypted — ciphertext matches the on-chain commitment ✓' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!')
+      : (verified ? '✓ Verified exact replica — SHA-256 of the content matches the on-chain commitment (timestamped on mint)' : '⚠ File loaded, but its hash does NOT match the on-chain commitment!')
+    showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes }, verified, msg)
+    setStatus(msg, verified ? 'ok' : 'error')
   } catch (e) {
     setStatus(`View failed: ${(e as Error).message}`, 'error')
   }
 }
 
-function showFile(title: string, file: { mimeType: string; fileName: string; fileBytes: number[] }, verified: boolean): void {
+function showFile(title: string, file: { mimeType: string; fileName: string; fileBytes: number[] }, verified: boolean, note?: string): void {
   const content = $('viewerContent')
   if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
   viewerUrl = URL.createObjectURL(new Blob([new Uint8Array(file.fileBytes)], { type: file.mimeType }))
   $('viewerTitle').textContent =
-    `${title} — ${file.fileName} · ${file.mimeType} · ${file.fileBytes.length} bytes ${verified ? '✓' : '⚠ hash mismatch'}`
+    `${title} — ${file.fileName} · ${file.mimeType} · ${file.fileBytes.length} bytes`
+  const banner = $('viewerProvenance')
+  if (note) {
+    banner.textContent = note
+    banner.className = `viewer-banner ${verified ? 'ok' : 'error'}`
+    banner.style.display = 'block'
+  } else {
+    banner.style.display = 'none'
+  }
   content.innerHTML = ''
   if (file.mimeType.startsWith('image/')) {
     const img = document.createElement('img')

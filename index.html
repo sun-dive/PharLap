@@ -83,6 +83,9 @@
     .viewer-img { max-width:100%; max-height:74vh; border-radius:6px; display:block; }
     .viewer-pre { white-space:pre-wrap; word-break:break-word; max-height:74vh; overflow:auto; background:#0d1117; padding:12px; border-radius:6px; font-size:12px; }
     .viewer-dl { color:var(--accent2); }
+    .viewer-banner { padding:9px 12px; margin-bottom:12px; border-radius:6px; font-size:13px; font-weight:600; border:1px solid var(--line); }
+    .viewer-banner.ok { border-color:var(--accent); color:var(--accent); background:rgba(46,160,67,0.10); }
+    .viewer-banner.error { border-color:var(--err); color:#ffb4ae; background:rgba(248,81,73,0.10); }
     .badge { font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:var(--accent2); color:#04122a; padding:1px 6px; border-radius:10px; vertical-align:middle; }
     .warn { border-color:#9e6a03; }
     .warn h2 { color:#e3a008; }
@@ -518,6 +521,7 @@
   <div id="viewer" class="modal" style="display:none">
     <div class="modal-box">
       <div class="modal-head"><span id="viewerTitle" class="mono"></span><button id="viewerClose" class="secondary">✕ Close</button></div>
+      <div id="viewerProvenance" class="viewer-banner" style="display:none"></div>
       <div id="viewerContent"></div>
     </div>
   </div>

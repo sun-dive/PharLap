@@ -780,4 +780,20 @@ these are worth doing now, while the user is the only tester.
         short messages won't compress (gzip's ~18 B overhead > gain at <~150 B, and notes/broadcasts are capped
         280/480 B) — the keep-if-smaller guard auto-skips them, so it's safe but only really helps long messages
         + file attachments. App-layer, covenant untouched, adds on-chain format flags → do pre-launch.
+- [x] **fileHash semantics: plaintext for public, ciphertext for encrypted** ✅ DONE 2026-06-15 (offline-validated,
+      127/127; NOT yet published — standalone change on top of the V1 trim @ bd40e86; pending a localhost
+      view-check then publish). Makes the "timestamped exact replica" use case provable. Before this, `fileHash` bound the *stored blob* (post-
+      compress, post-encrypt) — an integrity seal on the on-chain object, but encoding-dependent: proving the
+      blob equals an off-chain file F meant re-compressing F the same way, and gzip output is NOT byte-
+      reproducible across toolchains. Now: PUBLIC content commits to `H(original plaintext)`; a verifier
+      decompresses the on-chain blob and matches `H(recovered)` — DEFLATE *decompression* IS deterministic, so
+      the proof is encoding-independent. ENCRYPTED content keeps `H(ciphertext)` (a public plaintext hash would
+      be a confirmation oracle — privacy). ZERO on-chain format change (the 32-B field + the ENCRYPTED flag that
+      selects the domain already exist) — purely a build-side + read-side semantic. Build: editionBuilder ×2
+      (`createEdition`/`createEditionV2`); `createCollection` already hashed plaintext (never compresses/encrypts)
+      → unchanged. Read: app.ts onView verifies the recovered plaintext for public, shows "✓ Verified exact
+      replica … (timestamped on mint)". Locked in by test/provenance.test.ts (127/127). NOTE: this is the small,
+      surgical step that keeps PHAR LAP's provenance/notary foundation (non-prunable embedded data) honest —
+      see the design discussion 2026-06-15. (Block-date in the verified line = deferred cosmetic; needs a tx
+      block-time lookup.)
 - (add further pre-launch items here as they surface: onboarding, deploy/host decision, WoC-terms check, etc.)
