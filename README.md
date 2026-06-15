@@ -14,14 +14,16 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
 > messaging** (text / files / content keys) and optional **Tier-1 encrypted content** (gate an embedded
 > file to token holders — an inconvenience, not DRM) are also working.
 >
-> **Recent updates:** shareable **collection sales pages** (a postable link that opens a storefront and a
-> **one-click "Get a copy"** permissionless buy), a **cover image + description** per collection, mutable
-> **seller notes** that ride on-chain to buyers and propagate down the resale chain, an optional **buyer
-> bonus** (link/code) attached to the note, and **self-custody recovery** — restore your WIF on any browser
-> or device and your purchases rebuild from chain.
+> **Recent updates:** **provable provenance** — a public embedded file is verified on view as a
+> byte-exact, block-**timestamped exact replica** of its off-chain original; **smart compression** of
+> embedded files + messages (gzip, keep-only-if-smaller, before encryption); shareable **collection sales
+> pages** (a postable link that opens a storefront and a **one-click "Get a copy"** permissionless buy), a
+> **cover image + description** per collection, mutable **seller notes** that ride on-chain to buyers and
+> propagate down the resale chain, an optional **buyer bonus** (link/code) attached to the note, and
+> **self-custody recovery** — restore your WIF on any browser or device and your purchases rebuild from chain.
 >
 > **New here? Read [`docs/OVERVIEW.md`](./docs/OVERVIEW.md)** — a plain-language functional tour. See
-> `PLAN.md` for the full design and `docs/DEVIATIONS_FROM_MPT.md` for how it differs from MPT.
+> [`docs/COVENANT_INTERNALS.md`](./docs/COVENANT_INTERNALS.md) for the deep covenant/protocol internals.
 
 ## How it works
 
@@ -30,6 +32,13 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   token editions, each referencing TX1.
 - **Non-prunable data.** Token and file data live in PushDrop outputs (`<pubkey> OP_CHECKSIG <fields> OP_DROP`),
   so they stay in the UTXO set. An embedded file is bound to the collection identity by hash (tamper-evident).
+- **Provenance / timestamped exact replica.** A public embedded file is committed by the SHA-256 of its
+  *original* bytes, so anyone can prove the on-chain copy is a byte-exact, block-timestamped replica of an
+  off-chain file (decompress → hash → match; the mint block is the timestamp). Encrypted files commit to the
+  ciphertext instead (no plaintext oracle). The viewer shows a **✓ verified exact replica** result.
+- **Compact by default.** Embedded files and messages are gzip-compressed when it shrinks them
+  (keep-only-if-smaller, always before encryption), and the edition covenant is kept lean — lower fees and
+  on-chain footprint, transparent in use.
 - **SPV-only.** No indexers or trusted third parties — a token is a valid edition if it traces to a real
   genesis; proofs are fetched on demand (BEEF-ready). Transfers are constant-size (no on-chain proof chain).
 - **Unlimited-mints editions (covenant).** Optional miner-enforced tokens where *any buyer* can mint their
