@@ -21232,6 +21232,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
   }
   var contacts = {};
   var seenAliases = {};
+  var pinned = {};
+  function persist(k, v) {
+    try {
+      localStorage.setItem(k, JSON.stringify(v));
+    } catch {
+    }
+  }
   function loadAliases() {
     try {
       contacts = JSON.parse(localStorage.getItem("p:contacts") ?? "{}");
@@ -21242,6 +21249,11 @@ It's posted to your own address and spends a small network fee. Proceed?`
       seenAliases = JSON.parse(localStorage.getItem("p:aliases") ?? "{}");
     } catch {
       seenAliases = {};
+    }
+    try {
+      pinned = JSON.parse(localStorage.getItem("p:pinned") ?? "{}");
+    } catch {
+      pinned = {};
     }
     try {
       avatars = JSON.parse(localStorage.getItem("p:avatars") ?? "{}");
@@ -21263,33 +21275,35 @@ It's posted to your own address and spends a small network fee. Proceed?`
     }
   }
   function rememberAlias(pubKeyHex2, alias) {
+    if (alias === "") return;
     const k = pubKeyHex2.toLowerCase();
-    if (alias === "" || contacts[k] != null || seenAliases[k] === alias) return;
-    seenAliases[k] = alias;
-    try {
-      localStorage.setItem("p:aliases", JSON.stringify(seenAliases));
-    } catch {
+    if (contacts[k] != null) {
+      if (!pinned[k] && contacts[k] !== alias) {
+        contacts[k] = alias;
+        persist("p:contacts", contacts);
+      }
+      return;
     }
+    if (seenAliases[k] === alias) return;
+    seenAliases[k] = alias;
+    persist("p:aliases", seenAliases);
   }
-  function saveContact(pubKeyHex2, alias) {
+  function saveContact(pubKeyHex2, alias, customLabel = false) {
     const k = pubKeyHex2.toLowerCase();
     contacts[k] = alias;
+    if (customLabel) pinned[k] = 1;
+    else delete pinned[k];
     delete seenAliases[k];
-    try {
-      localStorage.setItem("p:contacts", JSON.stringify(contacts));
-    } catch {
-    }
-    try {
-      localStorage.setItem("p:aliases", JSON.stringify(seenAliases));
-    } catch {
-    }
+    persist("p:contacts", contacts);
+    persist("p:pinned", pinned);
+    persist("p:aliases", seenAliases);
   }
   function removeContact(pubKeyHex2) {
-    delete contacts[pubKeyHex2.toLowerCase()];
-    try {
-      localStorage.setItem("p:contacts", JSON.stringify(contacts));
-    } catch {
-    }
+    const k = pubKeyHex2.toLowerCase();
+    delete contacts[k];
+    delete pinned[k];
+    persist("p:contacts", contacts);
+    persist("p:pinned", pinned);
   }
   function ignoreSeen(pubKeyHex2) {
     delete seenAliases[pubKeyHex2.toLowerCase()];
@@ -21374,9 +21388,11 @@ It's posted to your own address and spends a small network fee. Proceed?`
     return `data:${mime || "image/webp"};base64,${btoa(bin)}`;
   }
   var avatarInFlight = /* @__PURE__ */ new Map();
+  var profileChecked = /* @__PURE__ */ new Set();
   async function ensureAvatar(pubKeyHex2) {
     const k = pubKeyHex2.toLowerCase();
-    if (avatars[k] != null) return false;
+    if (profileChecked.has(k)) return false;
+    profileChecked.add(k);
     let p = avatarInFlight.get(k);
     if (p == null) {
       p = fetchProfileInto(k);
@@ -21391,20 +21407,18 @@ It's posted to your own address and spends a small network fee. Proceed?`
   async function fetchProfileInto(k) {
     try {
       const prof = await resolveProfile(provider, k);
-      const hasAvatar = prof?.avatarBytes != null && prof.avatarBytes.length > 0;
-      setAvatar(k, hasAvatar ? bytesToDataUrl(prof.avatarMimeType ?? "image/webp", prof.avatarBytes) : NO_AVATAR);
-      let changed = hasAvatar;
-      if (prof?.alias && contacts[k] == null && seenAliases[k] !== prof.alias) {
-        rememberAlias(k, prof.alias);
-        changed = true;
-      }
-      return changed;
+      const newAvatar = prof?.avatarBytes != null && prof.avatarBytes.length > 0 ? bytesToDataUrl(prof.avatarMimeType ?? "image/webp", prof.avatarBytes) : NO_AVATAR;
+      const avatarChanged = avatars[k] !== newAvatar && newAvatar !== NO_AVATAR;
+      setAvatar(k, newAvatar);
+      const before = contacts[k] ?? seenAliases[k];
+      if (prof?.alias) rememberAlias(k, prof.alias);
+      return avatarChanged || (contacts[k] ?? seenAliases[k]) !== before;
     } catch {
       return false;
     }
   }
   function resolveAvatarsThen(pubKeys, rerender) {
-    const todo = [...new Set(pubKeys.map((p) => p.toLowerCase()))].filter((k) => avatars[k] == null);
+    const todo = [...new Set(pubKeys.map((p) => p.toLowerCase()))].filter((k) => !profileChecked.has(k));
     if (todo.length === 0) return;
     void Promise.all(todo.map(ensureAvatar)).then((changed) => {
       if (changed.some(Boolean)) rerender();
@@ -21488,7 +21502,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
           if (n == null) return;
           const nm = n.replace(/^@+/, "").trim();
           if (nm) {
-            saveContact(pk, nm);
+            saveContact(pk, nm, true);
             renderContacts();
             refreshNameSurfaces();
           }
@@ -21530,7 +21544,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       toast("Enter a name for this contact");
       return;
     }
-    saveContact(pk, name);
+    saveContact(pk, name, true);
     $("contactPk").value = "";
     $("contactName").value = "";
     renderContacts();

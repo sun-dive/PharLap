@@ -972,35 +972,48 @@ function escapeHtml(s: string): string {
 // on-chain beyond the envelope part.
 let contacts: Record<string, string> = {} // pubkeyHex(lc) → your saved/verified alias (wins)
 let seenAliases: Record<string, string> = {} // pubkeyHex(lc) → observed self-asserted alias (unverified)
+let pinned: Record<string, 1> = {} // pubkeyHex(lc) → 1 if you set a CUSTOM label (don't auto-follow renames)
+
+function persist(k: string, v: object): void { try { localStorage.setItem(k, JSON.stringify(v)) } catch { /* quota */ } }
 
 function loadAliases(): void {
   try { contacts = JSON.parse(localStorage.getItem('p:contacts') ?? '{}') } catch { contacts = {} }
   try { seenAliases = JSON.parse(localStorage.getItem('p:aliases') ?? '{}') } catch { seenAliases = {} }
+  try { pinned = JSON.parse(localStorage.getItem('p:pinned') ?? '{}') } catch { pinned = {} }
   try { avatars = JSON.parse(localStorage.getItem('p:avatars') ?? '{}') } catch { avatars = {} }
 }
 function getMyAlias(): string { try { return (localStorage.getItem('p:myalias') ?? '').trim() } catch { return '' } }
 function setMyAlias(a: string): void { try { localStorage.setItem('p:myalias', a) } catch { /* fine */ } }
 
-/** Record a self-asserted alias seen on an incoming message (unless you've already saved that contact). */
+/** Record a self-asserted alias from a key. A saved contact you ACCEPTED (not pinned) follows the key's
+ *  renames — it's provably the same key; a contact you gave a CUSTOM label (pinned) stays put. Unsaved keys
+ *  just track their latest self-claim (shown as unverified). */
 function rememberAlias(pubKeyHex: string, alias: string): void {
+  if (alias === '') return
   const k = pubKeyHex.toLowerCase()
-  if (alias === '' || contacts[k] != null || seenAliases[k] === alias) return
+  if (contacts[k] != null) {
+    if (!pinned[k] && contacts[k] !== alias) { contacts[k] = alias; persist('p:contacts', contacts) } // follow rename
+    return
+  }
+  if (seenAliases[k] === alias) return
   seenAliases[k] = alias
-  try { localStorage.setItem('p:aliases', JSON.stringify(seenAliases)) } catch { /* fine */ }
+  persist('p:aliases', seenAliases)
 }
 
-/** Save a verified contact alias (accept a self-claim, or set your own label). */
-function saveContact(pubKeyHex: string, alias: string): void {
+/** Save a contact. `customLabel` = you typed your own name (pin it; don't auto-follow the key's renames);
+ *  otherwise you accepted the key's self-claim (follow future renames). */
+function saveContact(pubKeyHex: string, alias: string, customLabel = false): void {
   const k = pubKeyHex.toLowerCase()
   contacts[k] = alias
+  if (customLabel) pinned[k] = 1; else delete pinned[k]
   delete seenAliases[k]
-  try { localStorage.setItem('p:contacts', JSON.stringify(contacts)) } catch { /* fine */ }
-  try { localStorage.setItem('p:aliases', JSON.stringify(seenAliases)) } catch { /* fine */ }
+  persist('p:contacts', contacts); persist('p:pinned', pinned); persist('p:aliases', seenAliases)
 }
 
 function removeContact(pubKeyHex: string): void {
-  delete contacts[pubKeyHex.toLowerCase()]
-  try { localStorage.setItem('p:contacts', JSON.stringify(contacts)) } catch { /* fine */ }
+  const k = pubKeyHex.toLowerCase()
+  delete contacts[k]; delete pinned[k]
+  persist('p:contacts', contacts); persist('p:pinned', pinned)
 }
 
 function ignoreSeen(pubKeyHex: string): void {
@@ -1090,11 +1103,15 @@ function bytesToDataUrl(mime: string, bytes: number[]): string {
   return `data:${mime || 'image/webp'};base64,${btoa(bin)}`
 }
 
-// Published profiles (avatar + alias) are resolved by pubkey from the key's own address and cached locally.
+// Published profiles (avatar + alias) are resolved by pubkey from the key's own address. The persistent
+// p:avatars cache gives instant display; we re-resolve each key once PER SESSION so updated profiles (new
+// avatar or @name) are picked up rather than cached forever.
 const avatarInFlight = new Map<string, Promise<boolean>>()
+const profileChecked = new Set<string>() // keys whose profile we've re-resolved this session
 async function ensureAvatar(pubKeyHex: string): Promise<boolean> {
   const k = pubKeyHex.toLowerCase()
-  if (avatars[k] != null) return false // already resolved (avatar or NO_AVATAR)
+  if (profileChecked.has(k)) return false
+  profileChecked.add(k)
   let p = avatarInFlight.get(k)
   if (p == null) { p = fetchProfileInto(k); avatarInFlight.set(k, p) }
   try { return await p } finally { avatarInFlight.delete(k) }
@@ -1102,16 +1119,18 @@ async function ensureAvatar(pubKeyHex: string): Promise<boolean> {
 async function fetchProfileInto(k: string): Promise<boolean> {
   try {
     const prof = await resolveProfile(provider, k)
-    const hasAvatar = prof?.avatarBytes != null && prof.avatarBytes.length > 0
-    setAvatar(k, hasAvatar ? bytesToDataUrl(prof!.avatarMimeType ?? 'image/webp', prof!.avatarBytes!) : NO_AVATAR)
-    let changed = hasAvatar
-    if (prof?.alias && contacts[k] == null && seenAliases[k] !== prof.alias) { rememberAlias(k, prof.alias); changed = true }
-    return changed
+    const newAvatar = prof?.avatarBytes != null && prof.avatarBytes.length > 0
+      ? bytesToDataUrl(prof.avatarMimeType ?? 'image/webp', prof.avatarBytes) : NO_AVATAR
+    const avatarChanged = avatars[k] !== newAvatar && newAvatar !== NO_AVATAR
+    setAvatar(k, newAvatar)
+    const before = contacts[k] ?? seenAliases[k]
+    if (prof?.alias) rememberAlias(k, prof.alias) // may follow a rename on an accepted contact
+    return avatarChanged || (contacts[k] ?? seenAliases[k]) !== before
   } catch { return false } // transient: leave unresolved for a later retry
 }
-/** Resolve avatars for these keys in the background; re-render via `rerender` if any newly resolved. */
+/** Resolve profiles (avatar + alias) for these keys in the background; re-render if any newly resolved. */
 function resolveAvatarsThen(pubKeys: string[], rerender: () => void): void {
-  const todo = [...new Set(pubKeys.map(p => p.toLowerCase()))].filter(k => avatars[k] == null)
+  const todo = [...new Set(pubKeys.map(p => p.toLowerCase()))].filter(k => !profileChecked.has(k))
   if (todo.length === 0) return
   void Promise.all(todo.map(ensureAvatar)).then(changed => { if (changed.some(Boolean)) rerender() })
 }
@@ -1186,7 +1205,7 @@ function contactRow(pk: string, alias: string, kind: 'saved' | 'seen'): HTMLElem
         const n = prompt('New name for this contact:', alias)
         if (n == null) return
         const nm = n.replace(/^@+/, '').trim()
-        if (nm) { saveContact(pk, nm); renderContacts(); refreshNameSurfaces() }
+        if (nm) { saveContact(pk, nm, true); renderContacts(); refreshNameSurfaces() }
       }),
       mkBtn('Remove', () => { removeContact(pk); renderContacts(); refreshNameSurfaces() }),
     )
@@ -1206,7 +1225,7 @@ function onAddContact(): void {
   if (pk.length !== 66 && pk.length !== 130) { toast('Enter a valid pubkey (66 or 130 hex chars)'); return }
   if (!/^[0-9a-f]+$/.test(pk)) { toast('Pubkey must be hex'); return }
   if (name === '') { toast('Enter a name for this contact'); return }
-  saveContact(pk, name)
+  saveContact(pk, name, true)
   ;($('contactPk') as HTMLInputElement).value = ''
   ;($('contactName') as HTMLInputElement).value = ''
   renderContacts(); refreshNameSurfaces()
