@@ -213,6 +213,17 @@ export interface CollectionParams {
   initialStateData?: string
   outputSats?: number
   feePerKb?: number
+  /** Optional spend gate: called with the EXACT total sats to be spent (built tx fee + outputs, minus change)
+   *  AFTER both txs are built but BEFORE broadcast. Return false to abort (throws SPEND_CANCELLED). */
+  confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
+}
+
+/** Thrown by a builder when the caller's confirmSpend gate returns false — nothing was broadcast. */
+export const SPEND_CANCELLED = 'SPEND_CANCELLED'
+
+/** Net sats leaving the wallet for a flow = the selected funding minus the final change output. */
+export function spentSats(selected: Array<{ satoshis: number }>, finalChangeSats: number): number {
+  return selected.reduce((s, u) => s + u.satoshis, 0) - finalChangeSats
 }
 
 export interface CollectionResult {
@@ -278,6 +289,11 @@ export async function createCollection(
     outputSats: sats,
     feePerKb,
   })
+
+  // Spend gate (exact total now known): give the caller a chance to confirm before any sats move.
+  if (params.confirmSpend != null && !(await params.confirmSpend(spentSats(selected, t2.changeSats)))) {
+    throw new Error(SPEND_CANCELLED)
+  }
 
   // Both built — broadcast TX1 then TX2.
   await provider.broadcast(t1.tx.toHex())
