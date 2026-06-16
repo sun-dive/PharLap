@@ -112,6 +112,7 @@
     .copy-id { cursor:pointer; border-bottom:1px dotted var(--line); }
     .copy-id:hover { color:var(--fg); border-bottom-color:var(--accent2); }
     .identicon { vertical-align:middle; border-radius:4px; margin-right:5px; flex:0 0 auto; }
+    .avatar { object-fit:cover; box-sizing:border-box; }
     .unverified { color:#e3b341; font-size:11px; cursor:help; }
     .alias-save { font-size:11px; padding:1px 8px; vertical-align:baseline; }
     .contact-row { display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; }
@@ -385,7 +386,13 @@
         <button id="btnSaveAlias" class="secondary">Save alias</button>
         <button id="btnContacts" class="secondary">📇 Contacts</button>
       </div>
-      <p class="muted" style="font-size:12px;margin:0 0 14px">Self-chosen and not unique — your key is the real identity (hover any @name to see it). It rides on the messages you send.</p>
+      <p class="muted" style="font-size:12px;margin:0 0 10px">Self-chosen and not unique — your key is the real identity (hover any @name to see it). It rides on the messages you send.</p>
+      <label>Profile image (optional — publish a small avatar with your @name)</label>
+      <div class="row" style="margin-bottom:6px;align-items:center">
+        <input id="profileAvatar" type="file" accept="image/*" style="flex:1" />
+        <button id="btnPublishProfile" class="secondary">Publish profile</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:0 0 14px">Published once to your own address (small one-time fee, downscaled automatically); updating replaces it. Until you publish one, everyone sees your key-derived identicon.</p>
       <label>Recipient public key</label>
       <input id="msgTo" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
       <div id="msgToName" class="muted" style="font-size:12px;min-height:16px;margin-top:2px"></div>

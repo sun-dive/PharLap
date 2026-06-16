@@ -42,6 +42,10 @@ export const RECORD_STOREFRONT = 0x06
  *  reseller can overwrite it freely (latest published wins); rides onto a buyer's purchase tx at sale
  *  time so it reaches their wallet. See PLAN.md Step 2 (D3). */
 export const RECORD_NOTE = 0x07
+/** A key's self-published PROFILE (display alias + small avatar image), locked to its own pubkey and posted
+ *  on its own address. Resolved by pubkey (latest-by-height wins) so any reader sees a key's @name + face
+ *  without a prior message. Self-gated: only that key funds txs on its address. See profile.ts. */
+export const RECORD_PROFILE = 0x08
 
 /** tokenRules restrictions bitfield. */
 export const RESTRICTION_FUNGIBLE = 0x0001 // interchangeable amounts (satoshis = units)
@@ -370,6 +374,56 @@ export function parseStorefrontScript(
   const fields = decodeStorefrontFields(d.fields)
   if (fields == null) return null
   return { publisherPubKeyHex: d.pubKeyHex, fields }
+}
+
+// ─── PROFILE record (a key's self-published identity) ───────────────
+//   [ P, version, RECORD_PROFILE, alias, avatarMimeType, avatarBytes ]
+// Locked to the publisher's own pubkey, posted on their own address; resolved by pubkey. Both fields
+// optional: alias-only, avatar-only, or both. The avatar is a small pre-downscaled image (see profile.ts).
+
+export interface ProfileFields {
+  alias?: string
+  avatarMimeType?: string
+  avatarBytes?: number[]
+}
+
+export function encodeProfileFields(data: ProfileFields): number[][] {
+  return [
+    P_PREFIX,
+    [P_VERSION],
+    [RECORD_PROFILE],
+    utf8ToBytes(data.alias ?? ''),
+    utf8ToBytes(data.avatarMimeType ?? ''),
+    data.avatarBytes ?? [],
+  ]
+}
+
+export function decodeProfileFields(fields: number[][]): ProfileFields | null {
+  if (fields.length < 6) return null
+  if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null
+  if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
+  if (fields[2].length !== 1 || fields[2][0] !== RECORD_PROFILE) return null
+  const hasAvatar = !isEmptyOrZero(fields[5])
+  return {
+    alias: isEmptyOrZero(fields[3]) ? undefined : bytesToUtf8(fields[3]),
+    avatarMimeType: hasAvatar ? bytesToUtf8(fields[4]) : undefined,
+    avatarBytes: hasAvatar ? fields[5] : undefined,
+  }
+}
+
+/** Build a PROFILE PushDrop locking script, locked to the owner's public key. */
+export function buildProfileScript(ownerPubKeyHex: string, data: ProfileFields): LockingScript {
+  return pushDropLock(ownerPubKeyHex, encodeProfileFields(data))
+}
+
+export function parseProfileScript(
+  script: LockingScript,
+): { ownerPubKeyHex: string; fields: ProfileFields } | null {
+  const d = pushDropDecode(script)
+  if (d == null) return null
+  const fields = decodeProfileFields(d.fields)
+  if (fields == null) return null
+  return { ownerPubKeyHex: d.pubKeyHex, fields }
 }
 
 // ─── NOTE record (seller's mutable promo note) ──────────────────────
