@@ -28,12 +28,15 @@ export const PART_TEXT = 0x01
 export const PART_KEY = 0x02
 export const PART_FILE_INLINE = 0x03
 export const PART_FILE_REF = 0x04
+/** Sender's self-asserted display alias (metadata, not content) — bound to senderPub by the envelope auth. */
+export const PART_ALIAS = 0x05
 
 export type Part =
   | { kind: 'text'; text: string }
   | { kind: 'key'; key: number[] }
   | { kind: 'file'; mimeType: string; fileName: string; bytes: number[] }
   | { kind: 'fileRef'; sha256: number[]; uri: string }
+  | { kind: 'alias'; alias: string }
 
 // ─── CompactSize varint ─────────────────────────────────────────────
 function writeVarInt(n: number): number[] {
@@ -64,6 +67,7 @@ function encodePartValue(p: Part): { type: number; value: number[] } {
       if (p.sha256.length !== 32) throw new Error('fileRef sha256 must be 32 bytes')
       return { type: PART_FILE_REF, value: [...p.sha256, ...Utils.toArray(p.uri, 'utf8')] }
     }
+    case 'alias': return { type: PART_ALIAS, value: Utils.toArray(p.alias, 'utf8') }
   }
 }
 
@@ -100,6 +104,7 @@ export function decodeParts(bytes: number[]): Part[] | null {
         case PART_FILE_REF:
           parts.push({ kind: 'fileRef', sha256: value.slice(0, 32), uri: Utils.toUTF8(value.slice(32)) })
           break
+        case PART_ALIAS: parts.push({ kind: 'alias', alias: Utils.toUTF8(value) }); break
         default: return null // unknown part type
       }
     }
@@ -114,12 +119,18 @@ export async function buildEnvelope(opts: {
   parts: Part[]
   /** Default true (authenticated ECIES to the recipient). */
   encrypt?: boolean
+  /** Sender's self-asserted display alias; carried as a PART_ALIAS so recipients can show @name. */
+  senderAlias?: string
 }): Promise<number[]> {
   const encrypt = opts.encrypt ?? true
   const senderPub = opts.senderPriv.toPublicKey().encode(true) as number[]
   if (senderPub.length !== 33) throw new Error('senderPub must be 33 bytes')
+  // Prepend the sender's alias (if set) as a metadata part; the rest are content parts.
+  const allParts: Part[] = opts.senderAlias != null && opts.senderAlias !== ''
+    ? [{ kind: 'alias', alias: opts.senderAlias }, ...opts.parts]
+    : opts.parts
   // Smart-compress the TLV (keep only if smaller), BEFORE encrypting — ciphertext is incompressible.
-  let payload = encodeParts(opts.parts)
+  let payload = encodeParts(allParts)
   let flags = 0
   const c = await compressIfSmaller(payload)
   if (c.compressed) { payload = c.bytes; flags |= FLAG_COMPRESSED }
@@ -135,6 +146,15 @@ export interface OpenedMessage {
   senderPubKeyHex: string
   encrypted: boolean
   parts: Part[]
+  /** Sender's self-asserted alias (from PART_ALIAS), if they attached one. */
+  senderAlias?: string
+}
+
+/** Split a sender-alias metadata part out of the content parts. */
+function splitAlias(parts: Part[]): { senderAlias?: string; parts: Part[] } {
+  const aliasPart = parts.find(p => p.kind === 'alias')
+  const senderAlias = aliasPart != null && aliasPart.kind === 'alias' ? aliasPart.alias : undefined
+  return { senderAlias, parts: parts.filter(p => p.kind !== 'alias') }
 }
 
 /** Open (and, if encrypted, decrypt + authenticate) an envelope with the recipient's private key. */
@@ -155,9 +175,10 @@ export async function openEnvelope(envelope: number[], recipientPriv: PrivateKey
     tlv = body
   }
   if (compressed) { try { tlv = await decompress(tlv) } catch { return null } } // decompress AFTER decrypt
-  const parts = decodeParts(tlv)
-  if (parts == null) return null
-  return { senderPubKeyHex, encrypted, parts }
+  const decoded = decodeParts(tlv)
+  if (decoded == null) return null
+  const { senderAlias, parts } = splitAlias(decoded)
+  return { senderPubKeyHex, encrypted, parts, senderAlias }
 }
 
 /** Open a PUBLIC (unencrypted) envelope with no key — for broadcasts/announcements anyone can read.
@@ -168,7 +189,8 @@ export async function openPublicEnvelope(envelope: number[]): Promise<OpenedMess
   const senderPubKeyHex = Utils.toHex(envelope.slice(2, 35))
   let tlv = envelope.slice(35)
   if ((envelope[1] & FLAG_COMPRESSED) !== 0) { try { tlv = await decompress(tlv) } catch { return null } }
-  const parts = decodeParts(tlv)
-  if (parts == null) return null
-  return { senderPubKeyHex, encrypted: false, parts }
+  const decoded = decodeParts(tlv)
+  if (decoded == null) return null
+  const { senderAlias, parts } = splitAlias(decoded)
+  return { senderPubKeyHex, encrypted: false, parts, senderAlias }
 }
