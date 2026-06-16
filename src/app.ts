@@ -36,6 +36,7 @@ let provider: WalletProvider
 let store: PharLapStore
 let nftView: 'list' | 'grid' = 'list' // My-NFTs view mode (persisted in localStorage)
 let lastInbox: IncomingMessage[] = [] // last scanned inbox, for re-render after saving an alias
+let lastUpdatesFeed: UpdateItem[] | null = null // last updates feed, for re-render after saving an alias
 
 // ─── small DOM helpers ──────────────────────────────────────────────
 const $ = (id: string): HTMLElement => {
@@ -354,7 +355,7 @@ function renderInbox(msgs: IncomingMessage[]): void {
     const hasKey = m.parts.some(p => p.kind === 'key')
     const filePart = m.parts.find(p => p.kind === 'file')
     card.innerHTML = `
-      <div class="mono">from ${senderChip(m.senderPubKeyHex)} ${m.encrypted ? '🔒 encrypted' : '🌐 public'}</div>
+      <div class="mono">from ${nameChip(m.senderPubKeyHex, { save: true })} ${m.encrypted ? '🔒 encrypted' : '🌐 public'}</div>
       ${m.sentAt ? `<div class="muted" style="font-size:11px" title="Sender's clock (self-asserted)">🕒 ${escapeHtml(fmtTime(m.sentAt))}${m.height ? '' : ' · pending'}</div>` : (m.height ? '' : '<div class="muted" style="font-size:11px">pending</div>')}
       ${textPart && textPart.kind === 'text' ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ''}
       ${hasKey ? '<div class="muted" style="font-size:12px">🔑 carries a content key</div>' : ''}
@@ -382,6 +383,7 @@ function renderInbox(msgs: IncomingMessage[]): void {
 function onReply(m: IncomingMessage): void {
   ;($('msgTo') as HTMLInputElement).value = m.senderPubKeyHex
   ;($('msgEncrypt') as HTMLInputElement).checked = m.encrypted
+  updateMsgToName()
   $('msgTo').scrollIntoView({ behavior: 'smooth', block: 'start' })
   ;($('msgText') as HTMLTextAreaElement).focus()
   const who = displayName(m.senderPubKeyHex)
@@ -975,14 +977,15 @@ function displayName(pubKeyHex: string): NameInfo {
 }
 function myPubKeyLc(): string { try { return pubKeyHex.toLowerCase() } catch { return '' } }
 
-/** HTML for a sender reference: @name (copy-to-clipboard the full pubkey, hover to see it) + an unverified
- *  cue and a one-click "save" for self-claimed names you haven't saved. */
-function senderChip(pubKeyHex: string): string {
+/** HTML for a key reference anywhere it appears: @name (copy-to-clipboard the full pubkey, hover to see it)
+ *  + an "⚠ unverified" cue for a self-claimed name, and (when `save`) a one-click save to your contacts. */
+function nameChip(pubKeyHex: string, opts: { save?: boolean } = {}): string {
   const info = displayName(pubKeyHex)
   const chip = `<span class="copy-id" data-copy="${pubKeyHex}" title="${pubKeyHex} — click to copy">${escapeHtml(info.name)}</span>`
   if (info.verified) return chip
-  return `${chip} <span class="unverified" title="Self-claimed name — verify the key on hover before trusting it">⚠ unverified</span>` +
-    ` <button class="alias-save" data-pk="${pubKeyHex}" data-alias="${escapeHtml(info.alias ?? '')}">save</button>`
+  const warn = ` <span class="unverified" title="Self-claimed name — verify the key on hover before trusting it">⚠ unverified</span>`
+  const save = opts.save ? ` <button class="alias-save" data-pk="${pubKeyHex}" data-alias="${escapeHtml(info.alias ?? '')}">save</button>` : ''
+  return chip + warn + save
 }
 
 function onAliasSaveClick(e: MouseEvent): void {
@@ -993,7 +996,18 @@ function onAliasSaveClick(e: MouseEvent): void {
   if (pk === '') return
   saveContact(pk, alias)
   toast(`Saved @${alias}`)
-  renderInbox(lastInbox)
+  renderInbox(lastInbox) // reflect the now-verified name in the inbox
+  if (lastUpdatesFeed != null) renderUpdatesFeed(lastUpdatesFeed) // …and in the updates feed
+  updateMsgToName()
+}
+
+/** Live hint under the compose "to" field: show @name when the entered key has a known alias. */
+function updateMsgToName(): void {
+  const to = val('msgTo')
+  const el = $('msgToName')
+  if (to.length !== 66 && to.length !== 130) { el.innerHTML = ''; return }
+  const info = displayName(to)
+  el.innerHTML = info.isMe ? '↪ that’s your own key' : (info.alias != null ? `→ ${nameChip(to, { save: true })}` : '')
 }
 
 // ─── init ───────────────────────────────────────────────────────────
@@ -1096,7 +1110,7 @@ function renderCollectionView(info: CollectionInfo): void {
   if (info.encrypted) badges.push('<span class="badge" style="background:#9e6a03;color:#1a1206">🔒 Holders only</span>')
   else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">📎 Embedded file</span>')
   $('cvBadges').innerHTML = badges.join('')
-  $('cvPublisher').textContent = info.publisherPubKeyHex ? `by ${short(info.publisherPubKeyHex)}` : ''
+  $('cvPublisher').innerHTML = info.publisherPubKeyHex ? `by ${nameChip(info.publisherPubKeyHex)}` : ''
   $('cvDesc').textContent = info.description || '(no description provided)'
   if (info.isV2) {
     $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sats</b> <span class="muted">` +
@@ -1408,7 +1422,7 @@ async function onBroadcast(t: StoredToken): Promise<void> {
   if (!trimmed) { setStatus('Announcement was empty.', 'error'); return }
   setStatus('Publishing announcement to holders…')
   try {
-    const txId = await publishBroadcast(provider, key, t.collectionId, trimmed)
+    const txId = await publishBroadcast(provider, key, t.collectionId, trimmed, getMyAlias())
     latestBroadcast.set(t.collectionId, { text: trimmed, txId, height: 0 })
     renderTokens()
     setStatus(`📣 Announcement published (${short(txId)}). Holders see it when they check Updates.`, 'ok')
@@ -1486,24 +1500,34 @@ async function onCheckUpdates(): Promise<void> {
     return
   }
   host.innerHTML = '<p class="muted">Checking for updates…</p>'
-  const feed: Array<Broadcast & { name: string }> = []
+  const feed: UpdateItem[] = []
   for (const collectionId of held) {
     try {
       const info = await loadCollection(collectionId)
       if (!info.publisherPubKeyHex) continue
       const list = await resolveBroadcasts(provider, info.publisherPubKeyHex, collectionId)
       if (list.length > 0) latestBroadcast.set(collectionId, list[0])
-      for (const b of list) feed.push({ ...b, name: info.name })
+      for (const b of list) feed.push({ ...b, name: info.name, publisherPubKeyHex: info.publisherPubKeyHex })
     } catch { /* skip a collection that fails to load */ }
   }
   feed.sort((a, b) => (b.height || 1e12) - (a.height || 1e12)) // newest first; unconfirmed → top
+  for (const b of feed) if (b.senderAlias) rememberAlias(b.publisherPubKeyHex, b.senderAlias) // capture publisher @names
   renderTokens() // surface any newly-cached latest announcements inline on the tokens
+  renderUpdatesFeed(feed)
+}
+
+type UpdateItem = Broadcast & { name: string; publisherPubKeyHex: string }
+
+function renderUpdatesFeed(feed: UpdateItem[]): void {
+  lastUpdatesFeed = feed
+  const host = $('updatesFeed')
   if (feed.length === 0) {
     host.innerHTML = '<p class="muted">No announcements yet from the publishers of your collections.</p>'
     return
   }
   host.innerHTML = feed.map(b =>
-    `<div class="token"><div class="token-name">📣 ${escapeHtml(b.name || 'Collection')}</div>` +
+    `<div class="token msg"><div class="token-name">📣 ${escapeHtml(b.name || 'Collection')}</div>` +
+    `<div class="mono" style="font-size:12px">by ${nameChip(b.publisherPubKeyHex, { save: true })}</div>` +
     `<div class="state" style="color:var(--accent);white-space:pre-wrap">${escapeHtml(b.text)}</div>` +
     `<div class="mono">${short(b.txId)}</div></div>`,
   ).join('')
@@ -1562,6 +1586,7 @@ function init(): void {
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()
+  $('msgTo').addEventListener('input', updateMsgToName)
   $('btnCheckUpdates').onclick = () => void onCheckUpdates()
   $('btnNewWallet').onclick = () => {
     if (!confirm('Replace the current wallet with a new random key? Your current key is in the WIF box — back it up first.')) return

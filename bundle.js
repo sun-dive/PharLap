@@ -19159,7 +19159,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   // src/broadcast.ts
   var MAX_BROADCAST_BYTES = 480;
   var MAX_BROADCAST_SCAN = 50;
-  async function publishBroadcast(provider2, key2, collectionId, text) {
+  async function publishBroadcast(provider2, key2, collectionId, text, senderAlias) {
     const trimmed = text.trim();
     if (trimmed.length === 0) throw new Error("announcement is empty");
     if (new TextEncoder().encode(trimmed).length > MAX_BROADCAST_BYTES) {
@@ -19170,7 +19170,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       senderPriv: key2,
       recipientPubKeyHex: pubHex,
       parts: [{ kind: "text", text: trimmed }],
-      encrypt: false
+      encrypt: false,
+      senderAlias,
+      sentAt: Date.now()
     });
     const selected = selectFunding(await getSafeUtxos(provider2), PHARLAP_OUTPUT_SATS + 600);
     const funding = await Promise.all(
@@ -19233,7 +19235,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const opened = await openPublicEnvelope(m.fields.envelope);
         if (opened == null || opened.senderPubKeyHex.toLowerCase() !== publisher) continue;
         const textPart = opened.parts.find((p) => p.kind === "text");
-        if (textPart && textPart.kind === "text") out.push({ text: textPart.text, txId, height });
+        if (textPart && textPart.kind === "text") out.push({ text: textPart.text, txId, height, senderAlias: opened.senderAlias });
       }
     }
     return out;
@@ -20122,6 +20124,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var store2;
   var nftView = "list";
   var lastInbox = [];
+  var lastUpdatesFeed = null;
   var $ = (id) => {
     const el = document.getElementById(id);
     if (!el) throw new Error(`missing #${id}`);
@@ -20496,7 +20499,7 @@ Proceed?`
       const hasKey = m.parts.some((p) => p.kind === "key");
       const filePart = m.parts.find((p) => p.kind === "file");
       card2.innerHTML = `
-      <div class="mono">from ${senderChip(m.senderPubKeyHex)} ${m.encrypted ? "\u{1F512} encrypted" : "\u{1F310} public"}</div>
+      <div class="mono">from ${nameChip(m.senderPubKeyHex, { save: true })} ${m.encrypted ? "\u{1F512} encrypted" : "\u{1F310} public"}</div>
       ${m.sentAt ? `<div class="muted" style="font-size:11px" title="Sender's clock (self-asserted)">\u{1F552} ${escapeHtml(fmtTime(m.sentAt))}${m.height ? "" : " \xB7 pending"}</div>` : m.height ? "" : '<div class="muted" style="font-size:11px">pending</div>'}
       ${textPart && textPart.kind === "text" ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ""}
       ${hasKey ? '<div class="muted" style="font-size:12px">\u{1F511} carries a content key</div>' : ""}
@@ -20523,6 +20526,7 @@ Proceed?`
     ;
     $("msgTo").value = m.senderPubKeyHex;
     $("msgEncrypt").checked = m.encrypted;
+    updateMsgToName();
     $("msgTo").scrollIntoView({ behavior: "smooth", block: "start" });
     $("msgText").focus();
     const who = displayName(m.senderPubKeyHex);
@@ -21126,11 +21130,13 @@ Proceed?`
       return "";
     }
   }
-  function senderChip(pubKeyHex2) {
+  function nameChip(pubKeyHex2, opts = {}) {
     const info = displayName(pubKeyHex2);
     const chip = `<span class="copy-id" data-copy="${pubKeyHex2}" title="${pubKeyHex2} \u2014 click to copy">${escapeHtml(info.name)}</span>`;
     if (info.verified) return chip;
-    return `${chip} <span class="unverified" title="Self-claimed name \u2014 verify the key on hover before trusting it">\u26A0 unverified</span> <button class="alias-save" data-pk="${pubKeyHex2}" data-alias="${escapeHtml(info.alias ?? "")}">save</button>`;
+    const warn = ` <span class="unverified" title="Self-claimed name \u2014 verify the key on hover before trusting it">\u26A0 unverified</span>`;
+    const save = opts.save ? ` <button class="alias-save" data-pk="${pubKeyHex2}" data-alias="${escapeHtml(info.alias ?? "")}">save</button>` : "";
+    return chip + warn + save;
   }
   function onAliasSaveClick(e) {
     const btn = e.target?.closest(".alias-save");
@@ -21141,6 +21147,18 @@ Proceed?`
     saveContact(pk, alias);
     toast(`Saved @${alias}`);
     renderInbox(lastInbox);
+    if (lastUpdatesFeed != null) renderUpdatesFeed(lastUpdatesFeed);
+    updateMsgToName();
+  }
+  function updateMsgToName() {
+    const to = val("msgTo");
+    const el = $("msgToName");
+    if (to.length !== 66 && to.length !== 130) {
+      el.innerHTML = "";
+      return;
+    }
+    const info = displayName(to);
+    el.innerHTML = info.isMe ? "\u21AA that\u2019s your own key" : info.alias != null ? `\u2192 ${nameChip(to, { save: true })}` : "";
   }
   var cvObjectUrl = null;
   var currentCollection = null;
@@ -21229,7 +21247,7 @@ Proceed?`
     if (info.encrypted) badges.push('<span class="badge" style="background:#9e6a03;color:#1a1206">\u{1F512} Holders only</span>');
     else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">\u{1F4CE} Embedded file</span>');
     $("cvBadges").innerHTML = badges.join("");
-    $("cvPublisher").textContent = info.publisherPubKeyHex ? `by ${short(info.publisherPubKeyHex)}` : "";
+    $("cvPublisher").innerHTML = info.publisherPubKeyHex ? `by ${nameChip(info.publisherPubKeyHex)}` : "";
     $("cvDesc").textContent = info.description || "(no description provided)";
     if (info.isV2) {
       $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sats</b> <span class="muted">(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee)</span>`;
@@ -21571,7 +21589,7 @@ Public, one transaction, reaches every current holder. Message:`);
     }
     setStatus("Publishing announcement to holders\u2026");
     try {
-      const txId = await publishBroadcast(provider, key, t.collectionId, trimmed);
+      const txId = await publishBroadcast(provider, key, t.collectionId, trimmed, getMyAlias());
       latestBroadcast.set(t.collectionId, { text: trimmed, txId, height: 0 });
       renderTokens();
       setStatus(`\u{1F4E3} Announcement published (${short(txId)}). Holders see it when they check Updates.`, "ok");
@@ -21647,18 +21665,24 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
         if (!info.publisherPubKeyHex) continue;
         const list = await resolveBroadcasts(provider, info.publisherPubKeyHex, collectionId);
         if (list.length > 0) latestBroadcast.set(collectionId, list[0]);
-        for (const b of list) feed.push({ ...b, name: info.name });
+        for (const b of list) feed.push({ ...b, name: info.name, publisherPubKeyHex: info.publisherPubKeyHex });
       } catch {
       }
     }
     feed.sort((a, b) => (b.height || 1e12) - (a.height || 1e12));
+    for (const b of feed) if (b.senderAlias) rememberAlias(b.publisherPubKeyHex, b.senderAlias);
     renderTokens();
+    renderUpdatesFeed(feed);
+  }
+  function renderUpdatesFeed(feed) {
+    lastUpdatesFeed = feed;
+    const host = $("updatesFeed");
     if (feed.length === 0) {
       host.innerHTML = '<p class="muted">No announcements yet from the publishers of your collections.</p>';
       return;
     }
     host.innerHTML = feed.map(
-      (b) => `<div class="token"><div class="token-name">\u{1F4E3} ${escapeHtml(b.name || "Collection")}</div><div class="state" style="color:var(--accent);white-space:pre-wrap">${escapeHtml(b.text)}</div><div class="mono">${short(b.txId)}</div></div>`
+      (b) => `<div class="token msg"><div class="token-name">\u{1F4E3} ${escapeHtml(b.name || "Collection")}</div><div class="mono" style="font-size:12px">by ${nameChip(b.publisherPubKeyHex, { save: true })}</div><div class="state" style="color:var(--accent);white-space:pre-wrap">${escapeHtml(b.text)}</div><div class="mono">${short(b.txId)}</div></div>`
     ).join("");
   }
   function initTabs() {
@@ -21721,6 +21745,7 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     $("btnIncoming").onclick = () => void onCheckIncoming();
     $("btnSendMessage").onclick = () => void onSendMessage();
     $("btnCheckMessages").onclick = () => void onCheckMessages();
+    $("msgTo").addEventListener("input", updateMsgToName);
     $("btnCheckUpdates").onclick = () => void onCheckUpdates();
     $("btnNewWallet").onclick = () => {
       if (!confirm("Replace the current wallet with a new random key? Your current key is in the WIF box \u2014 back it up first.")) return;
