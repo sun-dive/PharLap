@@ -89,10 +89,13 @@ export async function sendMessage(provider: WalletProvider, key: PrivateKey, par
   encrypt?: boolean
   ref?: string
   feePerKb?: number
+  /** Sender's self-asserted display alias, carried so the recipient can show @name. */
+  senderAlias?: string
 }): Promise<{ txId: string; messageOutpoint: { txId: string; outputIndex: number } }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
   const envelope = await buildEnvelope({
     senderPriv: key, recipientPubKeyHex: params.toPubKeyHex, parts: params.parts, encrypt: params.encrypt,
+    senderAlias: params.senderAlias,
   })
   const estFee = Math.ceil(((350 + envelope.length) * feePerKb) / 1000)
   const target = 2 * PHARLAP_OUTPUT_SATS + estFee + 500
@@ -115,6 +118,8 @@ export interface IncomingMessage {
   senderPubKeyHex: string
   encrypted: boolean
   parts: Part[]
+  /** Sender's self-asserted alias (if they attached one). */
+  senderAlias?: string
 }
 
 /**
@@ -144,6 +149,7 @@ export async function scanIncomingMessages(provider: WalletProvider, recipientPr
       found.push({
         txId, outputIndex: i, ref: parsed.fields.ref,
         senderPubKeyHex: opened.senderPubKeyHex, encrypted: opened.encrypted, parts: opened.parts,
+        senderAlias: opened.senderAlias,
       })
     }
   }

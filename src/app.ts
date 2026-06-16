@@ -35,6 +35,7 @@ let address: string
 let provider: WalletProvider
 let store: PharLapStore
 let nftView: 'list' | 'grid' = 'list' // My-NFTs view mode (persisted in localStorage)
+let lastInbox: IncomingMessage[] = [] // last scanned inbox, for re-render after saving an alias
 
 // ─── small DOM helpers ──────────────────────────────────────────────
 const $ = (id: string): HTMLElement => {
@@ -319,7 +320,7 @@ async function onSendMessage(): Promise<void> {
   if (parts.length === 0) { setStatus('Write a message or attach a file first.', 'error'); return }
   setStatus(`Sending ${encrypt ? 'encrypted' : 'public'} message…`)
   try {
-    const r = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt })
+    const r = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt, senderAlias: getMyAlias() })
     ;($('msgText') as HTMLTextAreaElement).value = ''
     setStatus(`Message sent. Tx ${short(r.txId)}.`, 'ok')
   } catch (e) {
@@ -331,6 +332,7 @@ async function onCheckMessages(): Promise<void> {
   setStatus('Checking for messages…')
   try {
     const msgs = await scanIncomingMessages(provider, key)
+    for (const m of msgs) if (m.senderAlias) rememberAlias(m.senderPubKeyHex, m.senderAlias)
     renderInbox(msgs)
     setStatus(`Inbox: ${msgs.length} message(s).`, 'ok')
   } catch (e) {
@@ -339,6 +341,7 @@ async function onCheckMessages(): Promise<void> {
 }
 
 function renderInbox(msgs: IncomingMessage[]): void {
+  lastInbox = msgs
   const host = $('inbox')
   if (msgs.length === 0) { host.innerHTML = '<p class="muted">No messages found.</p>'; return }
   host.innerHTML = ''
@@ -349,7 +352,7 @@ function renderInbox(msgs: IncomingMessage[]): void {
     const hasKey = m.parts.some(p => p.kind === 'key')
     const filePart = m.parts.find(p => p.kind === 'file')
     card.innerHTML = `
-      <div class="mono">from ${short(m.senderPubKeyHex)} ${m.encrypted ? '🔒 encrypted' : '🌐 public'}</div>
+      <div class="mono">from ${senderChip(m.senderPubKeyHex)} ${m.encrypted ? '🔒 encrypted' : '🌐 public'}</div>
       ${textPart && textPart.kind === 'text' ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ''}
       ${hasKey ? '<div class="muted" style="font-size:12px">🔑 carries a content key</div>' : ''}
     `
@@ -912,6 +915,69 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
 }
 
+// ─── aliases (self-asserted display names) ──────────────────────────
+// A key names ITSELF (carried in the message/post envelope, bound to the sender pubkey). Aliases are NOT
+// unique — the pubkey is the real identity (shown on hover). Your saved contacts (verified) override a
+// key's self-claim; an unseen self-claim shows as "unverified" until you save it. All local, nothing extra
+// on-chain beyond the envelope part.
+let contacts: Record<string, string> = {} // pubkeyHex(lc) → your saved/verified alias (wins)
+let seenAliases: Record<string, string> = {} // pubkeyHex(lc) → observed self-asserted alias (unverified)
+
+function loadAliases(): void {
+  try { contacts = JSON.parse(localStorage.getItem('p:contacts') ?? '{}') } catch { contacts = {} }
+  try { seenAliases = JSON.parse(localStorage.getItem('p:aliases') ?? '{}') } catch { seenAliases = {} }
+}
+function getMyAlias(): string { try { return (localStorage.getItem('p:myalias') ?? '').trim() } catch { return '' } }
+function setMyAlias(a: string): void { try { localStorage.setItem('p:myalias', a) } catch { /* fine */ } }
+
+/** Record a self-asserted alias seen on an incoming message (unless you've already saved that contact). */
+function rememberAlias(pubKeyHex: string, alias: string): void {
+  const k = pubKeyHex.toLowerCase()
+  if (alias === '' || contacts[k] != null || seenAliases[k] === alias) return
+  seenAliases[k] = alias
+  try { localStorage.setItem('p:aliases', JSON.stringify(seenAliases)) } catch { /* fine */ }
+}
+
+/** Save a verified contact alias (accept a self-claim, or set your own label). */
+function saveContact(pubKeyHex: string, alias: string): void {
+  const k = pubKeyHex.toLowerCase()
+  contacts[k] = alias
+  delete seenAliases[k]
+  try { localStorage.setItem('p:contacts', JSON.stringify(contacts)) } catch { /* fine */ }
+  try { localStorage.setItem('p:aliases', JSON.stringify(seenAliases)) } catch { /* fine */ }
+}
+
+interface NameInfo { name: string; verified: boolean; isMe: boolean; alias?: string }
+function displayName(pubKeyHex: string): NameInfo {
+  const k = pubKeyHex.toLowerCase()
+  if (k === myPubKeyLc()) { const a = getMyAlias(); return a ? { name: '@' + a, verified: true, isMe: true, alias: a } : { name: short(pubKeyHex), verified: true, isMe: true } }
+  if (contacts[k] != null) return { name: '@' + contacts[k], verified: true, isMe: false, alias: contacts[k] }
+  if (seenAliases[k] != null) return { name: '@' + seenAliases[k], verified: false, isMe: false, alias: seenAliases[k] }
+  return { name: short(pubKeyHex), verified: true, isMe: false }
+}
+function myPubKeyLc(): string { try { return pubKeyHex.toLowerCase() } catch { return '' } }
+
+/** HTML for a sender reference: @name (copy-to-clipboard the full pubkey, hover to see it) + an unverified
+ *  cue and a one-click "save" for self-claimed names you haven't saved. */
+function senderChip(pubKeyHex: string): string {
+  const info = displayName(pubKeyHex)
+  const chip = `<span class="copy-id" data-copy="${pubKeyHex}" title="${pubKeyHex} — click to copy">${escapeHtml(info.name)}</span>`
+  if (info.verified) return chip
+  return `${chip} <span class="unverified" title="Self-claimed name — verify the key on hover before trusting it">⚠ unverified</span>` +
+    ` <button class="alias-save" data-pk="${pubKeyHex}" data-alias="${escapeHtml(info.alias ?? '')}">save</button>`
+}
+
+function onAliasSaveClick(e: MouseEvent): void {
+  const btn = (e.target as HTMLElement | null)?.closest('.alias-save') as HTMLElement | null
+  if (btn == null) return
+  const pk = btn.dataset.pk ?? ''
+  const alias = btn.dataset.alias ?? ''
+  if (pk === '') return
+  saveContact(pk, alias)
+  toast(`Saved @${alias}`)
+  renderInbox(lastInbox)
+}
+
 // ─── init ───────────────────────────────────────────────────────────
 // ─── collection / sales view (shareable link landing) ───────────────
 // A link of the form  …/#c=<TX1-txid>[&h=<holderPubKey>]  opens a public storefront page for a
@@ -1447,11 +1513,20 @@ function initTabs(): void {
 function init(): void {
   store = new PharLapStore()
   useKey(loadKey())
+  loadAliases()
   try { if (localStorage.getItem('p:nftview') === 'grid') nftView = 'grid' } catch { /* default list */ }
   updateViewToggle()
   renderTokens()
   initTabs()
   document.addEventListener('click', onCopyClick) // click-to-copy for any [data-copy] element
+  document.addEventListener('click', onAliasSaveClick) // save a self-claimed alias to your contacts
+  ;($('myAlias') as HTMLInputElement).value = getMyAlias() ? '@' + getMyAlias() : ''
+  $('btnSaveAlias').onclick = () => {
+    const a = val('myAlias').replace(/^@+/, '').trim()
+    setMyAlias(a)
+    ;($('myAlias') as HTMLInputElement).value = a ? '@' + a : ''
+    toast(a ? `Your alias is now @${a}` : 'Alias cleared')
+  }
   $('btnViewList').onclick = () => setNftView('list')
   $('btnViewGrid').onclick = () => setNftView('grid')
   $('tokenModalClose').onclick = () => closeTokenModal()

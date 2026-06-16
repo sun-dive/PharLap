@@ -30,6 +30,22 @@ test('envelope: encrypted round-trip recovers parts + authenticates sender', asy
   assert.deepEqual(opened!.parts, sampleParts)
 })
 
+test('envelope: senderAlias rides as metadata, split out of content parts on open', async () => {
+  const env = await buildEnvelope({
+    senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts, senderAlias: 'john123',
+  })
+  const opened = await openEnvelope(env, recipient)
+  assert.ok(opened)
+  assert.equal(opened!.senderAlias, 'john123')
+  assert.deepEqual(opened!.parts, sampleParts) // alias is NOT left among the content parts
+})
+
+test('envelope: no alias → senderAlias is undefined', async () => {
+  const env = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts })
+  const opened = await openEnvelope(env, recipient)
+  assert.equal(opened!.senderAlias, undefined)
+})
+
 test('envelope: a different recipient cannot open it', async () => {
   const env = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts })
   const stranger = PrivateKey.fromRandom()

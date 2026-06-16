@@ -18859,6 +18859,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var PART_KEY = 2;
   var PART_FILE_INLINE = 3;
   var PART_FILE_REF = 4;
+  var PART_ALIAS = 5;
   function writeVarInt(n) {
     if (n < 253) return [n];
     if (n <= 65535) return [253, n & 255, n >> 8 & 255];
@@ -18890,6 +18891,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         if (p.sha256.length !== 32) throw new Error("fileRef sha256 must be 32 bytes");
         return { type: PART_FILE_REF, value: [...p.sha256, ...utils_exports.toArray(p.uri, "utf8")] };
       }
+      case "alias":
+        return { type: PART_ALIAS, value: utils_exports.toArray(p.alias, "utf8") };
     }
   }
   function encodeParts(parts) {
@@ -18932,6 +18935,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           case PART_FILE_REF:
             parts.push({ kind: "fileRef", sha256: value.slice(0, 32), uri: utils_exports.toUTF8(value.slice(32)) });
             break;
+          case PART_ALIAS:
+            parts.push({ kind: "alias", alias: utils_exports.toUTF8(value) });
+            break;
           default:
             return null;
         }
@@ -18945,7 +18951,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const encrypt = opts.encrypt ?? true;
     const senderPub = opts.senderPriv.toPublicKey().encode(true);
     if (senderPub.length !== 33) throw new Error("senderPub must be 33 bytes");
-    let payload = encodeParts(opts.parts);
+    const allParts = opts.senderAlias != null && opts.senderAlias !== "" ? [{ kind: "alias", alias: opts.senderAlias }, ...opts.parts] : opts.parts;
+    let payload = encodeParts(allParts);
     let flags = 0;
     const c = await compressIfSmaller(payload);
     if (c.compressed) {
@@ -18955,6 +18962,11 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const body = encrypt ? ECIES.electrumEncrypt(payload, PublicKey.fromString(opts.recipientPubKeyHex), opts.senderPriv, true) : payload;
     if (encrypt) flags |= FLAG_ENCRYPTED;
     return [ENVELOPE_VERSION, flags, ...senderPub, ...body];
+  }
+  function splitAlias(parts) {
+    const aliasPart = parts.find((p) => p.kind === "alias");
+    const senderAlias = aliasPart != null && aliasPart.kind === "alias" ? aliasPart.alias : void 0;
+    return { senderAlias, parts: parts.filter((p) => p.kind !== "alias") };
   }
   async function openEnvelope(envelope, recipientPriv) {
     if (envelope.length < 35) return null;
@@ -18981,9 +18993,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         return null;
       }
     }
-    const parts = decodeParts(tlv);
-    if (parts == null) return null;
-    return { senderPubKeyHex, encrypted, parts };
+    const decoded = decodeParts(tlv);
+    if (decoded == null) return null;
+    const { senderAlias, parts } = splitAlias(decoded);
+    return { senderPubKeyHex, encrypted, parts, senderAlias };
   }
   async function openPublicEnvelope(envelope) {
     if (envelope.length < 35 || envelope[0] !== ENVELOPE_VERSION) return null;
@@ -18997,9 +19010,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         return null;
       }
     }
-    const parts = decodeParts(tlv);
-    if (parts == null) return null;
-    return { senderPubKeyHex, encrypted: false, parts };
+    const decoded = decodeParts(tlv);
+    if (decoded == null) return null;
+    const { senderAlias, parts } = splitAlias(decoded);
+    return { senderPubKeyHex, encrypted: false, parts, senderAlias };
   }
 
   // src/messageBuilder.ts
@@ -19042,7 +19056,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       senderPriv: key2,
       recipientPubKeyHex: params.toPubKeyHex,
       parts: params.parts,
-      encrypt: params.encrypt
+      encrypt: params.encrypt,
+      senderAlias: params.senderAlias
     });
     const estFee = Math.ceil((350 + envelope.length) * feePerKb / 1e3);
     const target = 2 * PHARLAP_OUTPUT_SATS + estFee + 500;
@@ -19098,7 +19113,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           ref: parsed.fields.ref,
           senderPubKeyHex: opened.senderPubKeyHex,
           encrypted: opened.encrypted,
-          parts: opened.parts
+          parts: opened.parts,
+          senderAlias: opened.senderAlias
         });
       }
     }
@@ -20070,6 +20086,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var provider;
   var store2;
   var nftView = "list";
+  var lastInbox = [];
   var $ = (id) => {
     const el = document.getElementById(id);
     if (!el) throw new Error(`missing #${id}`);
@@ -20404,7 +20421,7 @@ Proceed?`
     }
     setStatus(`Sending ${encrypt ? "encrypted" : "public"} message\u2026`);
     try {
-      const r2 = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt });
+      const r2 = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt, senderAlias: getMyAlias() });
       $("msgText").value = "";
       setStatus(`Message sent. Tx ${short(r2.txId)}.`, "ok");
     } catch (e) {
@@ -20415,6 +20432,7 @@ Proceed?`
     setStatus("Checking for messages\u2026");
     try {
       const msgs = await scanIncomingMessages(provider, key);
+      for (const m of msgs) if (m.senderAlias) rememberAlias(m.senderPubKeyHex, m.senderAlias);
       renderInbox(msgs);
       setStatus(`Inbox: ${msgs.length} message(s).`, "ok");
     } catch (e) {
@@ -20422,6 +20440,7 @@ Proceed?`
     }
   }
   function renderInbox(msgs) {
+    lastInbox = msgs;
     const host = $("inbox");
     if (msgs.length === 0) {
       host.innerHTML = '<p class="muted">No messages found.</p>';
@@ -20435,7 +20454,7 @@ Proceed?`
       const hasKey = m.parts.some((p) => p.kind === "key");
       const filePart = m.parts.find((p) => p.kind === "file");
       card2.innerHTML = `
-      <div class="mono">from ${short(m.senderPubKeyHex)} ${m.encrypted ? "\u{1F512} encrypted" : "\u{1F310} public"}</div>
+      <div class="mono">from ${senderChip(m.senderPubKeyHex)} ${m.encrypted ? "\u{1F512} encrypted" : "\u{1F310} public"}</div>
       ${textPart && textPart.kind === "text" ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ""}
       ${hasKey ? '<div class="muted" style="font-size:12px">\u{1F511} carries a content key</div>' : ""}
     `;
@@ -20984,6 +21003,88 @@ Proceed?`
   function escapeHtml(s2) {
     return s2.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
+  var contacts = {};
+  var seenAliases = {};
+  function loadAliases() {
+    try {
+      contacts = JSON.parse(localStorage.getItem("p:contacts") ?? "{}");
+    } catch {
+      contacts = {};
+    }
+    try {
+      seenAliases = JSON.parse(localStorage.getItem("p:aliases") ?? "{}");
+    } catch {
+      seenAliases = {};
+    }
+  }
+  function getMyAlias() {
+    try {
+      return (localStorage.getItem("p:myalias") ?? "").trim();
+    } catch {
+      return "";
+    }
+  }
+  function setMyAlias(a) {
+    try {
+      localStorage.setItem("p:myalias", a);
+    } catch {
+    }
+  }
+  function rememberAlias(pubKeyHex2, alias) {
+    const k = pubKeyHex2.toLowerCase();
+    if (alias === "" || contacts[k] != null || seenAliases[k] === alias) return;
+    seenAliases[k] = alias;
+    try {
+      localStorage.setItem("p:aliases", JSON.stringify(seenAliases));
+    } catch {
+    }
+  }
+  function saveContact(pubKeyHex2, alias) {
+    const k = pubKeyHex2.toLowerCase();
+    contacts[k] = alias;
+    delete seenAliases[k];
+    try {
+      localStorage.setItem("p:contacts", JSON.stringify(contacts));
+    } catch {
+    }
+    try {
+      localStorage.setItem("p:aliases", JSON.stringify(seenAliases));
+    } catch {
+    }
+  }
+  function displayName(pubKeyHex2) {
+    const k = pubKeyHex2.toLowerCase();
+    if (k === myPubKeyLc()) {
+      const a = getMyAlias();
+      return a ? { name: "@" + a, verified: true, isMe: true, alias: a } : { name: short(pubKeyHex2), verified: true, isMe: true };
+    }
+    if (contacts[k] != null) return { name: "@" + contacts[k], verified: true, isMe: false, alias: contacts[k] };
+    if (seenAliases[k] != null) return { name: "@" + seenAliases[k], verified: false, isMe: false, alias: seenAliases[k] };
+    return { name: short(pubKeyHex2), verified: true, isMe: false };
+  }
+  function myPubKeyLc() {
+    try {
+      return pubKeyHex.toLowerCase();
+    } catch {
+      return "";
+    }
+  }
+  function senderChip(pubKeyHex2) {
+    const info = displayName(pubKeyHex2);
+    const chip = `<span class="copy-id" data-copy="${pubKeyHex2}" title="${pubKeyHex2} \u2014 click to copy">${escapeHtml(info.name)}</span>`;
+    if (info.verified) return chip;
+    return `${chip} <span class="unverified" title="Self-claimed name \u2014 verify the key on hover before trusting it">\u26A0 unverified</span> <button class="alias-save" data-pk="${pubKeyHex2}" data-alias="${escapeHtml(info.alias ?? "")}">save</button>`;
+  }
+  function onAliasSaveClick(e) {
+    const btn = e.target?.closest(".alias-save");
+    if (btn == null) return;
+    const pk = btn.dataset.pk ?? "";
+    const alias = btn.dataset.alias ?? "";
+    if (pk === "") return;
+    saveContact(pk, alias);
+    toast(`Saved @${alias}`);
+    renderInbox(lastInbox);
+  }
   var cvObjectUrl = null;
   var currentCollection = null;
   var cvNote = null;
@@ -21530,6 +21631,7 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
   function init() {
     store2 = new PharLapStore();
     useKey(loadKey());
+    loadAliases();
     try {
       if (localStorage.getItem("p:nftview") === "grid") nftView = "grid";
     } catch {
@@ -21538,6 +21640,14 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     renderTokens();
     initTabs();
     document.addEventListener("click", onCopyClick);
+    document.addEventListener("click", onAliasSaveClick);
+    $("myAlias").value = getMyAlias() ? "@" + getMyAlias() : "";
+    $("btnSaveAlias").onclick = () => {
+      const a = val("myAlias").replace(/^@+/, "").trim();
+      setMyAlias(a);
+      $("myAlias").value = a ? "@" + a : "";
+      toast(a ? `Your alias is now @${a}` : "Alias cleared");
+    };
     $("btnViewList").onclick = () => setNftView("list");
     $("btnViewGrid").onclick = () => setNftView("grid");
     $("tokenModalClose").onclick = () => closeTokenModal();

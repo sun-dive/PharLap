@@ -110,6 +110,8 @@
     .token-ids { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .copy-id { cursor:pointer; border-bottom:1px dotted var(--line); }
     .copy-id:hover { color:var(--fg); border-bottom-color:var(--accent2); }
+    .unverified { color:#e3b341; font-size:11px; cursor:help; }
+    .alias-save { font-size:11px; padding:1px 8px; vertical-align:baseline; }
     #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(8px); background:#161b22;
              border:1px solid var(--line); color:var(--fg); padding:8px 14px; border-radius:8px; font-size:13px;
              opacity:0; pointer-events:none; transition:opacity .15s, transform .15s; z-index:100; }
@@ -369,6 +371,12 @@
 
     <section class="tabpanel" id="tab-messages" role="tabpanel">
     <div class="card">
+      <label>Your alias (optional — a display name others see instead of your key)</label>
+      <div class="row" style="margin-bottom:6px">
+        <input id="myAlias" placeholder="@yourname" style="flex:1" />
+        <button id="btnSaveAlias" class="secondary">Save alias</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:0 0 14px">Self-chosen and not unique — your key is the real identity (hover any @name to see it). It rides on the messages you send.</p>
       <label>Recipient public key</label>
       <input id="msgTo" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
       <label>Message</label>
