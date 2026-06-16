@@ -94,6 +94,8 @@ function switchWallet(k: PrivateKey, recover: boolean): void {
 function renderWallet(): void {
   $('address').textContent = address
   $('pubkey').textContent = pubKeyHex
+  const mine = document.getElementById('myIdenticon')
+  if (mine) mine.innerHTML = identiconSvg(pubKeyHex, 22) // your own key-derived avatar
   ;($('wif') as HTMLInputElement).value = key.toWif()
   hideWif() // re-mask on every wallet (re)load so a switched-in key is never left exposed
 }
@@ -995,15 +997,36 @@ function displayName(pubKeyHex: string): NameInfo {
 }
 function myPubKeyLc(): string { try { return pubKeyHex.toLowerCase() } catch { return '' } }
 
-/** HTML for a key reference anywhere it appears: @name (copy-to-clipboard the full pubkey, hover to see it)
- *  + an "⚠ unverified" cue for a self-claimed name, and (when `save`) a one-click save to your contacts. */
+/** A deterministic, key-derived avatar (symmetric 5×5 SVG). Free, universal, and UN-spoofable: a faked
+ *  @alias on a different key renders a different pattern, so the icon is a visual identity anchor. */
+function identiconSvg(pubKeyHex: string, px = 18): string {
+  const h = Hash.sha256(Utils.toArray(pubKeyHex.toLowerCase(), 'hex'))
+  const hue = ((h[0] << 8) | h[1]) % 360
+  const fg = `hsl(${hue},62%,58%)`
+  const bg = `hsl(${hue},22%,20%)`
+  const N = 5
+  let cells = ''
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < 3; x++) {
+      if ((h[2 + y * 3 + x] & 1) === 0) continue
+      cells += `<rect x="${x}" y="${y}" width="1" height="1"/>`
+      if (x < 2) cells += `<rect x="${N - 1 - x}" y="${y}" width="1" height="1"/>` // mirror for symmetry
+    }
+  }
+  return `<svg class="identicon" width="${px}" height="${px}" viewBox="0 0 ${N} ${N}" aria-hidden="true">` +
+    `<rect width="${N}" height="${N}" fill="${bg}"/><g fill="${fg}">${cells}</g></svg>`
+}
+
+/** HTML for a key reference anywhere it appears: identicon + @name (copy-to-clipboard the full pubkey,
+ *  hover to see it) + an "⚠ unverified" cue for a self-claimed name, and (when `save`) a one-click save. */
 function nameChip(pubKeyHex: string, opts: { save?: boolean } = {}): string {
   const info = displayName(pubKeyHex)
+  const ico = identiconSvg(pubKeyHex)
   const chip = `<span class="copy-id" data-copy="${pubKeyHex}" title="${pubKeyHex} — click to copy">${escapeHtml(info.name)}</span>`
-  if (info.verified) return chip
+  if (info.verified) return ico + chip
   const warn = ` <span class="unverified" title="Self-claimed name — verify the key on hover before trusting it">⚠ unverified</span>`
   const save = opts.save ? ` <button class="alias-save" data-pk="${pubKeyHex}" data-alias="${escapeHtml(info.alias ?? '')}">save</button>` : ''
-  return chip + warn + save
+  return ico + chip + warn + save
 }
 
 function onAliasSaveClick(e: MouseEvent): void {
@@ -1060,7 +1083,7 @@ function contactsSection(title: string, rows: [string, string][], kind: 'saved' 
 function contactRow(pk: string, alias: string, kind: 'saved' | 'seen'): HTMLElement {
   const row = document.createElement('div')
   row.className = 'contact-row'
-  row.innerHTML = `<span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} — click to copy">${short(pk)}</span>`
+  row.innerHTML = `${identiconSvg(pk, 24)} <span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} — click to copy">${short(pk)}</span>`
   const acts = document.createElement('span')
   acts.className = 'contact-acts'
   const mkBtn = (label: string, fn: () => void): HTMLButtonElement => {
