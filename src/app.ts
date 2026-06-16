@@ -359,18 +359,33 @@ function renderInbox(msgs: IncomingMessage[]): void {
       ${textPart && textPart.kind === 'text' ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ''}
       ${hasKey ? '<div class="muted" style="font-size:12px">🔑 carries a content key</div>' : ''}
     `
+    const actions = document.createElement('div')
+    actions.className = 'actions'
+    const reply = document.createElement('button')
+    reply.textContent = '↩ Reply'
+    reply.className = 'secondary'
+    reply.onclick = () => onReply(m)
+    actions.append(reply)
     if (filePart && filePart.kind === 'file') {
       const btn = document.createElement('button')
       btn.textContent = `View ${filePart.fileName}`
       btn.className = 'secondary'
       btn.onclick = () => showFile('Message attachment', { mimeType: filePart.mimeType, fileName: filePart.fileName, fileBytes: filePart.bytes }, true)
-      const actions = document.createElement('div')
-      actions.className = 'actions'
       actions.append(btn)
-      card.append(actions)
     }
+    card.append(actions)
     host.append(card)
   }
+}
+
+/** Reply: drop the sender's key into the compose box, match its privacy, and focus the message field. */
+function onReply(m: IncomingMessage): void {
+  ;($('msgTo') as HTMLInputElement).value = m.senderPubKeyHex
+  ;($('msgEncrypt') as HTMLInputElement).checked = m.encrypted
+  $('msgTo').scrollIntoView({ behavior: 'smooth', block: 'start' })
+  ;($('msgText') as HTMLTextAreaElement).focus()
+  const who = displayName(m.senderPubKeyHex)
+  setStatus(`Replying to ${who.name}.`)
 }
 
 // ─── check incoming ─────────────────────────────────────────────────

@@ -20501,18 +20501,32 @@ Proceed?`
       ${textPart && textPart.kind === "text" ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ""}
       ${hasKey ? '<div class="muted" style="font-size:12px">\u{1F511} carries a content key</div>' : ""}
     `;
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const reply = document.createElement("button");
+      reply.textContent = "\u21A9 Reply";
+      reply.className = "secondary";
+      reply.onclick = () => onReply(m);
+      actions.append(reply);
       if (filePart && filePart.kind === "file") {
         const btn = document.createElement("button");
         btn.textContent = `View ${filePart.fileName}`;
         btn.className = "secondary";
         btn.onclick = () => showFile("Message attachment", { mimeType: filePart.mimeType, fileName: filePart.fileName, fileBytes: filePart.bytes }, true);
-        const actions = document.createElement("div");
-        actions.className = "actions";
         actions.append(btn);
-        card2.append(actions);
       }
+      card2.append(actions);
       host.append(card2);
     }
+  }
+  function onReply(m) {
+    ;
+    $("msgTo").value = m.senderPubKeyHex;
+    $("msgEncrypt").checked = m.encrypted;
+    $("msgTo").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("msgText").focus();
+    const who = displayName(m.senderPubKeyHex);
+    setStatus(`Replying to ${who.name}.`);
   }
   var nameCache = /* @__PURE__ */ new Map();
   var latestBroadcast = /* @__PURE__ */ new Map();
