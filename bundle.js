@@ -20491,7 +20491,7 @@ Proceed?`
     host.innerHTML = "";
     for (const m of msgs) {
       const card2 = document.createElement("div");
-      card2.className = "token";
+      card2.className = "token msg";
       const textPart = m.parts.find((p) => p.kind === "text");
       const hasKey = m.parts.some((p) => p.kind === "key");
       const filePart = m.parts.find((p) => p.kind === "file");

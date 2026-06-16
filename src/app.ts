@@ -349,7 +349,7 @@ function renderInbox(msgs: IncomingMessage[]): void {
   host.innerHTML = ''
   for (const m of msgs) {
     const card = document.createElement('div')
-    card.className = 'token'
+    card.className = 'token msg' // .msg overrides the NFT flex-row so content stacks and actions sit bottom-left
     const textPart = m.parts.find(p => p.kind === 'text')
     const hasKey = m.parts.some(p => p.kind === 'key')
     const filePart = m.parts.find(p => p.kind === 'file')
