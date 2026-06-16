@@ -46,6 +46,17 @@ test('envelope: no alias → senderAlias is undefined', async () => {
   assert.equal(opened!.senderAlias, undefined)
 })
 
+test('envelope: sentAt (epoch ms) round-trips and is split from content parts', async () => {
+  const ts = 1_750_000_000_123 // a 6-byte epoch-ms value
+  const env = await buildEnvelope({
+    senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts, senderAlias: 'john123', sentAt: ts,
+  })
+  const opened = await openEnvelope(env, recipient)
+  assert.equal(opened!.sentAt, ts)
+  assert.equal(opened!.senderAlias, 'john123')
+  assert.deepEqual(opened!.parts, sampleParts) // neither time nor alias leaks into content
+})
+
 test('envelope: a different recipient cannot open it', async () => {
   const env = await buildEnvelope({ senderPriv: sender, recipientPubKeyHex: recipientPubHex, parts: sampleParts })
   const stranger = PrivateKey.fromRandom()

@@ -46,6 +46,8 @@ const $ = (id: string): HTMLElement => {
 const val = (id: string): string => ($(id) as HTMLInputElement).value.trim()
 const short = (s: string, n = 10): string => (s.length > 2 * n ? `${s.slice(0, n)}…${s.slice(-n)}` : s)
 const kb = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`)
+/** Format a UTC epoch-ms timestamp in the viewer's OWN local timezone (the stored value is timezone-free). */
+const fmtTime = (ms: number): string => { try { return new Date(ms).toLocaleString() } catch { return '' } }
 function setStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
   const el = $('status')
   el.textContent = msg
@@ -353,6 +355,7 @@ function renderInbox(msgs: IncomingMessage[]): void {
     const filePart = m.parts.find(p => p.kind === 'file')
     card.innerHTML = `
       <div class="mono">from ${senderChip(m.senderPubKeyHex)} ${m.encrypted ? '🔒 encrypted' : '🌐 public'}</div>
+      ${m.sentAt ? `<div class="muted" style="font-size:11px" title="Sender's clock (self-asserted)">🕒 ${escapeHtml(fmtTime(m.sentAt))}${m.height ? '' : ' · pending'}</div>` : (m.height ? '' : '<div class="muted" style="font-size:11px">pending</div>')}
       ${textPart && textPart.kind === 'text' ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ''}
       ${hasKey ? '<div class="muted" style="font-size:12px">🔑 carries a content key</div>' : ''}
     `

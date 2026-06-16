@@ -30,6 +30,9 @@ export const PART_FILE_INLINE = 0x03
 export const PART_FILE_REF = 0x04
 /** Sender's self-asserted display alias (metadata, not content) — bound to senderPub by the envelope auth. */
 export const PART_ALIAS = 0x05
+/** Sender's self-asserted send time, UTC epoch milliseconds (metadata). Absolute instant — each reader
+ *  renders it in their own local timezone, so there's no timezone ambiguity in the stored value. */
+export const PART_TIME = 0x06
 
 export type Part =
   | { kind: 'text'; text: string }
@@ -37,6 +40,20 @@ export type Part =
   | { kind: 'file'; mimeType: string; fileName: string; bytes: number[] }
   | { kind: 'fileRef'; sha256: number[]; uri: string }
   | { kind: 'alias'; alias: string }
+  | { kind: 'time'; ms: number }
+
+/** Encode an epoch-ms timestamp as 6 little-endian bytes (good past the year 10000). */
+function encodeTimeMs(ms: number): number[] {
+  const out: number[] = []
+  let v = Math.max(0, Math.floor(ms))
+  for (let i = 0; i < 6; i++) { out.push(v & 0xff); v = Math.floor(v / 256) }
+  return out
+}
+function decodeTimeMs(b: number[]): number {
+  let n = 0
+  for (let i = b.length - 1; i >= 0; i--) n = n * 256 + b[i]
+  return n
+}
 
 // ─── CompactSize varint ─────────────────────────────────────────────
 function writeVarInt(n: number): number[] {
@@ -68,6 +85,7 @@ function encodePartValue(p: Part): { type: number; value: number[] } {
       return { type: PART_FILE_REF, value: [...p.sha256, ...Utils.toArray(p.uri, 'utf8')] }
     }
     case 'alias': return { type: PART_ALIAS, value: Utils.toArray(p.alias, 'utf8') }
+    case 'time': return { type: PART_TIME, value: encodeTimeMs(p.ms) }
   }
 }
 
@@ -105,6 +123,7 @@ export function decodeParts(bytes: number[]): Part[] | null {
           parts.push({ kind: 'fileRef', sha256: value.slice(0, 32), uri: Utils.toUTF8(value.slice(32)) })
           break
         case PART_ALIAS: parts.push({ kind: 'alias', alias: Utils.toUTF8(value) }); break
+        case PART_TIME: parts.push({ kind: 'time', ms: decodeTimeMs(value) }); break
         default: return null // unknown part type
       }
     }
@@ -121,14 +140,17 @@ export async function buildEnvelope(opts: {
   encrypt?: boolean
   /** Sender's self-asserted display alias; carried as a PART_ALIAS so recipients can show @name. */
   senderAlias?: string
+  /** Sender's send time (UTC epoch ms); carried as a PART_TIME so recipients can show + order by it. */
+  sentAt?: number
 }): Promise<number[]> {
   const encrypt = opts.encrypt ?? true
   const senderPub = opts.senderPriv.toPublicKey().encode(true) as number[]
   if (senderPub.length !== 33) throw new Error('senderPub must be 33 bytes')
-  // Prepend the sender's alias (if set) as a metadata part; the rest are content parts.
-  const allParts: Part[] = opts.senderAlias != null && opts.senderAlias !== ''
-    ? [{ kind: 'alias', alias: opts.senderAlias }, ...opts.parts]
-    : opts.parts
+  // Prepend metadata parts (alias, send time) ahead of the content parts.
+  const meta: Part[] = []
+  if (opts.senderAlias != null && opts.senderAlias !== '') meta.push({ kind: 'alias', alias: opts.senderAlias })
+  if (opts.sentAt != null && opts.sentAt > 0) meta.push({ kind: 'time', ms: opts.sentAt })
+  const allParts: Part[] = meta.length > 0 ? [...meta, ...opts.parts] : opts.parts
   // Smart-compress the TLV (keep only if smaller), BEFORE encrypting — ciphertext is incompressible.
   let payload = encodeParts(allParts)
   let flags = 0
@@ -148,13 +170,19 @@ export interface OpenedMessage {
   parts: Part[]
   /** Sender's self-asserted alias (from PART_ALIAS), if they attached one. */
   senderAlias?: string
+  /** Sender's self-asserted send time, UTC epoch ms (from PART_TIME), if attached. */
+  sentAt?: number
 }
 
-/** Split a sender-alias metadata part out of the content parts. */
-function splitAlias(parts: Part[]): { senderAlias?: string; parts: Part[] } {
+/** Split sender metadata (alias, send time) out of the content parts. */
+function splitMeta(parts: Part[]): { senderAlias?: string; sentAt?: number; parts: Part[] } {
   const aliasPart = parts.find(p => p.kind === 'alias')
-  const senderAlias = aliasPart != null && aliasPart.kind === 'alias' ? aliasPart.alias : undefined
-  return { senderAlias, parts: parts.filter(p => p.kind !== 'alias') }
+  const timePart = parts.find(p => p.kind === 'time')
+  return {
+    senderAlias: aliasPart != null && aliasPart.kind === 'alias' ? aliasPart.alias : undefined,
+    sentAt: timePart != null && timePart.kind === 'time' ? timePart.ms : undefined,
+    parts: parts.filter(p => p.kind !== 'alias' && p.kind !== 'time'),
+  }
 }
 
 /** Open (and, if encrypted, decrypt + authenticate) an envelope with the recipient's private key. */
@@ -177,8 +205,8 @@ export async function openEnvelope(envelope: number[], recipientPriv: PrivateKey
   if (compressed) { try { tlv = await decompress(tlv) } catch { return null } } // decompress AFTER decrypt
   const decoded = decodeParts(tlv)
   if (decoded == null) return null
-  const { senderAlias, parts } = splitAlias(decoded)
-  return { senderPubKeyHex, encrypted, parts, senderAlias }
+  const { senderAlias, sentAt, parts } = splitMeta(decoded)
+  return { senderPubKeyHex, encrypted, parts, senderAlias, sentAt }
 }
 
 /** Open a PUBLIC (unencrypted) envelope with no key — for broadcasts/announcements anyone can read.
@@ -191,6 +219,6 @@ export async function openPublicEnvelope(envelope: number[]): Promise<OpenedMess
   if ((envelope[1] & FLAG_COMPRESSED) !== 0) { try { tlv = await decompress(tlv) } catch { return null } }
   const decoded = decodeParts(tlv)
   if (decoded == null) return null
-  const { senderAlias, parts } = splitAlias(decoded)
-  return { senderPubKeyHex, encrypted: false, parts, senderAlias }
+  const { senderAlias, sentAt, parts } = splitMeta(decoded)
+  return { senderPubKeyHex, encrypted: false, parts, senderAlias, sentAt }
 }
