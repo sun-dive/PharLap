@@ -34,6 +34,7 @@ let pubKeyHex: string
 let address: string
 let provider: WalletProvider
 let store: PharLapStore
+let nftView: 'list' | 'grid' = 'list' // My-NFTs view mode (persisted in localStorage)
 
 // ─── small DOM helpers ──────────────────────────────────────────────
 const $ = (id: string): HTMLElement => {
@@ -592,7 +593,7 @@ function renderTokens(skipWarm = false): void {
     const items = buckets.get(c.key)
     if (items == null || items.length === 0) continue
     // With only one type present, skip the section chrome — a lone header adds nothing.
-    if (single) { for (const [cid, copies] of items) host.append(card(cid, copies, myHash)) }
+    if (single) host.append(sectionBody(items, myHash))
     else host.append(sectionEl(`${c.icon} ${c.label}`, items, myHash))
   }
   const pending = buckets.get('pending')
@@ -605,22 +606,78 @@ function card(collectionId: string, copies: StoredToken[], myHash: string): HTML
   return copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash)
 }
 
-/** A collapsible type section: a clickable header (icon + label + count) over its cards. */
+/** A section's contents, rendered per the current view: a vertical list of cards, or a wall of tiles. */
+function sectionBody(items: Array<[string, StoredToken[]]>, myHash: string): HTMLElement {
+  const wrap = document.createElement('div')
+  if (nftView === 'grid') {
+    wrap.className = 'token-grid'
+    for (const [cid, copies] of items) wrap.append(tileEl(cid, copies, myHash))
+  } else {
+    for (const [cid, copies] of items) wrap.append(card(cid, copies, myHash))
+  }
+  return wrap
+}
+
+/** A collapsible type section: a clickable header (icon + label + count) over its cards/tiles. */
 function sectionEl(label: string, items: Array<[string, StoredToken[]]>, myHash: string): HTMLElement {
   const sec = document.createElement('div')
   sec.className = 'token-section'
   const head = document.createElement('div')
   head.className = 'token-section-head'
   head.innerHTML = `<span class="chev">▾</span> <span class="token-section-label">${label}</span> <span class="count">${items.length}</span>`
-  const bodyEl = document.createElement('div')
-  bodyEl.className = 'token-section-body'
-  for (const [cid, copies] of items) bodyEl.append(card(cid, copies, myHash))
+  const bodyEl = sectionBody(items, myHash)
+  bodyEl.classList.add('token-section-body')
   head.onclick = () => {
     bodyEl.hidden = !bodyEl.hidden
     head.querySelector('.chev')!.textContent = bodyEl.hidden ? '▸' : '▾'
   }
   sec.append(head, bodyEl)
   return sec
+}
+
+/** A grid tile for a collection group: thumbnail + name + ×N count; click opens the detail modal. */
+function tileEl(collectionId: string, copies: StoredToken[], myHash: string): HTMLElement {
+  const t0 = copies[0]
+  const tile = document.createElement('button')
+  tile.type = 'button'
+  tile.className = 'token-tile'
+  const thumb = document.createElement('div')
+  thumb.className = 'token-tile-thumb'
+  thumb.innerHTML = '<div class="token-thumb-ph">🎴</div>'
+  void fillCardThumb(thumb, collectionId)
+  const cap = document.createElement('div')
+  cap.className = 'token-tile-cap'
+  cap.innerHTML = `<span class="token-tile-name">${escapeHtml(t0.collectionName ?? 'Collection')}</span>` +
+    `${copies.length > 1 ? `<span class="count">×${copies.length}</span>` : (t0.kind === 'edition' ? '<span class="count">edition</span>' : '')}`
+  tile.append(thumb, cap)
+  tile.onclick = () => openTokenDetail(collectionId, copies, myHash)
+  return tile
+}
+
+/** Open the detail modal for a collection group (the full card + actions; groups start expanded). */
+function openTokenDetail(collectionId: string, copies: StoredToken[], myHash: string): void {
+  const body = $('tokenModalBody')
+  body.innerHTML = ''
+  body.append(copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash, true))
+  $('tokenModal').style.display = 'flex'
+}
+
+function closeTokenModal(): void {
+  $('tokenModal').style.display = 'none'
+  $('tokenModalBody').innerHTML = ''
+}
+
+function setNftView(v: 'list' | 'grid'): void {
+  if (nftView === v) return
+  nftView = v
+  try { localStorage.setItem('p:nftview', v) } catch { /* fine */ }
+  updateViewToggle()
+  renderTokens()
+}
+
+function updateViewToggle(): void {
+  $('btnViewList').classList.toggle('active', nftView === 'list')
+  $('btnViewGrid').classList.toggle('active', nftView === 'grid')
 }
 
 /** Warm the MIME/thumbnail cache for all held collections, then re-render once so they settle into sections. */
@@ -711,11 +768,12 @@ function singleCard(t: StoredToken, myHash: string): HTMLElement {
 }
 
 /** A collapsible group of identical (same-collection) copies: header + a ×N count, expanding to per-copy rows. */
-function groupCard(collectionId: string, copies: StoredToken[], myHash: string): HTMLElement {
+function groupCard(collectionId: string, copies: StoredToken[], myHash: string, startOpen = false): HTMLElement {
   const t0 = copies[0]
   const isEdition = t0.kind === 'edition'
   const card = document.createElement('div')
   card.className = 'token token-group'
+  if (startOpen) card.classList.add('open')
   const head = document.createElement('div')
   head.className = 'token-group-head'
   const headBody = document.createElement('div')
@@ -724,11 +782,11 @@ function groupCard(collectionId: string, copies: StoredToken[], myHash: string):
     <div class="token-name">${escapeHtml(t0.collectionName ?? 'Collection')}${isEdition ? ' <span class="badge">edition</span>' : ''} <span class="count">×${copies.length}</span></div>
     <div class="mono token-ids">collection <span class="copy-id" data-copy="${collectionId}" title="${collectionId} — click to copy">${short(collectionId)}</span> · ${copies.length} copies held</div>`
   const chev = document.createElement('span')
-  chev.className = 'chev'; chev.textContent = '▸'
+  chev.className = 'chev'; chev.textContent = startOpen ? '▾' : '▸'
   head.append(tokenThumbEl(collectionId), headBody, chev)
 
   const items = document.createElement('div')
-  items.className = 'token-group-items'; items.hidden = true
+  items.className = 'token-group-items'; items.hidden = !startOpen
   for (const t of copies) {
     const row = document.createElement('div')
     row.className = 'token-copy'
@@ -1365,9 +1423,20 @@ function initTabs(): void {
 function init(): void {
   store = new PharLapStore()
   useKey(loadKey())
+  try { if (localStorage.getItem('p:nftview') === 'grid') nftView = 'grid' } catch { /* default list */ }
+  updateViewToggle()
   renderTokens()
   initTabs()
   document.addEventListener('click', onCopyClick) // click-to-copy for any [data-copy] element
+  $('btnViewList').onclick = () => setNftView('list')
+  $('btnViewGrid').onclick = () => setNftView('grid')
+  $('tokenModalClose').onclick = () => closeTokenModal()
+  $('tokenModal').addEventListener('click', e => { if (e.target === $('tokenModal')) closeTokenModal() })
+  // Any action button inside the detail modal navigates or mutates — hide the modal so it doesn't stack over
+  // a viewer/storefront that the action opens (capture phase, hide-only, so the button's own handler still runs).
+  $('tokenModalBody').addEventListener('click', e => {
+    if ((e.target as HTMLElement).closest('button') != null) $('tokenModal').style.display = 'none'
+  }, true)
 
   $('btnRefresh').onclick = () => void refreshBalance()
   $('btnMint').onclick = () => void onMint()

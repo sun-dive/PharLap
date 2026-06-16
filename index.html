@@ -92,6 +92,21 @@
     .token-section-head .chev { color:var(--muted); font-size:12px; }
     .token-section-head .count { color:var(--muted); font-weight:500; font-size:12px; margin-left:auto; }
     .token-section-body[hidden] { display:none; }
+    .nft-toolbar { display:flex; justify-content:flex-end; margin-bottom:10px; }
+    .view-toggle { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    .view-toggle button { background:transparent; border:none; color:var(--muted); padding:5px 12px; font-size:13px; cursor:pointer; }
+    .view-toggle button.active { background:var(--accent2); color:#04122a; font-weight:600; }
+    .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
+    .token-tile { display:flex; flex-direction:column; gap:6px; padding:8px; background:#0d1117; border:1px solid var(--line);
+                  border-radius:8px; cursor:pointer; text-align:left; color:var(--fg); font:inherit; }
+    .token-tile:hover { border-color:var(--accent2); }
+    .token-tile-thumb { width:100%; aspect-ratio:1/1; border-radius:6px; overflow:hidden; background:#161b22; }
+    .token-tile-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+    .token-tile-thumb .token-thumb-ph { font-size:40px; }
+    .token-tile-cap { display:flex; align-items:baseline; gap:6px; }
+    .token-tile-name { font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1 1 auto; min-width:0; }
+    .token-tile-cap .count { font-size:11px; color:var(--muted); flex:0 0 auto; }
+    #tokenModalBody .token { margin-bottom:0; }
     .token-ids { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .copy-id { cursor:pointer; border-bottom:1px dotted var(--line); }
     .copy-id:hover { color:var(--fg); border-bottom-color:var(--accent2); }
@@ -341,6 +356,12 @@
       <label>Recipient public key (for Send)</label>
       <input id="sendPubKey" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
       <div class="row" style="margin:10px 0"><button id="btnIncoming" class="secondary">Check incoming / recover</button></div>
+      <div class="nft-toolbar">
+        <div class="view-toggle">
+          <button id="btnViewList" type="button">☰ List</button>
+          <button id="btnViewGrid" type="button">▦ Grid</button>
+        </div>
+      </div>
       <div id="tokens"></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Enter a recipient public key above, then click <b>Send</b> on the NFT you want to transfer.</p>
     </div>
@@ -548,6 +569,13 @@
       <div class="modal-head"><span id="viewerTitle" class="mono"></span><button id="viewerClose" class="secondary">✕ Close</button></div>
       <div id="viewerProvenance" class="viewer-banner" style="display:none"></div>
       <div id="viewerContent"></div>
+    </div>
+  </div>
+
+  <div id="tokenModal" class="modal" style="display:none">
+    <div class="modal-box">
+      <div class="modal-head"><span class="mono">NFT detail</span><button id="tokenModalClose" class="secondary">✕ Close</button></div>
+      <div id="tokenModalBody"></div>
     </div>
   </div>
 
