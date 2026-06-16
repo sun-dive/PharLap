@@ -20051,6 +20051,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var address;
   var provider;
   var store2;
+  var nftView = "list";
   var $ = (id) => {
     const el = document.getElementById(id);
     if (!el) throw new Error(`missing #${id}`);
@@ -20621,9 +20622,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     for (const c of CATS) {
       const items = buckets.get(c.key);
       if (items == null || items.length === 0) continue;
-      if (single) {
-        for (const [cid, copies] of items) host.append(card(cid, copies, myHash));
-      } else host.append(sectionEl(`${c.icon} ${c.label}`, items, myHash));
+      if (single) host.append(sectionBody(items, myHash));
+      else host.append(sectionEl(`${c.icon} ${c.label}`, items, myHash));
     }
     const pending = buckets.get("pending");
     if (pending?.length) host.append(sectionEl("\u23F3 Identifying type\u2026", pending, myHash));
@@ -20632,21 +20632,70 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function card(collectionId, copies, myHash) {
     return copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash);
   }
+  function sectionBody(items, myHash) {
+    const wrap = document.createElement("div");
+    if (nftView === "grid") {
+      wrap.className = "token-grid";
+      for (const [cid, copies] of items) wrap.append(tileEl(cid, copies, myHash));
+    } else {
+      for (const [cid, copies] of items) wrap.append(card(cid, copies, myHash));
+    }
+    return wrap;
+  }
   function sectionEl(label, items, myHash) {
     const sec = document.createElement("div");
     sec.className = "token-section";
     const head = document.createElement("div");
     head.className = "token-section-head";
     head.innerHTML = `<span class="chev">\u25BE</span> <span class="token-section-label">${label}</span> <span class="count">${items.length}</span>`;
-    const bodyEl = document.createElement("div");
-    bodyEl.className = "token-section-body";
-    for (const [cid, copies] of items) bodyEl.append(card(cid, copies, myHash));
+    const bodyEl = sectionBody(items, myHash);
+    bodyEl.classList.add("token-section-body");
     head.onclick = () => {
       bodyEl.hidden = !bodyEl.hidden;
       head.querySelector(".chev").textContent = bodyEl.hidden ? "\u25B8" : "\u25BE";
     };
     sec.append(head, bodyEl);
     return sec;
+  }
+  function tileEl(collectionId, copies, myHash) {
+    const t0 = copies[0];
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "token-tile";
+    const thumb = document.createElement("div");
+    thumb.className = "token-tile-thumb";
+    thumb.innerHTML = '<div class="token-thumb-ph">\u{1F3B4}</div>';
+    void fillCardThumb(thumb, collectionId);
+    const cap = document.createElement("div");
+    cap.className = "token-tile-cap";
+    cap.innerHTML = `<span class="token-tile-name">${escapeHtml(t0.collectionName ?? "Collection")}</span>${copies.length > 1 ? `<span class="count">\xD7${copies.length}</span>` : t0.kind === "edition" ? '<span class="count">edition</span>' : ""}`;
+    tile.append(thumb, cap);
+    tile.onclick = () => openTokenDetail(collectionId, copies, myHash);
+    return tile;
+  }
+  function openTokenDetail(collectionId, copies, myHash) {
+    const body = $("tokenModalBody");
+    body.innerHTML = "";
+    body.append(copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash, true));
+    $("tokenModal").style.display = "flex";
+  }
+  function closeTokenModal() {
+    $("tokenModal").style.display = "none";
+    $("tokenModalBody").innerHTML = "";
+  }
+  function setNftView(v) {
+    if (nftView === v) return;
+    nftView = v;
+    try {
+      localStorage.setItem("p:nftview", v);
+    } catch {
+    }
+    updateViewToggle();
+    renderTokens();
+  }
+  function updateViewToggle() {
+    $("btnViewList").classList.toggle("active", nftView === "list");
+    $("btnViewGrid").classList.toggle("active", nftView === "grid");
   }
   async function warmAndRerender(collectionIds) {
     await Promise.all(collectionIds.map(ensureCollectionMeta));
@@ -20727,11 +20776,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     card2.append(tokenThumbEl(t.collectionId), body);
     return card2;
   }
-  function groupCard(collectionId, copies, myHash) {
+  function groupCard(collectionId, copies, myHash, startOpen = false) {
     const t0 = copies[0];
     const isEdition = t0.kind === "edition";
     const card2 = document.createElement("div");
     card2.className = "token token-group";
+    if (startOpen) card2.classList.add("open");
     const head = document.createElement("div");
     head.className = "token-group-head";
     const headBody = document.createElement("div");
@@ -20741,11 +20791,11 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     <div class="mono token-ids">collection <span class="copy-id" data-copy="${collectionId}" title="${collectionId} \u2014 click to copy">${short(collectionId)}</span> \xB7 ${copies.length} copies held</div>`;
     const chev = document.createElement("span");
     chev.className = "chev";
-    chev.textContent = "\u25B8";
+    chev.textContent = startOpen ? "\u25BE" : "\u25B8";
     head.append(tokenThumbEl(collectionId), headBody, chev);
     const items = document.createElement("div");
     items.className = "token-group-items";
-    items.hidden = true;
+    items.hidden = !startOpen;
     for (const t of copies) {
       const row = document.createElement("div");
       row.className = "token-copy";
@@ -21401,9 +21451,23 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
   function init() {
     store2 = new PharLapStore();
     useKey(loadKey());
+    try {
+      if (localStorage.getItem("p:nftview") === "grid") nftView = "grid";
+    } catch {
+    }
+    updateViewToggle();
     renderTokens();
     initTabs();
     document.addEventListener("click", onCopyClick);
+    $("btnViewList").onclick = () => setNftView("list");
+    $("btnViewGrid").onclick = () => setNftView("grid");
+    $("tokenModalClose").onclick = () => closeTokenModal();
+    $("tokenModal").addEventListener("click", (e) => {
+      if (e.target === $("tokenModal")) closeTokenModal();
+    });
+    $("tokenModalBody").addEventListener("click", (e) => {
+      if (e.target.closest("button") != null) $("tokenModal").style.display = "none";
+    }, true);
     $("btnRefresh").onclick = () => void refreshBalance();
     $("btnMint").onclick = () => void onMint();
     $("btnV2Probe").onclick = () => void onV2Probe();
