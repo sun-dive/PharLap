@@ -20178,6 +20178,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function renderWallet() {
     $("address").textContent = address;
     $("pubkey").textContent = pubKeyHex;
+    const mine = document.getElementById("myIdenticon");
+    if (mine) mine.innerHTML = identiconSvg(pubKeyHex, 22);
     $("wif").value = key.toWif();
     hideWif();
   }
@@ -21150,13 +21152,30 @@ Proceed?`
       return "";
     }
   }
+  function identiconSvg(pubKeyHex2, px = 18) {
+    const h = Hash_exports.sha256(utils_exports.toArray(pubKeyHex2.toLowerCase(), "hex"));
+    const hue = (h[0] << 8 | h[1]) % 360;
+    const fg = `hsl(${hue},62%,58%)`;
+    const bg = `hsl(${hue},22%,20%)`;
+    const N2 = 5;
+    let cells = "";
+    for (let y = 0; y < N2; y++) {
+      for (let x = 0; x < 3; x++) {
+        if ((h[2 + y * 3 + x] & 1) === 0) continue;
+        cells += `<rect x="${x}" y="${y}" width="1" height="1"/>`;
+        if (x < 2) cells += `<rect x="${N2 - 1 - x}" y="${y}" width="1" height="1"/>`;
+      }
+    }
+    return `<svg class="identicon" width="${px}" height="${px}" viewBox="0 0 ${N2} ${N2}" aria-hidden="true"><rect width="${N2}" height="${N2}" fill="${bg}"/><g fill="${fg}">${cells}</g></svg>`;
+  }
   function nameChip(pubKeyHex2, opts = {}) {
     const info = displayName(pubKeyHex2);
+    const ico = identiconSvg(pubKeyHex2);
     const chip = `<span class="copy-id" data-copy="${pubKeyHex2}" title="${pubKeyHex2} \u2014 click to copy">${escapeHtml(info.name)}</span>`;
-    if (info.verified) return chip;
+    if (info.verified) return ico + chip;
     const warn = ` <span class="unverified" title="Self-claimed name \u2014 verify the key on hover before trusting it">\u26A0 unverified</span>`;
     const save = opts.save ? ` <button class="alias-save" data-pk="${pubKeyHex2}" data-alias="${escapeHtml(info.alias ?? "")}">save</button>` : "";
-    return chip + warn + save;
+    return ico + chip + warn + save;
   }
   function onAliasSaveClick(e) {
     const btn = e.target?.closest(".alias-save");
@@ -21218,7 +21237,7 @@ Proceed?`
   function contactRow(pk, alias, kind) {
     const row = document.createElement("div");
     row.className = "contact-row";
-    row.innerHTML = `<span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} \u2014 click to copy">${short(pk)}</span>`;
+    row.innerHTML = `${identiconSvg(pk, 24)} <span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} \u2014 click to copy">${short(pk)}</span>`;
     const acts = document.createElement("span");
     acts.className = "contact-acts";
     const mkBtn = (label, fn) => {

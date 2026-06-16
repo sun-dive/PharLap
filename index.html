@@ -111,6 +111,7 @@
     .token-ids { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .copy-id { cursor:pointer; border-bottom:1px dotted var(--line); }
     .copy-id:hover { color:var(--fg); border-bottom-color:var(--accent2); }
+    .identicon { vertical-align:middle; border-radius:4px; margin-right:5px; flex:0 0 auto; }
     .unverified { color:#e3b341; font-size:11px; cursor:help; }
     .alias-save { font-size:11px; padding:1px 8px; vertical-align:baseline; }
     .contact-row { display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; }
@@ -378,7 +379,8 @@
     <section class="tabpanel" id="tab-messages" role="tabpanel">
     <div class="card">
       <label>Your alias (optional — a display name others see instead of your key)</label>
-      <div class="row" style="margin-bottom:6px">
+      <div class="row" style="margin-bottom:6px;align-items:center">
+        <span id="myIdenticon" title="Your key-derived avatar — others see this; it can't be faked" style="display:inline-flex"></span>
         <input id="myAlias" placeholder="@yourname" style="flex:1" />
         <button id="btnSaveAlias" class="secondary">Save alias</button>
         <button id="btnContacts" class="secondary">📇 Contacts</button>
