@@ -18860,6 +18860,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var PART_FILE_INLINE = 3;
   var PART_FILE_REF = 4;
   var PART_ALIAS = 5;
+  var PART_TIME = 6;
+  function encodeTimeMs(ms) {
+    const out = [];
+    let v = Math.max(0, Math.floor(ms));
+    for (let i = 0; i < 6; i++) {
+      out.push(v & 255);
+      v = Math.floor(v / 256);
+    }
+    return out;
+  }
+  function decodeTimeMs(b) {
+    let n = 0;
+    for (let i = b.length - 1; i >= 0; i--) n = n * 256 + b[i];
+    return n;
+  }
   function writeVarInt(n) {
     if (n < 253) return [n];
     if (n <= 65535) return [253, n & 255, n >> 8 & 255];
@@ -18893,6 +18908,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       }
       case "alias":
         return { type: PART_ALIAS, value: utils_exports.toArray(p.alias, "utf8") };
+      case "time":
+        return { type: PART_TIME, value: encodeTimeMs(p.ms) };
     }
   }
   function encodeParts(parts) {
@@ -18938,6 +18955,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           case PART_ALIAS:
             parts.push({ kind: "alias", alias: utils_exports.toUTF8(value) });
             break;
+          case PART_TIME:
+            parts.push({ kind: "time", ms: decodeTimeMs(value) });
+            break;
           default:
             return null;
         }
@@ -18951,7 +18971,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const encrypt = opts.encrypt ?? true;
     const senderPub = opts.senderPriv.toPublicKey().encode(true);
     if (senderPub.length !== 33) throw new Error("senderPub must be 33 bytes");
-    const allParts = opts.senderAlias != null && opts.senderAlias !== "" ? [{ kind: "alias", alias: opts.senderAlias }, ...opts.parts] : opts.parts;
+    const meta = [];
+    if (opts.senderAlias != null && opts.senderAlias !== "") meta.push({ kind: "alias", alias: opts.senderAlias });
+    if (opts.sentAt != null && opts.sentAt > 0) meta.push({ kind: "time", ms: opts.sentAt });
+    const allParts = meta.length > 0 ? [...meta, ...opts.parts] : opts.parts;
     let payload = encodeParts(allParts);
     let flags = 0;
     const c = await compressIfSmaller(payload);
@@ -18963,10 +18986,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (encrypt) flags |= FLAG_ENCRYPTED;
     return [ENVELOPE_VERSION, flags, ...senderPub, ...body];
   }
-  function splitAlias(parts) {
+  function splitMeta(parts) {
     const aliasPart = parts.find((p) => p.kind === "alias");
-    const senderAlias = aliasPart != null && aliasPart.kind === "alias" ? aliasPart.alias : void 0;
-    return { senderAlias, parts: parts.filter((p) => p.kind !== "alias") };
+    const timePart = parts.find((p) => p.kind === "time");
+    return {
+      senderAlias: aliasPart != null && aliasPart.kind === "alias" ? aliasPart.alias : void 0,
+      sentAt: timePart != null && timePart.kind === "time" ? timePart.ms : void 0,
+      parts: parts.filter((p) => p.kind !== "alias" && p.kind !== "time")
+    };
   }
   async function openEnvelope(envelope, recipientPriv) {
     if (envelope.length < 35) return null;
@@ -18995,8 +19022,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     const decoded = decodeParts(tlv);
     if (decoded == null) return null;
-    const { senderAlias, parts } = splitAlias(decoded);
-    return { senderPubKeyHex, encrypted, parts, senderAlias };
+    const { senderAlias, sentAt, parts } = splitMeta(decoded);
+    return { senderPubKeyHex, encrypted, parts, senderAlias, sentAt };
   }
   async function openPublicEnvelope(envelope) {
     if (envelope.length < 35 || envelope[0] !== ENVELOPE_VERSION) return null;
@@ -19012,8 +19039,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     const decoded = decodeParts(tlv);
     if (decoded == null) return null;
-    const { senderAlias, parts } = splitAlias(decoded);
-    return { senderPubKeyHex, encrypted: false, parts, senderAlias };
+    const { senderAlias, sentAt, parts } = splitMeta(decoded);
+    return { senderPubKeyHex, encrypted: false, parts, senderAlias, sentAt };
   }
 
   // src/messageBuilder.ts
@@ -19057,7 +19084,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       recipientPubKeyHex: params.toPubKeyHex,
       parts: params.parts,
       encrypt: params.encrypt,
-      senderAlias: params.senderAlias
+      senderAlias: params.senderAlias,
+      sentAt: params.sentAt ?? Date.now()
     });
     const estFee = Math.ceil((350 + envelope.length) * feePerKb / 1e3);
     const target = 2 * PHARLAP_OUTPUT_SATS + estFee + 500;
@@ -19119,12 +19147,13 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           encrypted: opened.encrypted,
           parts: opened.parts,
           senderAlias: opened.senderAlias,
+          sentAt: opened.sentAt,
           height: heightByTx.get(txId) ?? 0
         });
       }
     }
     const rank = (m) => m.height != null && m.height > 0 ? m.height : Number.MAX_SAFE_INTEGER;
-    return found.sort((a, b) => rank(b) - rank(a));
+    return found.sort((a, b) => rank(b) - rank(a) || (b.sentAt ?? 0) - (a.sentAt ?? 0));
   }
 
   // src/broadcast.ts
@@ -20101,6 +20130,13 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var val = (id) => $(id).value.trim();
   var short = (s2, n = 10) => s2.length > 2 * n ? `${s2.slice(0, n)}\u2026${s2.slice(-n)}` : s2;
   var kb = (bytes2) => bytes2 < 1024 ? `${bytes2} B` : bytes2 < 1024 * 1024 ? `${(bytes2 / 1024).toFixed(1)} KB` : `${(bytes2 / (1024 * 1024)).toFixed(1)} MB`;
+  var fmtTime = (ms) => {
+    try {
+      return new Date(ms).toLocaleString();
+    } catch {
+      return "";
+    }
+  };
   function setStatus(msg, kind = "info") {
     const el = $("status");
     el.textContent = msg;
@@ -20461,6 +20497,7 @@ Proceed?`
       const filePart = m.parts.find((p) => p.kind === "file");
       card2.innerHTML = `
       <div class="mono">from ${senderChip(m.senderPubKeyHex)} ${m.encrypted ? "\u{1F512} encrypted" : "\u{1F310} public"}</div>
+      ${m.sentAt ? `<div class="muted" style="font-size:11px" title="Sender's clock (self-asserted)">\u{1F552} ${escapeHtml(fmtTime(m.sentAt))}${m.height ? "" : " \xB7 pending"}</div>` : m.height ? "" : '<div class="muted" style="font-size:11px">pending</div>'}
       ${textPart && textPart.kind === "text" ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ""}
       ${hasKey ? '<div class="muted" style="font-size:12px">\u{1F511} carries a content key</div>' : ""}
     `;

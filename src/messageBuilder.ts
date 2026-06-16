@@ -91,11 +91,13 @@ export async function sendMessage(provider: WalletProvider, key: PrivateKey, par
   feePerKb?: number
   /** Sender's self-asserted display alias, carried so the recipient can show @name. */
   senderAlias?: string
+  /** Send time (UTC epoch ms); defaults to now. Carried so recipients can show + order by it. */
+  sentAt?: number
 }): Promise<{ txId: string; messageOutpoint: { txId: string; outputIndex: number } }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
   const envelope = await buildEnvelope({
     senderPriv: key, recipientPubKeyHex: params.toPubKeyHex, parts: params.parts, encrypt: params.encrypt,
-    senderAlias: params.senderAlias,
+    senderAlias: params.senderAlias, sentAt: params.sentAt ?? Date.now(),
   })
   const estFee = Math.ceil(((350 + envelope.length) * feePerKb) / 1000)
   const target = 2 * PHARLAP_OUTPUT_SATS + estFee + 500
@@ -120,6 +122,8 @@ export interface IncomingMessage {
   parts: Part[]
   /** Sender's self-asserted alias (if they attached one). */
   senderAlias?: string
+  /** Sender's self-asserted send time, UTC epoch ms (if attached) — display + tiebreak ordering. */
+  sentAt?: number
   /** Block height of the message tx (0 = unconfirmed/unknown) — orders the inbox newest-first. */
   height?: number
 }
@@ -152,13 +156,12 @@ export async function scanIncomingMessages(provider: WalletProvider, recipientPr
       found.push({
         txId, outputIndex: i, ref: parsed.fields.ref,
         senderPubKeyHex: opened.senderPubKeyHex, encrypted: opened.encrypted, parts: opened.parts,
-        senderAlias: opened.senderAlias, height: heightByTx.get(txId) ?? 0,
+        senderAlias: opened.senderAlias, sentAt: opened.sentAt, height: heightByTx.get(txId) ?? 0,
       })
     }
   }
-  // Newest first: unconfirmed (height 0/unknown) on top, then highest block height. Use a finite sentinel
-  // so two unconfirmed messages compare to 0 (a stable tie) rather than Infinity−Infinity = NaN, which
-  // would scramble the sort.
+  // Newest first: unconfirmed (height 0/unknown) on top, then highest block height, then sender send-time.
+  // Finite sentinel for unconfirmed so ties compare to 0 (stable) rather than Infinity−Infinity = NaN.
   const rank = (m: IncomingMessage): number => (m.height != null && m.height > 0 ? m.height : Number.MAX_SAFE_INTEGER)
-  return found.sort((a, b) => rank(b) - rank(a))
+  return found.sort((a, b) => (rank(b) - rank(a)) || ((b.sentAt ?? 0) - (a.sentAt ?? 0)))
 }
