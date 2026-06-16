@@ -20002,6 +20002,22 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function cacheNoThumb(collectionId) {
     store(collectionId, NONE);
   }
+  var MIME_PREFIX = "p:mime:";
+  var NO_FILE = "\0";
+  function cachedMime(collectionId) {
+    try {
+      const v = localStorage.getItem(MIME_PREFIX + collectionId);
+      return v == null ? void 0 : v === NO_FILE ? null : v;
+    } catch {
+      return void 0;
+    }
+  }
+  function cacheMime(collectionId, mimeType) {
+    try {
+      localStorage.setItem(MIME_PREFIX + collectionId, mimeType == null || mimeType === "" ? NO_FILE : mimeType);
+    } catch {
+    }
+  }
   async function makeThumb(collectionId, bytes2, mimeType) {
     if (typeof createImageBitmap === "undefined" || typeof document === "undefined") return null;
     try {
@@ -20333,12 +20349,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     host.innerHTML = "";
     for (const m of msgs) {
-      const card = document.createElement("div");
-      card.className = "token";
+      const card2 = document.createElement("div");
+      card2.className = "token";
       const textPart = m.parts.find((p) => p.kind === "text");
       const hasKey = m.parts.some((p) => p.kind === "key");
       const filePart = m.parts.find((p) => p.kind === "file");
-      card.innerHTML = `
+      card2.innerHTML = `
       <div class="mono">from ${short(m.senderPubKeyHex)} ${m.encrypted ? "\u{1F512} encrypted" : "\u{1F310} public"}</div>
       ${textPart && textPart.kind === "text" ? `<div class="state">${escapeHtml(textPart.text)}</div>` : ""}
       ${hasKey ? '<div class="muted" style="font-size:12px">\u{1F511} carries a content key</div>' : ""}
@@ -20351,9 +20367,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const actions = document.createElement("div");
         actions.className = "actions";
         actions.append(btn);
-        card.append(actions);
+        card2.append(actions);
       }
-      host.append(card);
+      host.append(card2);
     }
   }
   var nameCache = /* @__PURE__ */ new Map();
@@ -20551,7 +20567,28 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     $("viewerContent").innerHTML = "";
   }
-  function renderTokens() {
+  var CATS = [
+    { key: "image", label: "Images", icon: "\u{1F5BC}\uFE0F" },
+    { key: "audio", label: "Audio", icon: "\u{1F3B5}" },
+    { key: "video", label: "Video", icon: "\u{1F3AC}" },
+    { key: "document", label: "Documents", icon: "\u{1F4C4}" },
+    { key: "text", label: "Text", icon: "\u{1F4DD}" },
+    { key: "archive", label: "Archives", icon: "\u{1F5DC}\uFE0F" },
+    { key: "other", label: "Other", icon: "\u{1F3B4}" }
+  ];
+  function mimeCategory(mime) {
+    if (mime == null || mime === "") return "other";
+    const m = mime.toLowerCase();
+    if (m.startsWith("image/")) return "image";
+    if (m.startsWith("audio/")) return "audio";
+    if (m.startsWith("video/")) return "video";
+    if (m.startsWith("text/")) return "text";
+    if (m === "application/pdf" || m.includes("msword") || m.includes("officedocument") || m.includes("ms-excel") || m.includes("ms-powerpoint") || m.includes("opendocument") || m === "application/rtf" || m === "application/epub+zip") return "document";
+    if (m === "application/json" || m === "application/xml" || m.endsWith("+xml")) return "text";
+    if (m === "application/zip" || m === "application/gzip" || m === "application/x-tar" || m.includes("compressed") || m.includes("7z") || m.includes("rar") || m === "application/x-bzip2") return "archive";
+    return "other";
+  }
+  function renderTokens(skipWarm = false) {
     const host = $("tokens");
     const active = [...store2.active()].sort((a, b) => {
       const ha = a.heightHint ?? Infinity;
@@ -20563,7 +20600,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       host.innerHTML = '<p class="muted">No NFTs yet. Publish a collection or Check Incoming.</p>';
       return;
     }
-    host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held \u2014 newest first</p>`;
     const myHash = utils_exports.toHex(Hash_exports.hash160(key.toPublicKey().encode(true)));
     const groups = /* @__PURE__ */ new Map();
     for (const t of active) {
@@ -20571,9 +20607,50 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       if (g != null) g.push(t);
       else groups.set(t.collectionId, [t]);
     }
+    const buckets = /* @__PURE__ */ new Map();
+    let anyPending = false;
     for (const [collectionId, copies] of groups) {
-      host.append(copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash));
+      const mime = cachedMime(collectionId);
+      const cat = mime === void 0 ? skipWarm ? "other" : (anyPending = true, "pending") : mimeCategory(mime);
+      const arr = buckets.get(cat);
+      if (arr != null) arr.push([collectionId, copies]);
+      else buckets.set(cat, [[collectionId, copies]]);
     }
+    host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held \u2014 newest first</p>`;
+    const single = CATS.filter((c) => buckets.get(c.key)?.length).length <= 1 && !anyPending;
+    for (const c of CATS) {
+      const items = buckets.get(c.key);
+      if (items == null || items.length === 0) continue;
+      if (single) {
+        for (const [cid, copies] of items) host.append(card(cid, copies, myHash));
+      } else host.append(sectionEl(`${c.icon} ${c.label}`, items, myHash));
+    }
+    const pending = buckets.get("pending");
+    if (pending?.length) host.append(sectionEl("\u23F3 Identifying type\u2026", pending, myHash));
+    if (anyPending) void warmAndRerender([...groups.keys()]);
+  }
+  function card(collectionId, copies, myHash) {
+    return copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash);
+  }
+  function sectionEl(label, items, myHash) {
+    const sec = document.createElement("div");
+    sec.className = "token-section";
+    const head = document.createElement("div");
+    head.className = "token-section-head";
+    head.innerHTML = `<span class="chev">\u25BE</span> <span class="token-section-label">${label}</span> <span class="count">${items.length}</span>`;
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "token-section-body";
+    for (const [cid, copies] of items) bodyEl.append(card(cid, copies, myHash));
+    head.onclick = () => {
+      bodyEl.hidden = !bodyEl.hidden;
+      head.querySelector(".chev").textContent = bodyEl.hidden ? "\u25B8" : "\u25BE";
+    };
+    sec.append(head, bodyEl);
+    return sec;
+  }
+  async function warmAndRerender(collectionIds) {
+    await Promise.all(collectionIds.map(ensureCollectionMeta));
+    renderTokens(true);
   }
   function tokenThumbEl(collectionId) {
     const thumb = document.createElement("div");
@@ -20637,8 +20714,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return actions;
   }
   function singleCard(t, myHash) {
-    const card = document.createElement("div");
-    card.className = "token";
+    const card2 = document.createElement("div");
+    card2.className = "token";
     const body = document.createElement("div");
     body.className = "token-body";
     const isEdition = t.kind === "edition";
@@ -20647,14 +20724,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     <div class="mono token-ids">collection <span class="copy-id" data-copy="${t.collectionId}" title="${t.collectionId} \u2014 click to copy">${short(t.collectionId)}</span> \xB7 utxo <span class="copy-id" data-copy="${t.txId}" title="${t.txId} \u2014 click to copy">${short(t.txId)}</span>:${t.outputIndex}</div>
     ${tokenExtrasHtml(t)}`;
     body.append(tokenActions(t, myHash));
-    card.append(tokenThumbEl(t.collectionId), body);
-    return card;
+    card2.append(tokenThumbEl(t.collectionId), body);
+    return card2;
   }
   function groupCard(collectionId, copies, myHash) {
     const t0 = copies[0];
     const isEdition = t0.kind === "edition";
-    const card = document.createElement("div");
-    card.className = "token token-group";
+    const card2 = document.createElement("div");
+    card2.className = "token token-group";
     const head = document.createElement("div");
     head.className = "token-group-head";
     const headBody = document.createElement("div");
@@ -20680,14 +20757,15 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       if (e.target.closest(".copy-id") != null) return;
       items.hidden = !items.hidden;
       chev.textContent = items.hidden ? "\u25B8" : "\u25BE";
-      card.classList.toggle("open", !items.hidden);
+      card2.classList.toggle("open", !items.hidden);
     };
-    card.append(head, items);
-    return card;
+    card2.append(head, items);
+    return card2;
   }
-  var thumbInFlight = /* @__PURE__ */ new Map();
+  var metaInFlight = /* @__PURE__ */ new Map();
   async function fillCardThumb(thumbEl, collectionId) {
-    const url = await resolveThumb(collectionId);
+    const cached = cachedThumb(collectionId);
+    const url = cached != null ? cached : (await ensureCollectionMeta(collectionId), cachedThumb(collectionId));
     if (url == null) return;
     const img = document.createElement("img");
     img.className = "token-thumb-img";
@@ -20696,22 +20774,20 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     thumbEl.innerHTML = "";
     thumbEl.append(img);
   }
-  async function resolveThumb(collectionId) {
-    const cached = cachedThumb(collectionId);
-    if (cached != null) return cached;
-    if (thumbResolved(collectionId)) return null;
-    let p = thumbInFlight.get(collectionId);
+  async function ensureCollectionMeta(collectionId) {
+    if (thumbResolved(collectionId) && cachedMime(collectionId) !== void 0) return;
+    let p = metaInFlight.get(collectionId);
     if (p == null) {
-      p = fetchAndMakeThumb(collectionId);
-      thumbInFlight.set(collectionId, p);
+      p = fetchCollectionMeta(collectionId);
+      metaInFlight.set(collectionId, p);
     }
     try {
-      return await p;
+      await p;
     } finally {
-      thumbInFlight.delete(collectionId);
+      metaInFlight.delete(collectionId);
     }
   }
-  async function fetchAndMakeThumb(collectionId) {
+  async function fetchCollectionMeta(collectionId) {
     try {
       const tx1 = await provider.getSourceTransaction(collectionId);
       let coverBytes;
@@ -20729,9 +20805,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const t = parseTemplateScript(o.lockingScript);
         if (t) template = t.fields;
       }
+      cacheMime(collectionId, file?.mimeType ?? null);
       if (coverBytes?.length) {
-        const u = await makeThumb(collectionId, coverBytes, coverMime);
-        if (u != null) return u;
+        if (await makeThumb(collectionId, coverBytes, coverMime) != null) return;
       }
       const rules = template != null ? decodeTokenRules(template.tokenRules) : null;
       if (file != null && !rules?.isEncrypted && file.mimeType.startsWith("image/")) {
@@ -20742,13 +20818,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           } catch {
           }
         }
-        const u = await makeThumb(collectionId, bytes2, file.mimeType);
-        if (u != null) return u;
+        if (await makeThumb(collectionId, bytes2, file.mimeType) != null) return;
       }
       cacheNoThumb(collectionId);
-      return null;
     } catch {
-      return null;
     }
   }
   function safeUtf8(hex) {

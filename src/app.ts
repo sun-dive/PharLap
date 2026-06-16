@@ -23,7 +23,7 @@ import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
 import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
-import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb } from './thumbs.ts'
+import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime } from './thumbs.ts'
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
 import { decompress } from './compress.ts'
 
@@ -529,7 +529,33 @@ function closeViewer(): void {
 }
 
 // ─── token list ─────────────────────────────────────────────────────
-function renderTokens(): void {
+// MIME → display category. Ordered; each held collection lands in exactly one collapsible section.
+type Cat = 'image' | 'audio' | 'video' | 'document' | 'text' | 'archive' | 'other'
+const CATS: { key: Cat; label: string; icon: string }[] = [
+  { key: 'image', label: 'Images', icon: '🖼️' },
+  { key: 'audio', label: 'Audio', icon: '🎵' },
+  { key: 'video', label: 'Video', icon: '🎬' },
+  { key: 'document', label: 'Documents', icon: '📄' },
+  { key: 'text', label: 'Text', icon: '📝' },
+  { key: 'archive', label: 'Archives', icon: '🗜️' },
+  { key: 'other', label: 'Other', icon: '🎴' },
+]
+function mimeCategory(mime: string | null): Cat {
+  if (mime == null || mime === '') return 'other'
+  const m = mime.toLowerCase()
+  if (m.startsWith('image/')) return 'image'
+  if (m.startsWith('audio/')) return 'audio'
+  if (m.startsWith('video/')) return 'video'
+  if (m.startsWith('text/')) return 'text'
+  if (m === 'application/pdf' || m.includes('msword') || m.includes('officedocument') || m.includes('ms-excel') ||
+      m.includes('ms-powerpoint') || m.includes('opendocument') || m === 'application/rtf' || m === 'application/epub+zip') return 'document'
+  if (m === 'application/json' || m === 'application/xml' || m.endsWith('+xml')) return 'text'
+  if (m === 'application/zip' || m === 'application/gzip' || m === 'application/x-tar' || m.includes('compressed') ||
+      m.includes('7z') || m.includes('rar') || m === 'application/x-bzip2') return 'archive'
+  return 'other'
+}
+
+function renderTokens(skipWarm = false): void {
   const host = $('tokens')
   // Newest first by acquisition height (unconfirmed/unknown = newest), so the order is meaningful even
   // after a bulk from-chain recovery (where insertion order is scan order, not chronological). Tiebreak
@@ -541,7 +567,6 @@ function renderTokens(): void {
     return (b.addedAt ?? '').localeCompare(a.addedAt ?? '')
   })
   if (active.length === 0) { host.innerHTML = '<p class="muted">No NFTs yet. Publish a collection or Check Incoming.</p>'; return }
-  host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held — newest first</p>`
   const myHash = Utils.toHex(Hash.hash160(key.toPublicKey().encode(true) as number[]))
   // Group identical holdings (same collection = interchangeable copies/editions), preserving sort order
   // by first appearance. A single copy renders as a normal card; multiples collapse into one group card.
@@ -550,9 +575,58 @@ function renderTokens(): void {
     const g = groups.get(t.collectionId)
     if (g != null) g.push(t); else groups.set(t.collectionId, [t])
   }
+  // Bucket each collection by content type. A collection whose MIME isn't cached yet sits in a temporary
+  // "identifying…" section until the metadata fetch warms the cache (then we re-render once). On the warm
+  // re-render (skipWarm) any still-unresolved collection has failed to fetch — show it under Other.
+  const buckets = new Map<Cat | 'pending', Array<[string, StoredToken[]]>>()
+  let anyPending = false
   for (const [collectionId, copies] of groups) {
-    host.append(copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash))
+    const mime = cachedMime(collectionId)
+    const cat: Cat | 'pending' = mime === undefined ? (skipWarm ? 'other' : (anyPending = true, 'pending')) : mimeCategory(mime)
+    const arr = buckets.get(cat); if (arr != null) arr.push([collectionId, copies]); else buckets.set(cat, [[collectionId, copies]])
   }
+
+  host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held — newest first</p>`
+  const single = CATS.filter(c => buckets.get(c.key)?.length).length <= 1 && !anyPending
+  for (const c of CATS) {
+    const items = buckets.get(c.key)
+    if (items == null || items.length === 0) continue
+    // With only one type present, skip the section chrome — a lone header adds nothing.
+    if (single) { for (const [cid, copies] of items) host.append(card(cid, copies, myHash)) }
+    else host.append(sectionEl(`${c.icon} ${c.label}`, items, myHash))
+  }
+  const pending = buckets.get('pending')
+  if (pending?.length) host.append(sectionEl('⏳ Identifying type…', pending, myHash))
+
+  if (anyPending) void warmAndRerender([...groups.keys()])
+}
+
+function card(collectionId: string, copies: StoredToken[], myHash: string): HTMLElement {
+  return copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash)
+}
+
+/** A collapsible type section: a clickable header (icon + label + count) over its cards. */
+function sectionEl(label: string, items: Array<[string, StoredToken[]]>, myHash: string): HTMLElement {
+  const sec = document.createElement('div')
+  sec.className = 'token-section'
+  const head = document.createElement('div')
+  head.className = 'token-section-head'
+  head.innerHTML = `<span class="chev">▾</span> <span class="token-section-label">${label}</span> <span class="count">${items.length}</span>`
+  const bodyEl = document.createElement('div')
+  bodyEl.className = 'token-section-body'
+  for (const [cid, copies] of items) bodyEl.append(card(cid, copies, myHash))
+  head.onclick = () => {
+    bodyEl.hidden = !bodyEl.hidden
+    head.querySelector('.chev')!.textContent = bodyEl.hidden ? '▸' : '▾'
+  }
+  sec.append(head, bodyEl)
+  return sec
+}
+
+/** Warm the MIME/thumbnail cache for all held collections, then re-render once so they settle into sections. */
+async function warmAndRerender(collectionIds: string[]): Promise<void> {
+  await Promise.all(collectionIds.map(ensureCollectionMeta))
+  renderTokens(true)
 }
 
 /** A card thumbnail element (placeholder, then filled async from the collection's public cover/image). */
@@ -672,13 +746,14 @@ function groupCard(collectionId: string, copies: StoredToken[], myHash: string):
   return card
 }
 
-// Thumbnails are derived from a collection's PUBLIC cover image (or a public image file) and cached locally
-// (see thumbs.ts) — never stored on-chain. The fetch is deduped per collection and runs async so the card
-// list renders instantly; the placeholder stays for collections with no thumbnailable image.
-const thumbInFlight = new Map<string, Promise<string | null>>()
+// Per-collection card metadata (thumbnail + content MIME type) is derived from ONE TX1 fetch, deduped per
+// collection and cached locally (see thumbs.ts) — never stored on-chain. The fetch runs async so the card
+// list renders instantly; thumbnails fill in and the type sections settle once the cache warms.
+const metaInFlight = new Map<string, Promise<void>>()
 
 async function fillCardThumb(thumbEl: HTMLElement, collectionId: string): Promise<void> {
-  const url = await resolveThumb(collectionId)
+  const cached = cachedThumb(collectionId)
+  const url = cached != null ? cached : (await ensureCollectionMeta(collectionId), cachedThumb(collectionId))
   if (url == null) return // keep the placeholder
   const img = document.createElement('img')
   img.className = 'token-thumb-img'
@@ -688,17 +763,15 @@ async function fillCardThumb(thumbEl: HTMLElement, collectionId: string): Promis
   thumbEl.append(img)
 }
 
-async function resolveThumb(collectionId: string): Promise<string | null> {
-  const cached = cachedThumb(collectionId)
-  if (cached != null) return cached
-  if (thumbResolved(collectionId)) return null // negative-cached: no image for this collection
-  let p = thumbInFlight.get(collectionId)
-  if (p == null) { p = fetchAndMakeThumb(collectionId); thumbInFlight.set(collectionId, p) }
-  try { return await p } finally { thumbInFlight.delete(collectionId) }
+/** Resolve (and cache) a collection's thumbnail + MIME type from its TX1, deduped per collection. */
+async function ensureCollectionMeta(collectionId: string): Promise<void> {
+  if (thumbResolved(collectionId) && cachedMime(collectionId) !== undefined) return
+  let p = metaInFlight.get(collectionId)
+  if (p == null) { p = fetchCollectionMeta(collectionId); metaInFlight.set(collectionId, p) }
+  try { await p } finally { metaInFlight.delete(collectionId) }
 }
 
-/** Fetch TX1, pick the best public image (cover → public image file), and downscale it to a cached thumb. */
-async function fetchAndMakeThumb(collectionId: string): Promise<string | null> {
+async function fetchCollectionMeta(collectionId: string): Promise<void> {
   try {
     const tx1 = await provider.getSourceTransaction(collectionId)
     let coverBytes: number[] | undefined
@@ -711,18 +784,20 @@ async function fetchAndMakeThumb(collectionId: string): Promise<string | null> {
       const f = parseFileScript(o.lockingScript); if (f) file = f.fields
       const t = parseTemplateScript(o.lockingScript); if (t) template = t.fields
     }
-    // Prefer the public storefront cover; else a public, image-typed embedded file (decompress if needed).
-    if (coverBytes?.length) { const u = await makeThumb(collectionId, coverBytes, coverMime); if (u != null) return u }
+    // MIME for the type sections = the embedded content file's type (null = no file). Plaintext even when
+    // the bytes are encrypted, so encrypted collections still categorize.
+    cacheMime(collectionId, file?.mimeType ?? null)
+    // Thumbnail: prefer the public storefront cover; else a public, image-typed embedded file (decompress if needed).
+    if (coverBytes?.length) { if (await makeThumb(collectionId, coverBytes, coverMime) != null) return }
     const rules = template != null ? decodeTokenRules(template.tokenRules) : null
     if (file != null && !(rules?.isEncrypted) && file.mimeType.startsWith('image/')) {
       let bytes = file.fileBytes
       if (rules?.isCompressed) { try { bytes = await decompress(bytes) } catch { /* use raw */ } }
-      const u = await makeThumb(collectionId, bytes, file.mimeType); if (u != null) return u
+      if (await makeThumb(collectionId, bytes, file.mimeType) != null) return
     }
     cacheNoThumb(collectionId)
-    return null
   } catch {
-    return null // transient fetch/parse error — don't negative-cache, allow a retry on the next render
+    /* transient fetch/parse error — leave unresolved so the next render retries */
   }
 }
 
