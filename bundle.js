@@ -17419,6 +17419,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       changeSats
     };
   }
+  var SPEND_CANCELLED = "SPEND_CANCELLED";
+  function spentSats(selected, finalChangeSats) {
+    return selected.reduce((s2, u) => s2 + u.satoshis, 0) - finalChangeSats;
+  }
   async function createCollection(provider2, key2, params) {
     const sats = params.outputSats ?? PHARLAP_OUTPUT_SATS;
     const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
@@ -17459,6 +17463,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       outputSats: sats,
       feePerKb
     });
+    if (params.confirmSpend != null && !await params.confirmSpend(spentSats(selected, t2.changeSats))) {
+      throw new Error(SPEND_CANCELLED);
+    }
     await provider2.broadcast(t1.tx.toHex());
     provider2.registerPendingTx(
       t1.tx1Id,
@@ -18407,6 +18414,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       mintCount,
       feePerKb
     });
+    if (params.confirmSpend != null && !await params.confirmSpend(spentSats(selected, t2.changeSats))) {
+      throw new Error(SPEND_CANCELLED);
+    }
     await provider2.broadcast(t1.tx.toHex());
     provider2.registerPendingTx(
       t1.tx1Id,
@@ -18444,6 +18454,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const selected = selectFunding(await getSafeUtxos(provider2), target);
     const funding = await toFundingInputs(provider2, selected);
     const rep = await buildReplicateTx({ edition, terms: params.terms, buyerKey, funding, note: params.note, feePerKb });
+    const repChange = rep.changeVout != null ? rep.tx.outputs[rep.changeVout]?.satoshis ?? 0 : 0;
+    if (params.confirmSpend != null && !await params.confirmSpend(spentSats(selected, repChange))) {
+      throw new Error(SPEND_CANCELLED);
+    }
     await provider2.broadcast(rep.tx.toHex());
     provider2.registerPendingTx(
       rep.txId,
@@ -18479,6 +18493,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const selected = selectFunding(await getSafeUtxos(provider2), target);
     const funding = await toFundingInputs(provider2, selected);
     const rep = await buildReplicateV2Tx({ edition, buyerKey, funding, note: params.note, feePerKb });
+    const repChange = rep.changeVout != null ? rep.tx.outputs[rep.changeVout]?.satoshis ?? 0 : 0;
+    if (params.confirmSpend != null && !await params.confirmSpend(spentSats(selected, repChange))) {
+      throw new Error(SPEND_CANCELLED);
+    }
     await provider2.broadcast(rep.tx.toHex());
     provider2.registerPendingTx(
       rep.txId,
@@ -20059,6 +20077,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   };
   var val = (id) => $(id).value.trim();
   var short = (s2, n = 10) => s2.length > 2 * n ? `${s2.slice(0, n)}\u2026${s2.slice(-n)}` : s2;
+  var kb = (bytes2) => bytes2 < 1024 ? `${bytes2} B` : bytes2 < 1024 * 1024 ? `${(bytes2 / 1024).toFixed(1)} KB` : `${(bytes2 / (1024 * 1024)).toFixed(1)} MB`;
   function setStatus(msg, kind = "info") {
     const el = $("status");
     el.textContent = msg;
@@ -20129,16 +20148,32 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       setStatus("Enter a collection name.", "error");
       return;
     }
-    setStatus("Minting collection (TX1 template + TX2 genesis)\u2026");
+    setStatus("Preparing the mint transaction\u2026");
     try {
       const file = await readFile($("mintFile"));
-      const result = await createCollection(provider, key, { tokenName: name, supply: count, mintCount: count, file });
+      const result = await createCollection(provider, key, {
+        tokenName: name,
+        supply: count,
+        mintCount: count,
+        file,
+        confirmSpend: (total) => confirm(
+          `Mint ${count} NFT${count > 1 ? "s" : ""} in \u201C${name}\u201D${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ""}?
+
+This spends ${total.toLocaleString()} sats from your wallet (network fee + ${count} \xD7 1-sat token output${count > 1 ? "s" : ""}).
+
+Proceed?`
+        )
+      });
       for (const op3 of result.tokenOutpoints) {
         store2.add({ txId: op3.txId, outputIndex: op3.outputIndex, collectionId: result.collectionId, stateData: "", collectionName: name });
       }
       renderTokens();
       setStatus(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, "ok");
     } catch (e) {
+      if (e.message === SPEND_CANCELLED) {
+        setStatus("Mint cancelled \u2014 nothing was spent.");
+        return;
+      }
       setStatus(`Mint failed: ${e.message}`, "error");
     }
   }
@@ -20201,12 +20236,33 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         return;
       }
       const terms = ownTerms();
-      setStatus(`Minting ${encrypt ? "encrypted " : ""}edition collection (TX1 template + TX2 covenant editions)\u2026`);
-      const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt, description, cover });
+      setStatus("Preparing the edition mint\u2026");
+      const result = await createEdition(provider, key, {
+        tokenName: name,
+        terms,
+        mintCount: count,
+        file,
+        encrypt,
+        description,
+        cover,
+        confirmSpend: (total) => confirm(
+          `Mint ${count} edition${count > 1 ? "s" : ""} of \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ""}?
+
+This spends ${total.toLocaleString()} sats from your wallet (network fee + dust for ${count} edition${count > 1 ? "s" : ""}).
+
+Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.
+
+Proceed?`
+        )
+      });
       for (const e of result.editions) storeEdition(e, result.collectionId, name, terms);
       renderTokens();
       setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, "ok");
     } catch (e) {
+      if (e.message === SPEND_CANCELLED) {
+        setStatus("Edition mint cancelled \u2014 nothing was spent.");
+        return;
+      }
       setStatus(`Edition mint failed: ${e.message}`, "error");
     }
   }
@@ -20224,10 +20280,22 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       setStatus("Missing edition script; cannot replicate.", "error");
       return;
     }
-    setStatus("Replicating edition (permissionless mint)\u2026");
+    const name = t.collectionName ?? "this edition";
+    setStatus("Preparing the replication\u2026");
     try {
       if (parseEditionScriptV2(LockingScript.fromHex(t.lockHex)) != null) {
-        const r3 = await replicateEditionV2(provider, key, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex });
+        const r3 = await replicateEditionV2(provider, key, {
+          editionTxId: t.txId,
+          editionOutputIndex: t.outputIndex,
+          editionLockHex: t.lockHex,
+          confirmSpend: (total) => confirm(
+            `Replicate a copy of \u201C${name}\u201D?
+
+This spends ${total.toLocaleString()} sats from your wallet (the seller\u2019s price + network fee).
+
+Proceed?`
+          )
+        });
         store2.markSent(t.txId, t.outputIndex);
         storeEdition({ txId: r3.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
         storeEdition({ txId: r3.replicaOutpoint.txId, outputIndex: r3.replicaOutpoint.outputIndex, lockHex: r3.lockHex }, t.collectionId, t.collectionName ?? "Edition", termsFromToken(t));
@@ -20241,7 +20309,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         editionOutputIndex: t.outputIndex,
         editionLockHex: t.lockHex,
         terms: termsFromToken(t),
-        note
+        note,
+        confirmSpend: (total) => confirm(
+          `Replicate a copy of \u201C${name}\u201D?
+
+This spends ${total.toLocaleString()} sats from your wallet (publisher ${t.publisherFeeSats ?? 0} + holder ${t.holderFeeSats ?? 0} fees + network fee).
+
+Proceed?`
+        )
       });
       store2.markSent(t.txId, t.outputIndex);
       storeEdition(
@@ -20261,6 +20336,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       renderTokens();
       setStatus(`\u2705 Replicated. Tx ${short(r2.txId)} \u2014 NFT returned to holder, replica minted, fees paid.`, "ok");
     } catch (e) {
+      if (e.message === SPEND_CANCELLED) {
+        setStatus("Replication cancelled \u2014 nothing was spent.");
+        return;
+      }
       setStatus(`Replicate failed: ${e.message}`, "error");
     }
   }

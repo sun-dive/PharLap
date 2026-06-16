@@ -27,7 +27,8 @@ import {
   buildHolderEditionScript, parseEditionScriptV2, parseEditionAny, buildEditionLockV2, u64le,
 } from './covenant.ts'
 import {
-  PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex, type FundingInput,
+  PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex,
+  SPEND_CANCELLED, spentSats, type FundingInput,
 } from './collectionBuilder.ts'
 import { encodeTokenRules, buildNoteScript, RESTRICTION_REPLICABLE, RESTRICTION_ENCRYPTED, RESTRICTION_COMPRESSED } from './tokenCodec.ts'
 import { compressIfSmaller } from './compress.ts'
@@ -475,6 +476,8 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   /** Optional public (unencrypted) cover image — the storefront's face, shown even when content is encrypted. */
   cover?: { mimeType: string; fileName: string; bytes: number[] }
   feePerKb?: number
+  /** Spend gate: called with the EXACT total sats to spend, after build and before broadcast. False aborts. */
+  confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
 }): Promise<CreateEditionResult> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
   const mintCount = params.mintCount ?? 1
@@ -557,6 +560,10 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     key, funding: t2Funding, tx1Ref: t1.tx1Id, terms: params.terms, ownerPubKey: ownerPub, stateData, mintCount, feePerKb,
   })
 
+  if (params.confirmSpend != null && !(await params.confirmSpend(spentSats(selected, t2.changeSats)))) {
+    throw new Error(SPEND_CANCELLED)
+  }
+
   await provider.broadcast(t1.tx.toHex())
   provider.registerPendingTx(t1.tx1Id, selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
     { outputIndex: t1.changeVout, satoshis: t1.changeSats })
@@ -579,6 +586,8 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
   /** Seller's note (promo + optional bonus) to echo onto the buyer's copy (hands-off propagation). */
   note?: SellerNote
   feePerKb?: number
+  /** Spend gate: called with the EXACT total sats to spend, after build and before broadcast. False aborts. */
+  confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
 }): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
   const tokenSats = params.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
@@ -596,6 +605,10 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
   const funding = await toFundingInputs(provider, selected)
 
   const rep = await buildReplicateTx({ edition, terms: params.terms, buyerKey, funding, note: params.note, feePerKb })
+  const repChange = rep.changeVout != null ? (rep.tx.outputs[rep.changeVout]?.satoshis ?? 0) : 0
+  if (params.confirmSpend != null && !(await params.confirmSpend(spentSats(selected, repChange)))) {
+    throw new Error(SPEND_CANCELLED)
+  }
   await provider.broadcast(rep.tx.toHex())
   provider.registerPendingTx(rep.txId,
     [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex },
@@ -711,6 +724,8 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
   /** Seller's note (promo + optional bonus) to echo onto the buyer's copy (hands-off propagation, like v1). */
   note?: SellerNote
   feePerKb?: number
+  /** Spend gate: called with the EXACT total sats to spend, after build and before broadcast. False aborts. */
+  confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
 }): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string; publisherCut: number; resellerCut: number }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
   const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
@@ -729,6 +744,10 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
   const funding = await toFundingInputs(provider, selected)
 
   const rep = await buildReplicateV2Tx({ edition, buyerKey, funding, note: params.note, feePerKb })
+  const repChange = rep.changeVout != null ? (rep.tx.outputs[rep.changeVout]?.satoshis ?? 0) : 0
+  if (params.confirmSpend != null && !(await params.confirmSpend(spentSats(selected, repChange)))) {
+    throw new Error(SPEND_CANCELLED)
+  }
   await provider.broadcast(rep.tx.toHex())
   provider.registerPendingTx(rep.txId,
     [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex },

@@ -11,7 +11,7 @@
 import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
-import { createCollection, getSafeUtxos } from './collectionBuilder.ts'
+import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
 import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2 } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
@@ -44,6 +44,7 @@ const $ = (id: string): HTMLElement => {
 }
 const val = (id: string): string => ($(id) as HTMLInputElement).value.trim()
 const short = (s: string, n = 10): string => (s.length > 2 * n ? `${s.slice(0, n)}…${s.slice(-n)}` : s)
+const kb = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`)
 function setStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
   const el = $('status')
   el.textContent = msg
@@ -123,16 +124,23 @@ async function onMint(): Promise<void> {
   const name = val('mintName')
   const count = Math.max(1, parseInt(val('mintCount') || '1', 10))
   if (!name) { setStatus('Enter a collection name.', 'error'); return }
-  setStatus('Minting collection (TX1 template + TX2 genesis)…')
+  setStatus('Preparing the mint transaction…')
   try {
     const file = await readFile($('mintFile') as HTMLInputElement)
-    const result = await createCollection(provider, key, { tokenName: name, supply: count, mintCount: count, file })
+    const result = await createCollection(provider, key, {
+      tokenName: name, supply: count, mintCount: count, file,
+      confirmSpend: total => confirm(
+        `Mint ${count} NFT${count > 1 ? 's' : ''} in “${name}”${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ''}?\n\n` +
+        `This spends ${total.toLocaleString()} sats from your wallet (network fee + ${count} × 1-sat token output${count > 1 ? 's' : ''}).\n\n` +
+        `Proceed?`),
+    })
     for (const op of result.tokenOutpoints) {
       store.add({ txId: op.txId, outputIndex: op.outputIndex, collectionId: result.collectionId, stateData: '', collectionName: name })
     }
     renderTokens()
     setStatus(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, 'ok')
   } catch (e) {
+    if ((e as Error).message === SPEND_CANCELLED) { setStatus('Mint cancelled — nothing was spent.'); return }
     setStatus(`Mint failed: ${(e as Error).message}`, 'error')
   }
 }
@@ -190,12 +198,19 @@ async function onMintEdition(): Promise<void> {
     // v1 fixed-fee editions only. Covenant v2 (percentage/ranged pricing) stays in the codebase
     // (createEditionV2 / replicateEditionV2 / parseEditionScriptV2) but is hidden from the UI until built out.
     const terms = ownTerms()
-    setStatus(`Minting ${encrypt ? 'encrypted ' : ''}edition collection (TX1 template + TX2 covenant editions)…`)
-    const result = await createEdition(provider, key, { tokenName: name, terms, mintCount: count, file, encrypt, description, cover })
+    setStatus('Preparing the edition mint…')
+    const result = await createEdition(provider, key, {
+      tokenName: name, terms, mintCount: count, file, encrypt, description, cover,
+      confirmSpend: total => confirm(
+        `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ''}?\n\n` +
+        `This spends ${total.toLocaleString()} sats from your wallet (network fee + dust for ${count} edition${count > 1 ? 's' : ''}).\n\n` +
+        `Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.\n\nProceed?`),
+    })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
     renderTokens()
     setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
   } catch (e) {
+    if ((e as Error).message === SPEND_CANCELLED) { setStatus('Edition mint cancelled — nothing was spent.'); return }
     setStatus(`Edition mint failed: ${(e as Error).message}`, 'error')
   }
 }
@@ -210,11 +225,16 @@ async function noteToPropagate(t: StoredToken): Promise<SellerNote | undefined> 
 
 async function onReplicate(t: StoredToken): Promise<void> {
   if (!t.lockHex) { setStatus('Missing edition script; cannot replicate.', 'error'); return }
-  setStatus('Replicating edition (permissionless mint)…')
+  const name = t.collectionName ?? 'this edition'
+  setStatus('Preparing the replication…')
   try {
     // v2 (percentage pricing) editions go through the computed-split replicate.
     if (parseEditionScriptV2(LockingScript.fromHex(t.lockHex)) != null) {
-      const r = await replicateEditionV2(provider, key, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex })
+      const r = await replicateEditionV2(provider, key, {
+        editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex,
+        confirmSpend: total => confirm(
+          `Replicate a copy of “${name}”?\n\nThis spends ${total.toLocaleString()} sats from your wallet (the seller’s price + network fee).\n\nProceed?`),
+      })
       store.markSent(t.txId, t.outputIndex) // original spent; token returned to holder at out[0] (new outpoint)
       storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
       storeEdition({ txId: r.replicaOutpoint.txId, outputIndex: r.replicaOutpoint.outputIndex, lockHex: r.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
@@ -226,6 +246,9 @@ async function onReplicate(t: StoredToken): Promise<void> {
     const r = await replicateEdition(provider, key, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex, terms: termsFromToken(t),
       note,
+      confirmSpend: total => confirm(
+        `Replicate a copy of “${name}”?\n\n` +
+        `This spends ${total.toLocaleString()} sats from your wallet (publisher ${t.publisherFeeSats ?? 0} + holder ${t.holderFeeSats ?? 0} fees + network fee).\n\nProceed?`),
     })
     // The original UTXO is now spent; it was re-created at out[0] (token back to the holder = us, verbatim).
     store.markSent(t.txId, t.outputIndex)
@@ -238,6 +261,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
     renderTokens()
     setStatus(`✅ Replicated. Tx ${short(r.txId)} — NFT returned to holder, replica minted, fees paid.`, 'ok')
   } catch (e) {
+    if ((e as Error).message === SPEND_CANCELLED) { setStatus('Replication cancelled — nothing was spent.'); return }
     setStatus(`Replicate failed: ${(e as Error).message}`, 'error')
   }
 }
