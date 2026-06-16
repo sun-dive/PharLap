@@ -120,6 +120,8 @@ export interface IncomingMessage {
   parts: Part[]
   /** Sender's self-asserted alias (if they attached one). */
   senderAlias?: string
+  /** Block height of the message tx (0 = unconfirmed/unknown) — orders the inbox newest-first. */
+  height?: number
 }
 
 /**
@@ -130,7 +132,8 @@ export interface IncomingMessage {
 export async function scanIncomingMessages(provider: WalletProvider, recipientPriv: PrivateKey): Promise<IncomingMessage[]> {
   const myPub = recipientPriv.toPublicKey().toString().toLowerCase()
   const candidateTxIds = new Set<string>()
-  try { for (const { txId } of await provider.getAddressHistory()) candidateTxIds.add(txId) } catch { /* best-effort */ }
+  const heightByTx = new Map<string, number>()
+  try { for (const h of await provider.getAddressHistory()) { candidateTxIds.add(h.txId); heightByTx.set(h.txId, h.blockHeight || 0) } } catch { /* best-effort */ }
   try { for (const u of await provider.getUtxos()) candidateTxIds.add(u.txId) } catch { /* best-effort */ }
 
   const found: IncomingMessage[] = []
@@ -149,9 +152,10 @@ export async function scanIncomingMessages(provider: WalletProvider, recipientPr
       found.push({
         txId, outputIndex: i, ref: parsed.fields.ref,
         senderPubKeyHex: opened.senderPubKeyHex, encrypted: opened.encrypted, parts: opened.parts,
-        senderAlias: opened.senderAlias,
+        senderAlias: opened.senderAlias, height: heightByTx.get(txId) ?? 0,
       })
     }
   }
-  return found
+  // Newest first: unconfirmed (height 0/unknown) on top, then highest block height.
+  return found.sort((a, b) => ((b.height || Infinity) - (a.height || Infinity)))
 }
