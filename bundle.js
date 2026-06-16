@@ -21113,6 +21113,26 @@ Proceed?`
     } catch {
     }
   }
+  function removeContact(pubKeyHex2) {
+    delete contacts[pubKeyHex2.toLowerCase()];
+    try {
+      localStorage.setItem("p:contacts", JSON.stringify(contacts));
+    } catch {
+    }
+  }
+  function ignoreSeen(pubKeyHex2) {
+    delete seenAliases[pubKeyHex2.toLowerCase()];
+    try {
+      localStorage.setItem("p:aliases", JSON.stringify(seenAliases));
+    } catch {
+    }
+  }
+  function refreshNameSurfaces() {
+    renderInbox(lastInbox);
+    if (lastUpdatesFeed != null) renderUpdatesFeed(lastUpdatesFeed);
+    renderTokens();
+    updateMsgToName();
+  }
   function displayName(pubKeyHex2) {
     const k = pubKeyHex2.toLowerCase();
     if (k === myPubKeyLc()) {
@@ -21159,6 +21179,110 @@ Proceed?`
     }
     const info = displayName(to);
     el.innerHTML = info.isMe ? "\u21AA that\u2019s your own key" : info.alias != null ? `\u2192 ${nameChip(to, { save: true })}` : "";
+  }
+  function openContactsModal() {
+    renderContacts();
+    $("contactsModal").style.display = "flex";
+  }
+  function closeContactsModal() {
+    $("contactsModal").style.display = "none";
+  }
+  function renderContacts() {
+    const host = $("contactsBody");
+    host.innerHTML = "";
+    const byName = (a, b) => a[1].localeCompare(b[1]);
+    const saved = Object.entries(contacts).sort(byName);
+    const seen = Object.entries(seenAliases).sort(byName);
+    host.append(contactsSection(`Saved (${saved.length})`, saved, "saved", "No saved contacts yet \u2014 save senders from your inbox, or add one above."));
+    host.append(contactsSection(`Seen, not saved (${seen.length})`, seen, "seen", "No unsaved names seen yet."));
+  }
+  function contactsSection(title, rows, kind, empty) {
+    const sec = document.createElement("div");
+    sec.className = "token-section";
+    const head = document.createElement("div");
+    head.className = "token-section-head";
+    head.style.cursor = "default";
+    head.innerHTML = `<span class="token-section-label">${title}</span>`;
+    sec.append(head);
+    if (rows.length === 0) {
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.style.fontSize = "12px";
+      p.textContent = empty;
+      sec.append(p);
+      return sec;
+    }
+    for (const [pk, alias] of rows) sec.append(contactRow(pk, alias, kind));
+    return sec;
+  }
+  function contactRow(pk, alias, kind) {
+    const row = document.createElement("div");
+    row.className = "contact-row";
+    row.innerHTML = `<span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} \u2014 click to copy">${short(pk)}</span>`;
+    const acts = document.createElement("span");
+    acts.className = "contact-acts";
+    const mkBtn = (label, fn) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.className = "secondary";
+      b.onclick = fn;
+      return b;
+    };
+    if (kind === "saved") {
+      acts.append(
+        mkBtn("Rename", () => {
+          const n = prompt("New name for this contact:", alias);
+          if (n == null) return;
+          const nm = n.replace(/^@+/, "").trim();
+          if (nm) {
+            saveContact(pk, nm);
+            renderContacts();
+            refreshNameSurfaces();
+          }
+        }),
+        mkBtn("Remove", () => {
+          removeContact(pk);
+          renderContacts();
+          refreshNameSurfaces();
+        })
+      );
+    } else {
+      acts.append(
+        mkBtn("Save", () => {
+          saveContact(pk, alias);
+          renderContacts();
+          refreshNameSurfaces();
+        }),
+        mkBtn("Ignore", () => {
+          ignoreSeen(pk);
+          renderContacts();
+        })
+      );
+    }
+    row.append(acts);
+    return row;
+  }
+  function onAddContact() {
+    const pk = val("contactPk").toLowerCase();
+    const name = val("contactName").replace(/^@+/, "").trim();
+    if (pk.length !== 66 && pk.length !== 130) {
+      toast("Enter a valid pubkey (66 or 130 hex chars)");
+      return;
+    }
+    if (!/^[0-9a-f]+$/.test(pk)) {
+      toast("Pubkey must be hex");
+      return;
+    }
+    if (name === "") {
+      toast("Enter a name for this contact");
+      return;
+    }
+    saveContact(pk, name);
+    $("contactPk").value = "";
+    $("contactName").value = "";
+    renderContacts();
+    refreshNameSurfaces();
+    toast(`Saved @${name}`);
   }
   var cvObjectUrl = null;
   var currentCollection = null;
@@ -21746,6 +21870,12 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     $("btnSendMessage").onclick = () => void onSendMessage();
     $("btnCheckMessages").onclick = () => void onCheckMessages();
     $("msgTo").addEventListener("input", updateMsgToName);
+    $("btnContacts").onclick = () => openContactsModal();
+    $("contactsClose").onclick = () => closeContactsModal();
+    $("contactsModal").addEventListener("click", (e) => {
+      if (e.target === $("contactsModal")) closeContactsModal();
+    });
+    $("contactAdd").onclick = () => onAddContact();
     $("btnCheckUpdates").onclick = () => void onCheckUpdates();
     $("btnNewWallet").onclick = () => {
       if (!confirm("Replace the current wallet with a new random key? Your current key is in the WIF box \u2014 back it up first.")) return;

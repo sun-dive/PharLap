@@ -967,6 +967,24 @@ function saveContact(pubKeyHex: string, alias: string): void {
   try { localStorage.setItem('p:aliases', JSON.stringify(seenAliases)) } catch { /* fine */ }
 }
 
+function removeContact(pubKeyHex: string): void {
+  delete contacts[pubKeyHex.toLowerCase()]
+  try { localStorage.setItem('p:contacts', JSON.stringify(contacts)) } catch { /* fine */ }
+}
+
+function ignoreSeen(pubKeyHex: string): void {
+  delete seenAliases[pubKeyHex.toLowerCase()]
+  try { localStorage.setItem('p:aliases', JSON.stringify(seenAliases)) } catch { /* fine */ }
+}
+
+/** Re-render every surface that shows names, after a contact change. */
+function refreshNameSurfaces(): void {
+  renderInbox(lastInbox)
+  if (lastUpdatesFeed != null) renderUpdatesFeed(lastUpdatesFeed)
+  renderTokens()
+  updateMsgToName()
+}
+
 interface NameInfo { name: string; verified: boolean; isMe: boolean; alias?: string }
 function displayName(pubKeyHex: string): NameInfo {
   const k = pubKeyHex.toLowerCase()
@@ -1008,6 +1026,77 @@ function updateMsgToName(): void {
   if (to.length !== 66 && to.length !== 130) { el.innerHTML = ''; return }
   const info = displayName(to)
   el.innerHTML = info.isMe ? '↪ that’s your own key' : (info.alias != null ? `→ ${nameChip(to, { save: true })}` : '')
+}
+
+// ─── address book ───────────────────────────────────────────────────
+function openContactsModal(): void { renderContacts(); $('contactsModal').style.display = 'flex' }
+function closeContactsModal(): void { $('contactsModal').style.display = 'none' }
+
+function renderContacts(): void {
+  const host = $('contactsBody')
+  host.innerHTML = ''
+  const byName = (a: [string, string], b: [string, string]): number => a[1].localeCompare(b[1])
+  const saved = Object.entries(contacts).sort(byName)
+  const seen = Object.entries(seenAliases).sort(byName)
+  host.append(contactsSection(`Saved (${saved.length})`, saved, 'saved', 'No saved contacts yet — save senders from your inbox, or add one above.'))
+  host.append(contactsSection(`Seen, not saved (${seen.length})`, seen, 'seen', 'No unsaved names seen yet.'))
+}
+
+function contactsSection(title: string, rows: [string, string][], kind: 'saved' | 'seen', empty: string): HTMLElement {
+  const sec = document.createElement('div')
+  sec.className = 'token-section'
+  const head = document.createElement('div')
+  head.className = 'token-section-head'; head.style.cursor = 'default'
+  head.innerHTML = `<span class="token-section-label">${title}</span>`
+  sec.append(head)
+  if (rows.length === 0) {
+    const p = document.createElement('p'); p.className = 'muted'; p.style.fontSize = '12px'; p.textContent = empty
+    sec.append(p); return sec
+  }
+  for (const [pk, alias] of rows) sec.append(contactRow(pk, alias, kind))
+  return sec
+}
+
+function contactRow(pk: string, alias: string, kind: 'saved' | 'seen'): HTMLElement {
+  const row = document.createElement('div')
+  row.className = 'contact-row'
+  row.innerHTML = `<span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} — click to copy">${short(pk)}</span>`
+  const acts = document.createElement('span')
+  acts.className = 'contact-acts'
+  const mkBtn = (label: string, fn: () => void): HTMLButtonElement => {
+    const b = document.createElement('button'); b.textContent = label; b.className = 'secondary'; b.onclick = fn; return b
+  }
+  if (kind === 'saved') {
+    acts.append(
+      mkBtn('Rename', () => {
+        const n = prompt('New name for this contact:', alias)
+        if (n == null) return
+        const nm = n.replace(/^@+/, '').trim()
+        if (nm) { saveContact(pk, nm); renderContacts(); refreshNameSurfaces() }
+      }),
+      mkBtn('Remove', () => { removeContact(pk); renderContacts(); refreshNameSurfaces() }),
+    )
+  } else {
+    acts.append(
+      mkBtn('Save', () => { saveContact(pk, alias); renderContacts(); refreshNameSurfaces() }),
+      mkBtn('Ignore', () => { ignoreSeen(pk); renderContacts() }),
+    )
+  }
+  row.append(acts)
+  return row
+}
+
+function onAddContact(): void {
+  const pk = val('contactPk').toLowerCase()
+  const name = val('contactName').replace(/^@+/, '').trim()
+  if (pk.length !== 66 && pk.length !== 130) { toast('Enter a valid pubkey (66 or 130 hex chars)'); return }
+  if (!/^[0-9a-f]+$/.test(pk)) { toast('Pubkey must be hex'); return }
+  if (name === '') { toast('Enter a name for this contact'); return }
+  saveContact(pk, name)
+  ;($('contactPk') as HTMLInputElement).value = ''
+  ;($('contactName') as HTMLInputElement).value = ''
+  renderContacts(); refreshNameSurfaces()
+  toast(`Saved @${name}`)
 }
 
 // ─── init ───────────────────────────────────────────────────────────
@@ -1587,6 +1676,10 @@ function init(): void {
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()
   $('msgTo').addEventListener('input', updateMsgToName)
+  $('btnContacts').onclick = () => openContactsModal()
+  $('contactsClose').onclick = () => closeContactsModal()
+  $('contactsModal').addEventListener('click', e => { if (e.target === $('contactsModal')) closeContactsModal() })
+  $('contactAdd').onclick = () => onAddContact()
   $('btnCheckUpdates').onclick = () => void onCheckUpdates()
   $('btnNewWallet').onclick = () => {
     if (!confirm('Replace the current wallet with a new random key? Your current key is in the WIF box — back it up first.')) return
