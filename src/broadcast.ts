@@ -31,6 +31,8 @@ export interface Broadcast {
   txId: string
   /** Block height of the announcement tx (0 = unconfirmed/newest) — orders the feed. */
   height: number
+  /** Publisher's self-asserted alias (if attached) — display + capture as a contact. */
+  senderAlias?: string
 }
 
 /**
@@ -39,7 +41,7 @@ export interface Broadcast {
  * is ever scanned by holders, so this self-gates (an impostor's "broadcast" is never pulled).
  */
 export async function publishBroadcast(
-  provider: WalletProvider, key: PrivateKey, collectionId: string, text: string,
+  provider: WalletProvider, key: PrivateKey, collectionId: string, text: string, senderAlias?: string,
 ): Promise<string> {
   const trimmed = text.trim()
   if (trimmed.length === 0) throw new Error('announcement is empty')
@@ -50,6 +52,7 @@ export async function publishBroadcast(
   // Public envelope (encrypt:false → recipientPubKeyHex is unused; anyone can read it).
   const envelope = await buildEnvelope({
     senderPriv: key, recipientPubKeyHex: pubHex, parts: [{ kind: 'text', text: trimmed }], encrypt: false,
+    senderAlias, sentAt: Date.now(),
   })
 
   const selected = selectFunding(await getSafeUtxos(provider), PHARLAP_OUTPUT_SATS + 600)
@@ -118,7 +121,7 @@ export async function resolveBroadcasts(
       const opened = await openPublicEnvelope(m.fields.envelope)
       if (opened == null || opened.senderPubKeyHex.toLowerCase() !== publisher) continue // sent by the publisher
       const textPart = opened.parts.find(p => p.kind === 'text')
-      if (textPart && textPart.kind === 'text') out.push({ text: textPart.text, txId, height })
+      if (textPart && textPart.kind === 'text') out.push({ text: textPart.text, txId, height, senderAlias: opened.senderAlias })
     }
   }
   return out
