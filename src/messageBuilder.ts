@@ -156,6 +156,9 @@ export async function scanIncomingMessages(provider: WalletProvider, recipientPr
       })
     }
   }
-  // Newest first: unconfirmed (height 0/unknown) on top, then highest block height.
-  return found.sort((a, b) => ((b.height || Infinity) - (a.height || Infinity)))
+  // Newest first: unconfirmed (height 0/unknown) on top, then highest block height. Use a finite sentinel
+  // so two unconfirmed messages compare to 0 (a stable tie) rather than Infinity−Infinity = NaN, which
+  // would scramble the sort.
+  const rank = (m: IncomingMessage): number => (m.height != null && m.height > 0 ? m.height : Number.MAX_SAFE_INTEGER)
+  return found.sort((a, b) => rank(b) - rank(a))
 }

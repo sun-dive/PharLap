@@ -19123,7 +19123,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         });
       }
     }
-    return found.sort((a, b) => (b.height || Infinity) - (a.height || Infinity));
+    const rank = (m) => m.height != null && m.height > 0 ? m.height : Number.MAX_SAFE_INTEGER;
+    return found.sort((a, b) => rank(b) - rank(a));
   }
 
   // src/broadcast.ts
