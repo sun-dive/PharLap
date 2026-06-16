@@ -1123,9 +1123,14 @@ async function fetchProfileInto(k: string): Promise<boolean> {
       ? bytesToDataUrl(prof.avatarMimeType ?? 'image/webp', prof.avatarBytes) : NO_AVATAR
     const avatarChanged = avatars[k] !== newAvatar && newAvatar !== NO_AVATAR
     setAvatar(k, newAvatar)
-    const before = contacts[k] ?? seenAliases[k]
-    if (prof?.alias) rememberAlias(k, prof.alias) // may follow a rename on an accepted contact
-    return avatarChanged || (contacts[k] ?? seenAliases[k]) !== before
+    // The published profile supplies a NAME only as a fallback when we have none (e.g. a storefront publisher
+    // you've never messaged). It must NOT override a saved contact or an envelope-provided name — the message
+    // envelope is the fresher, authoritative source for renames (a published profile can lag behind it).
+    let aliasChanged = false
+    if (prof?.alias != null && prof.alias !== '' && contacts[k] == null && seenAliases[k] == null) {
+      seenAliases[k] = prof.alias; persist('p:aliases', seenAliases); aliasChanged = true
+    }
+    return avatarChanged || aliasChanged
   } catch { return false } // transient: leave unresolved for a later retry
 }
 /** Resolve profiles (avatar + alias) for these keys in the background; re-render if any newly resolved. */

@@ -21410,9 +21410,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
       const newAvatar = prof?.avatarBytes != null && prof.avatarBytes.length > 0 ? bytesToDataUrl(prof.avatarMimeType ?? "image/webp", prof.avatarBytes) : NO_AVATAR;
       const avatarChanged = avatars[k] !== newAvatar && newAvatar !== NO_AVATAR;
       setAvatar(k, newAvatar);
-      const before = contacts[k] ?? seenAliases[k];
-      if (prof?.alias) rememberAlias(k, prof.alias);
-      return avatarChanged || (contacts[k] ?? seenAliases[k]) !== before;
+      let aliasChanged = false;
+      if (prof?.alias != null && prof.alias !== "" && contacts[k] == null && seenAliases[k] == null) {
+        seenAliases[k] = prof.alias;
+        persist("p:aliases", seenAliases);
+        aliasChanged = true;
+      }
+      return avatarChanged || aliasChanged;
     } catch {
       return false;
     }
