@@ -19082,8 +19082,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   async function scanIncomingMessages(provider2, recipientPriv) {
     const myPub = recipientPriv.toPublicKey().toString().toLowerCase();
     const candidateTxIds = /* @__PURE__ */ new Set();
+    const heightByTx = /* @__PURE__ */ new Map();
     try {
-      for (const { txId } of await provider2.getAddressHistory()) candidateTxIds.add(txId);
+      for (const h of await provider2.getAddressHistory()) {
+        candidateTxIds.add(h.txId);
+        heightByTx.set(h.txId, h.blockHeight || 0);
+      }
     } catch {
     }
     try {
@@ -19114,11 +19118,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           senderPubKeyHex: opened.senderPubKeyHex,
           encrypted: opened.encrypted,
           parts: opened.parts,
-          senderAlias: opened.senderAlias
+          senderAlias: opened.senderAlias,
+          height: heightByTx.get(txId) ?? 0
         });
       }
     }
-    return found;
+    return found.sort((a, b) => (b.height || Infinity) - (a.height || Infinity));
   }
 
   // src/broadcast.ts
@@ -21683,6 +21688,7 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     $("btnCopyPub").onclick = () => void navigator.clipboard?.writeText(pubKeyHex);
     $("btnCopyAddr").onclick = () => void navigator.clipboard?.writeText(address);
     $("btnQrAddr").onclick = () => showQrModal("Receive address \u2014 BSV only", address);
+    $("btnQrPub").onclick = () => showQrModal("Public key \u2014 scan to share", pubKeyHex);
     $("btnWifShow").onclick = () => {
       const el = $("wif");
       const showing = el.type === "text";

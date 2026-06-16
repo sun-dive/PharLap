@@ -1558,6 +1558,7 @@ function init(): void {
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)
   $('btnCopyAddr').onclick = () => void navigator.clipboard?.writeText(address)
   $('btnQrAddr').onclick = () => showQrModal('Receive address — BSV only', address)
+  $('btnQrPub').onclick = () => showQrModal('Public key — scan to share', pubKeyHex)
   $('btnWifShow').onclick = () => {
     const el = $('wif') as HTMLInputElement
     const showing = el.type === 'text'
