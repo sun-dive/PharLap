@@ -23,7 +23,8 @@ import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage } from './verify.ts'
 import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
-import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime } from './thumbs.ts'
+import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime, downscaleToAvatar } from './thumbs.ts'
+import { publishProfile, resolveProfile } from './profile.ts'
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
 import { decompress } from './compress.ts'
 
@@ -95,7 +96,7 @@ function renderWallet(): void {
   $('address').textContent = address
   $('pubkey').textContent = pubKeyHex
   const mine = document.getElementById('myIdenticon')
-  if (mine) mine.innerHTML = identiconSvg(pubKeyHex, 22) // your own key-derived avatar
+  if (mine) mine.innerHTML = avatarHtml(pubKeyHex, 22) // your own avatar (or identicon)
   ;($('wif') as HTMLInputElement).value = key.toWif()
   hideWif() // re-mask on every wallet (re)load so a switched-in key is never left exposed
 }
@@ -333,12 +334,39 @@ async function onSendMessage(): Promise<void> {
   }
 }
 
+/** Publish your profile (alias + optional avatar) on-chain so others resolve your @name + face by pubkey. */
+async function onPublishProfile(): Promise<void> {
+  const alias = getMyAlias()
+  const file = await readFile($('profileAvatar') as HTMLInputElement)
+  let avatar: { mimeType: string; bytes: number[] } | undefined
+  if (file != null) {
+    if (!file.mimeType.startsWith('image/')) { setStatus('Avatar must be an image.', 'error'); return }
+    const small = await downscaleToAvatar(file.bytes, file.mimeType)
+    if (small == null) { setStatus('Could not process that image (need a browser that encodes WebP).', 'error'); return }
+    avatar = small
+  }
+  if (alias === '' && avatar == null) { setStatus('Set an alias (above) or choose an avatar image first.', 'error'); return }
+  if (!confirm(
+    `Publish your profile on-chain${avatar ? ` (a ${kb(avatar.bytes.length)} avatar)` : ''}${alias ? ` as @${alias}` : ''}?\n\n` +
+    `It's posted to your own address and spends a small network fee. Proceed?`)) return
+  setStatus('Publishing your profile…')
+  try {
+    const txId = await publishProfile(provider, key, { alias: alias || undefined, avatar })
+    if (avatar != null) { setAvatar(myPubKeyLc(), bytesToDataUrl(avatar.mimeType, avatar.bytes)); renderWallet() }
+    ;($('profileAvatar') as HTMLInputElement).value = ''
+    setStatus(`✅ Profile published. Tx ${short(txId)} — others now resolve your @name + avatar by your key.`, 'ok')
+  } catch (e) {
+    setStatus(`Publish profile failed: ${(e as Error).message}`, 'error')
+  }
+}
+
 async function onCheckMessages(): Promise<void> {
   setStatus('Checking for messages…')
   try {
     const msgs = await scanIncomingMessages(provider, key)
     for (const m of msgs) if (m.senderAlias) rememberAlias(m.senderPubKeyHex, m.senderAlias)
     renderInbox(msgs)
+    resolveAvatarsThen(msgs.map(m => m.senderPubKeyHex), () => renderInbox(lastInbox))
     setStatus(`Inbox: ${msgs.length} message(s).`, 'ok')
   } catch (e) {
     setStatus(`Check messages failed: ${(e as Error).message}`, 'error')
@@ -948,6 +976,7 @@ let seenAliases: Record<string, string> = {} // pubkeyHex(lc) → observed self-
 function loadAliases(): void {
   try { contacts = JSON.parse(localStorage.getItem('p:contacts') ?? '{}') } catch { contacts = {} }
   try { seenAliases = JSON.parse(localStorage.getItem('p:aliases') ?? '{}') } catch { seenAliases = {} }
+  try { avatars = JSON.parse(localStorage.getItem('p:avatars') ?? '{}') } catch { avatars = {} }
 }
 function getMyAlias(): string { try { return (localStorage.getItem('p:myalias') ?? '').trim() } catch { return '' } }
 function setMyAlias(a: string): void { try { localStorage.setItem('p:myalias', a) } catch { /* fine */ } }
@@ -997,11 +1026,18 @@ function displayName(pubKeyHex: string): NameInfo {
 }
 function myPubKeyLc(): string { try { return pubKeyHex.toLowerCase() } catch { return '' } }
 
+/** A key's signature hue (0–359), derived from its pubkey — used by the identicon AND a custom avatar's
+ *  ring, so the colour is an un-fakeable per-key anchor either way. */
+function keyHue(pubKeyHex: string): number {
+  const h = Hash.sha256(Utils.toArray(pubKeyHex.toLowerCase(), 'hex'))
+  return ((h[0] << 8) | h[1]) % 360
+}
+
 /** A deterministic, key-derived avatar (symmetric 5×5 SVG). Free, universal, and UN-spoofable: a faked
  *  @alias on a different key renders a different pattern, so the icon is a visual identity anchor. */
 function identiconSvg(pubKeyHex: string, px = 18): string {
   const h = Hash.sha256(Utils.toArray(pubKeyHex.toLowerCase(), 'hex'))
-  const hue = ((h[0] << 8) | h[1]) % 360
+  const hue = keyHue(pubKeyHex)
   const fg = `hsl(${hue},62%,58%)`
   const bg = `hsl(${hue},22%,20%)`
   const N = 5
@@ -1017,16 +1053,67 @@ function identiconSvg(pubKeyHex: string, px = 18): string {
     `<rect width="${N}" height="${N}" fill="${bg}"/><g fill="${fg}">${cells}</g></svg>`
 }
 
-/** HTML for a key reference anywhere it appears: identicon + @name (copy-to-clipboard the full pubkey,
+const NO_AVATAR = '-' // p:avatars sentinel: resolved, this key has no published avatar
+let avatars: Record<string, string> = {} // pubkeyHex(lc) → avatar data-URL, or NO_AVATAR
+
+function cachedAvatar(pubKeyHex: string): string | null {
+  const a = avatars[pubKeyHex.toLowerCase()]
+  return a != null && a !== NO_AVATAR ? a : null
+}
+function setAvatar(pubKeyHex: string, value: string): void {
+  avatars[pubKeyHex.toLowerCase()] = value
+  try { localStorage.setItem('p:avatars', JSON.stringify(avatars)) } catch { /* quota */ }
+}
+
+/** Avatar (published image) if known, else the identicon — both wear the key-derived ring/colour. */
+function avatarHtml(pubKeyHex: string, px = 18): string {
+  const a = cachedAvatar(pubKeyHex)
+  if (a == null) return identiconSvg(pubKeyHex, px)
+  return `<img class="avatar identicon" src="${a}" width="${px}" height="${px}" alt="" style="border:1.5px solid hsl(${keyHue(pubKeyHex)},62%,58%)" />`
+}
+
+/** HTML for a key reference anywhere it appears: avatar/identicon + @name (copy-to-clipboard the full pubkey,
  *  hover to see it) + an "⚠ unverified" cue for a self-claimed name, and (when `save`) a one-click save. */
 function nameChip(pubKeyHex: string, opts: { save?: boolean } = {}): string {
   const info = displayName(pubKeyHex)
-  const ico = identiconSvg(pubKeyHex)
+  const ico = avatarHtml(pubKeyHex)
   const chip = `<span class="copy-id" data-copy="${pubKeyHex}" title="${pubKeyHex} — click to copy">${escapeHtml(info.name)}</span>`
   if (info.verified) return ico + chip
   const warn = ` <span class="unverified" title="Self-claimed name — verify the key on hover before trusting it">⚠ unverified</span>`
   const save = opts.save ? ` <button class="alias-save" data-pk="${pubKeyHex}" data-alias="${escapeHtml(info.alias ?? '')}">save</button>` : ''
   return ico + chip + warn + save
+}
+
+function bytesToDataUrl(mime: string, bytes: number[]): string {
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.slice(i, i + 0x8000))
+  return `data:${mime || 'image/webp'};base64,${btoa(bin)}`
+}
+
+// Published profiles (avatar + alias) are resolved by pubkey from the key's own address and cached locally.
+const avatarInFlight = new Map<string, Promise<boolean>>()
+async function ensureAvatar(pubKeyHex: string): Promise<boolean> {
+  const k = pubKeyHex.toLowerCase()
+  if (avatars[k] != null) return false // already resolved (avatar or NO_AVATAR)
+  let p = avatarInFlight.get(k)
+  if (p == null) { p = fetchProfileInto(k); avatarInFlight.set(k, p) }
+  try { return await p } finally { avatarInFlight.delete(k) }
+}
+async function fetchProfileInto(k: string): Promise<boolean> {
+  try {
+    const prof = await resolveProfile(provider, k)
+    const hasAvatar = prof?.avatarBytes != null && prof.avatarBytes.length > 0
+    setAvatar(k, hasAvatar ? bytesToDataUrl(prof!.avatarMimeType ?? 'image/webp', prof!.avatarBytes!) : NO_AVATAR)
+    let changed = hasAvatar
+    if (prof?.alias && contacts[k] == null && seenAliases[k] !== prof.alias) { rememberAlias(k, prof.alias); changed = true }
+    return changed
+  } catch { return false } // transient: leave unresolved for a later retry
+}
+/** Resolve avatars for these keys in the background; re-render via `rerender` if any newly resolved. */
+function resolveAvatarsThen(pubKeys: string[], rerender: () => void): void {
+  const todo = [...new Set(pubKeys.map(p => p.toLowerCase()))].filter(k => avatars[k] == null)
+  if (todo.length === 0) return
+  void Promise.all(todo.map(ensureAvatar)).then(changed => { if (changed.some(Boolean)) rerender() })
 }
 
 function onAliasSaveClick(e: MouseEvent): void {
@@ -1052,7 +1139,11 @@ function updateMsgToName(): void {
 }
 
 // ─── address book ───────────────────────────────────────────────────
-function openContactsModal(): void { renderContacts(); $('contactsModal').style.display = 'flex' }
+function openContactsModal(): void {
+  renderContacts()
+  resolveAvatarsThen([...Object.keys(contacts), ...Object.keys(seenAliases)], renderContacts)
+  $('contactsModal').style.display = 'flex'
+}
 function closeContactsModal(): void { $('contactsModal').style.display = 'none' }
 
 function renderContacts(): void {
@@ -1083,7 +1174,7 @@ function contactsSection(title: string, rows: [string, string][], kind: 'saved' 
 function contactRow(pk: string, alias: string, kind: 'saved' | 'seen'): HTMLElement {
   const row = document.createElement('div')
   row.className = 'contact-row'
-  row.innerHTML = `${identiconSvg(pk, 24)} <span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} — click to copy">${short(pk)}</span>`
+  row.innerHTML = `${avatarHtml(pk, 24)} <span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} — click to copy">${short(pk)}</span>`
   const acts = document.createElement('span')
   acts.className = 'contact-acts'
   const mkBtn = (label: string, fn: () => void): HTMLButtonElement => {
@@ -1223,6 +1314,10 @@ function renderCollectionView(info: CollectionInfo): void {
   else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">📎 Embedded file</span>')
   $('cvBadges').innerHTML = badges.join('')
   $('cvPublisher').innerHTML = info.publisherPubKeyHex ? `by ${nameChip(info.publisherPubKeyHex)}` : ''
+  if (info.publisherPubKeyHex != null) {
+    const pub = info.publisherPubKeyHex
+    resolveAvatarsThen([pub], () => { $('cvPublisher').innerHTML = `by ${nameChip(pub)}` })
+  }
   $('cvDesc').textContent = info.description || '(no description provided)'
   if (info.isV2) {
     $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sats</b> <span class="muted">` +
@@ -1626,6 +1721,7 @@ async function onCheckUpdates(): Promise<void> {
   for (const b of feed) if (b.senderAlias) rememberAlias(b.publisherPubKeyHex, b.senderAlias) // capture publisher @names
   renderTokens() // surface any newly-cached latest announcements inline on the tokens
   renderUpdatesFeed(feed)
+  resolveAvatarsThen(feed.map(b => b.publisherPubKeyHex), () => { if (lastUpdatesFeed != null) renderUpdatesFeed(lastUpdatesFeed) })
 }
 
 type UpdateItem = Broadcast & { name: string; publisherPubKeyHex: string }
@@ -1700,6 +1796,7 @@ function init(): void {
   $('btnCheckMessages').onclick = () => void onCheckMessages()
   $('msgTo').addEventListener('input', updateMsgToName)
   $('btnContacts').onclick = () => openContactsModal()
+  $('btnPublishProfile').onclick = () => void onPublishProfile()
   $('contactsClose').onclick = () => closeContactsModal()
   $('contactsModal').addEventListener('click', e => { if (e.target === $('contactsModal')) closeContactsModal() })
   $('contactAdd').onclick = () => onAddContact()

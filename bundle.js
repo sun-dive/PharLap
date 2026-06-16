@@ -17063,6 +17063,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var RECORD_MESSAGE = 4;
   var RECORD_STOREFRONT = 6;
   var RECORD_NOTE = 7;
+  var RECORD_PROFILE = 8;
   var RESTRICTION_FUNGIBLE = 1;
   var RESTRICTION_REPLICABLE = 2;
   var RESTRICTION_TRACK_TRANSFERS = 4;
@@ -17254,6 +17255,38 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const fields = decodeStorefrontFields(d.fields);
     if (fields == null) return null;
     return { publisherPubKeyHex: d.pubKeyHex, fields };
+  }
+  function encodeProfileFields(data) {
+    return [
+      P_PREFIX,
+      [P_VERSION],
+      [RECORD_PROFILE],
+      utf8ToBytes2(data.alias ?? ""),
+      utf8ToBytes2(data.avatarMimeType ?? ""),
+      data.avatarBytes ?? []
+    ];
+  }
+  function decodeProfileFields(fields) {
+    if (fields.length < 6) return null;
+    if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null;
+    if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null;
+    if (fields[2].length !== 1 || fields[2][0] !== RECORD_PROFILE) return null;
+    const hasAvatar = !isEmptyOrZero(fields[5]);
+    return {
+      alias: isEmptyOrZero(fields[3]) ? void 0 : bytesToUtf8(fields[3]),
+      avatarMimeType: hasAvatar ? bytesToUtf8(fields[4]) : void 0,
+      avatarBytes: hasAvatar ? fields[5] : void 0
+    };
+  }
+  function buildProfileScript(ownerPubKeyHex, data) {
+    return lock(ownerPubKeyHex, encodeProfileFields(data));
+  }
+  function parseProfileScript(script) {
+    const d = decode(script);
+    if (d == null) return null;
+    const fields = decodeProfileFields(d.fields);
+    if (fields == null) return null;
+    return { ownerPubKeyHex: d.pubKeyHex, fields };
   }
   var BONUS_LINK = 1;
   var BONUS_CODE = 2;
@@ -20089,6 +20122,31 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     } catch {
     }
   }
+  async function downscaleToAvatar(bytes2, mimeType, maxEdge = 96) {
+    if (typeof createImageBitmap === "undefined" || typeof document === "undefined") return null;
+    try {
+      const blob = new Blob([new Uint8Array(bytes2)], { type: mimeType || "application/octet-stream" });
+      const bmp = await createImageBitmap(blob);
+      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (ctx == null) {
+        bmp.close?.();
+        return null;
+      }
+      ctx.drawImage(bmp, 0, 0, w, h);
+      bmp.close?.();
+      const out = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.7));
+      if (out == null) return null;
+      return { mimeType: "image/webp", bytes: Array.from(new Uint8Array(await out.arrayBuffer())) };
+    } catch {
+      return null;
+    }
+  }
   async function makeThumb(collectionId, bytes2, mimeType) {
     if (typeof createImageBitmap === "undefined" || typeof document === "undefined") return null;
     try {
@@ -20113,6 +20171,72 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     } catch {
       return null;
     }
+  }
+
+  // src/profile.ts
+  var MAX_PROFILE_SCAN = 30;
+  async function publishProfile(provider2, key2, profile) {
+    const pubHex = key2.toPublicKey().toString();
+    const fields = {
+      alias: profile.alias,
+      avatarMimeType: profile.avatar?.mimeType,
+      avatarBytes: profile.avatar?.bytes
+    };
+    const avatarLen = profile.avatar?.bytes.length ?? 0;
+    const estFee = Math.ceil((350 + avatarLen) * DEFAULT_FEE_PER_KB / 1e3);
+    const selected = selectFunding(await getSafeUtxos(provider2), PHARLAP_OUTPUT_SATS + estFee + 600);
+    const funding = await Promise.all(
+      selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) }))
+    );
+    const tx = new Transaction();
+    for (const f2 of funding) {
+      tx.addInput({
+        sourceTransaction: f2.sourceTx,
+        sourceOutputIndex: f2.utxo.outputIndex,
+        unlockingScriptTemplate: new P2PKH().unlock(key2)
+      });
+    }
+    tx.addOutput({ lockingScript: buildProfileScript(pubHex, fields), satoshis: PHARLAP_OUTPUT_SATS });
+    tx.addOutput({ lockingScript: new P2PKH().lock(key2.toAddress()), change: true });
+    await tx.fee(new SatoshisPerKilobyte(DEFAULT_FEE_PER_KB));
+    await tx.sign();
+    await provider2.broadcast(tx.toHex());
+    const txId = tx.id("hex");
+    provider2.registerPendingTx(
+      txId,
+      selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
+      (tx.outputs[1]?.satoshis ?? 0) > 0 ? { outputIndex: 1, satoshis: tx.outputs[1].satoshis ?? 0 } : void 0
+    );
+    return txId;
+  }
+  async function resolveProfile(provider2, ownerPubKeyHex) {
+    const address2 = PublicKey.fromString(ownerPubKeyHex).toAddress();
+    const heightByTx = /* @__PURE__ */ new Map();
+    try {
+      for (const h of await provider2.getAddressHistory(address2)) heightByTx.set(h.txId, h.blockHeight || 0);
+    } catch {
+      return null;
+    }
+    try {
+      for (const txId of await provider2.getRecentTxIdsForAddress(address2)) if (!heightByTx.has(txId)) heightByTx.set(txId, 0);
+    } catch {
+    }
+    if (heightByTx.size === 0) return null;
+    const owner = ownerPubKeyHex.toLowerCase();
+    const ordered = [...heightByTx.entries()].sort((a, b) => (b[1] || 1e12) - (a[1] || 1e12)).slice(0, MAX_PROFILE_SCAN);
+    for (const [txId] of ordered) {
+      let tx;
+      try {
+        tx = await provider2.getSourceTransaction(txId);
+      } catch {
+        continue;
+      }
+      for (const o of tx.outputs) {
+        const p = parseProfileScript(o.lockingScript);
+        if (p != null && p.ownerPubKeyHex.toLowerCase() === owner) return p.fields;
+      }
+    }
+    return null;
   }
 
   // src/app.ts
@@ -20179,7 +20303,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     $("address").textContent = address;
     $("pubkey").textContent = pubKeyHex;
     const mine = document.getElementById("myIdenticon");
-    if (mine) mine.innerHTML = identiconSvg(pubKeyHex, 22);
+    if (mine) mine.innerHTML = avatarHtml(pubKeyHex, 22);
     $("wif").value = key.toWif();
     hideWif();
   }
@@ -20475,12 +20599,52 @@ Proceed?`
       setStatus(`Send message failed: ${e.message}`, "error");
     }
   }
+  async function onPublishProfile() {
+    const alias = getMyAlias();
+    const file = await readFile($("profileAvatar"));
+    let avatar;
+    if (file != null) {
+      if (!file.mimeType.startsWith("image/")) {
+        setStatus("Avatar must be an image.", "error");
+        return;
+      }
+      const small = await downscaleToAvatar(file.bytes, file.mimeType);
+      if (small == null) {
+        setStatus("Could not process that image (need a browser that encodes WebP).", "error");
+        return;
+      }
+      avatar = small;
+    }
+    if (alias === "" && avatar == null) {
+      setStatus("Set an alias (above) or choose an avatar image first.", "error");
+      return;
+    }
+    if (!confirm(
+      `Publish your profile on-chain${avatar ? ` (a ${kb(avatar.bytes.length)} avatar)` : ""}${alias ? ` as @${alias}` : ""}?
+
+It's posted to your own address and spends a small network fee. Proceed?`
+    )) return;
+    setStatus("Publishing your profile\u2026");
+    try {
+      const txId = await publishProfile(provider, key, { alias: alias || void 0, avatar });
+      if (avatar != null) {
+        setAvatar(myPubKeyLc(), bytesToDataUrl(avatar.mimeType, avatar.bytes));
+        renderWallet();
+      }
+      ;
+      $("profileAvatar").value = "";
+      setStatus(`\u2705 Profile published. Tx ${short(txId)} \u2014 others now resolve your @name + avatar by your key.`, "ok");
+    } catch (e) {
+      setStatus(`Publish profile failed: ${e.message}`, "error");
+    }
+  }
   async function onCheckMessages() {
     setStatus("Checking for messages\u2026");
     try {
       const msgs = await scanIncomingMessages(provider, key);
       for (const m of msgs) if (m.senderAlias) rememberAlias(m.senderPubKeyHex, m.senderAlias);
       renderInbox(msgs);
+      resolveAvatarsThen(msgs.map((m) => m.senderPubKeyHex), () => renderInbox(lastInbox));
       setStatus(`Inbox: ${msgs.length} message(s).`, "ok");
     } catch (e) {
       setStatus(`Check messages failed: ${e.message}`, "error");
@@ -21079,6 +21243,11 @@ Proceed?`
     } catch {
       seenAliases = {};
     }
+    try {
+      avatars = JSON.parse(localStorage.getItem("p:avatars") ?? "{}");
+    } catch {
+      avatars = {};
+    }
   }
   function getMyAlias() {
     try {
@@ -21152,9 +21321,13 @@ Proceed?`
       return "";
     }
   }
+  function keyHue(pubKeyHex2) {
+    const h = Hash_exports.sha256(utils_exports.toArray(pubKeyHex2.toLowerCase(), "hex"));
+    return (h[0] << 8 | h[1]) % 360;
+  }
   function identiconSvg(pubKeyHex2, px = 18) {
     const h = Hash_exports.sha256(utils_exports.toArray(pubKeyHex2.toLowerCase(), "hex"));
-    const hue = (h[0] << 8 | h[1]) % 360;
+    const hue = keyHue(pubKeyHex2);
     const fg = `hsl(${hue},62%,58%)`;
     const bg = `hsl(${hue},22%,20%)`;
     const N2 = 5;
@@ -21168,14 +21341,74 @@ Proceed?`
     }
     return `<svg class="identicon" width="${px}" height="${px}" viewBox="0 0 ${N2} ${N2}" aria-hidden="true"><rect width="${N2}" height="${N2}" fill="${bg}"/><g fill="${fg}">${cells}</g></svg>`;
   }
+  var NO_AVATAR = "-";
+  var avatars = {};
+  function cachedAvatar(pubKeyHex2) {
+    const a = avatars[pubKeyHex2.toLowerCase()];
+    return a != null && a !== NO_AVATAR ? a : null;
+  }
+  function setAvatar(pubKeyHex2, value) {
+    avatars[pubKeyHex2.toLowerCase()] = value;
+    try {
+      localStorage.setItem("p:avatars", JSON.stringify(avatars));
+    } catch {
+    }
+  }
+  function avatarHtml(pubKeyHex2, px = 18) {
+    const a = cachedAvatar(pubKeyHex2);
+    if (a == null) return identiconSvg(pubKeyHex2, px);
+    return `<img class="avatar identicon" src="${a}" width="${px}" height="${px}" alt="" style="border:1.5px solid hsl(${keyHue(pubKeyHex2)},62%,58%)" />`;
+  }
   function nameChip(pubKeyHex2, opts = {}) {
     const info = displayName(pubKeyHex2);
-    const ico = identiconSvg(pubKeyHex2);
+    const ico = avatarHtml(pubKeyHex2);
     const chip = `<span class="copy-id" data-copy="${pubKeyHex2}" title="${pubKeyHex2} \u2014 click to copy">${escapeHtml(info.name)}</span>`;
     if (info.verified) return ico + chip;
     const warn = ` <span class="unverified" title="Self-claimed name \u2014 verify the key on hover before trusting it">\u26A0 unverified</span>`;
     const save = opts.save ? ` <button class="alias-save" data-pk="${pubKeyHex2}" data-alias="${escapeHtml(info.alias ?? "")}">save</button>` : "";
     return ico + chip + warn + save;
+  }
+  function bytesToDataUrl(mime, bytes2) {
+    let bin = "";
+    for (let i = 0; i < bytes2.length; i += 32768) bin += String.fromCharCode(...bytes2.slice(i, i + 32768));
+    return `data:${mime || "image/webp"};base64,${btoa(bin)}`;
+  }
+  var avatarInFlight = /* @__PURE__ */ new Map();
+  async function ensureAvatar(pubKeyHex2) {
+    const k = pubKeyHex2.toLowerCase();
+    if (avatars[k] != null) return false;
+    let p = avatarInFlight.get(k);
+    if (p == null) {
+      p = fetchProfileInto(k);
+      avatarInFlight.set(k, p);
+    }
+    try {
+      return await p;
+    } finally {
+      avatarInFlight.delete(k);
+    }
+  }
+  async function fetchProfileInto(k) {
+    try {
+      const prof = await resolveProfile(provider, k);
+      const hasAvatar = prof?.avatarBytes != null && prof.avatarBytes.length > 0;
+      setAvatar(k, hasAvatar ? bytesToDataUrl(prof.avatarMimeType ?? "image/webp", prof.avatarBytes) : NO_AVATAR);
+      let changed = hasAvatar;
+      if (prof?.alias && contacts[k] == null && seenAliases[k] !== prof.alias) {
+        rememberAlias(k, prof.alias);
+        changed = true;
+      }
+      return changed;
+    } catch {
+      return false;
+    }
+  }
+  function resolveAvatarsThen(pubKeys, rerender) {
+    const todo = [...new Set(pubKeys.map((p) => p.toLowerCase()))].filter((k) => avatars[k] == null);
+    if (todo.length === 0) return;
+    void Promise.all(todo.map(ensureAvatar)).then((changed) => {
+      if (changed.some(Boolean)) rerender();
+    });
   }
   function onAliasSaveClick(e) {
     const btn = e.target?.closest(".alias-save");
@@ -21201,6 +21434,7 @@ Proceed?`
   }
   function openContactsModal() {
     renderContacts();
+    resolveAvatarsThen([...Object.keys(contacts), ...Object.keys(seenAliases)], renderContacts);
     $("contactsModal").style.display = "flex";
   }
   function closeContactsModal() {
@@ -21237,7 +21471,7 @@ Proceed?`
   function contactRow(pk, alias, kind) {
     const row = document.createElement("div");
     row.className = "contact-row";
-    row.innerHTML = `${identiconSvg(pk, 24)} <span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} \u2014 click to copy">${short(pk)}</span>`;
+    row.innerHTML = `${avatarHtml(pk, 24)} <span class="contact-name">@${escapeHtml(alias)}</span> <span class="copy-id" data-copy="${pk}" title="${pk} \u2014 click to copy">${short(pk)}</span>`;
     const acts = document.createElement("span");
     acts.className = "contact-acts";
     const mkBtn = (label, fn) => {
@@ -21391,6 +21625,12 @@ Proceed?`
     else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">\u{1F4CE} Embedded file</span>');
     $("cvBadges").innerHTML = badges.join("");
     $("cvPublisher").innerHTML = info.publisherPubKeyHex ? `by ${nameChip(info.publisherPubKeyHex)}` : "";
+    if (info.publisherPubKeyHex != null) {
+      const pub = info.publisherPubKeyHex;
+      resolveAvatarsThen([pub], () => {
+        $("cvPublisher").innerHTML = `by ${nameChip(pub)}`;
+      });
+    }
     $("cvDesc").textContent = info.description || "(no description provided)";
     if (info.isV2) {
       $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sats</b> <span class="muted">(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee)</span>`;
@@ -21816,6 +22056,9 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     for (const b of feed) if (b.senderAlias) rememberAlias(b.publisherPubKeyHex, b.senderAlias);
     renderTokens();
     renderUpdatesFeed(feed);
+    resolveAvatarsThen(feed.map((b) => b.publisherPubKeyHex), () => {
+      if (lastUpdatesFeed != null) renderUpdatesFeed(lastUpdatesFeed);
+    });
   }
   function renderUpdatesFeed(feed) {
     lastUpdatesFeed = feed;
@@ -21890,6 +22133,7 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
     $("btnCheckMessages").onclick = () => void onCheckMessages();
     $("msgTo").addEventListener("input", updateMsgToName);
     $("btnContacts").onclick = () => openContactsModal();
+    $("btnPublishProfile").onclick = () => void onPublishProfile();
     $("contactsClose").onclick = () => closeContactsModal();
     $("contactsModal").addEventListener("click", (e) => {
       if (e.target === $("contactsModal")) closeContactsModal();
