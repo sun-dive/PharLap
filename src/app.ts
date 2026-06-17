@@ -236,6 +236,9 @@ async function noteToPropagate(t: StoredToken): Promise<SellerNote | undefined> 
 async function onReplicate(t: StoredToken): Promise<void> {
   if (!t.lockHex) { setStatus('Missing edition script; cannot replicate.', 'error'); return }
   const name = t.collectionName ?? 'this edition'
+  // A bonded edition's replica carries the same refundable bond — the dominant non-fee cost — so call it out.
+  const bondNote = editionSupportsBurn(Utils.toArray(t.lockHex, 'hex'))
+    ? 'a refundable bond for your copy (reclaim it by burning) + ' : ''
   setStatus('Preparing the replication…')
   try {
     // v2 (percentage pricing) editions go through the computed-split replicate.
@@ -243,7 +246,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
       const r = await replicateEditionV2(provider, key, {
         editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex,
         confirmSpend: total => confirm(
-          `Replicate a copy of “${name}”?\n\nThis spends ${total.toLocaleString()} sats from your wallet (the seller’s price + network fee).\n\nProceed?`),
+          `Replicate a copy of “${name}”?\n\nThis spends ${total.toLocaleString()} sats from your wallet (${bondNote}the seller’s price + network fee).\n\nProceed?`),
       })
       store.markSent(t.txId, t.outputIndex) // original spent; token returned to holder at out[0] (new outpoint)
       storeEdition({ txId: r.txId, outputIndex: 0, lockHex: t.lockHex }, t.collectionId, t.collectionName ?? 'Edition', termsFromToken(t))
@@ -258,7 +261,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
       note,
       confirmSpend: total => confirm(
         `Replicate a copy of “${name}”?\n\n` +
-        `This spends ${total.toLocaleString()} sats from your wallet (publisher ${t.publisherFeeSats ?? 0} + holder ${t.holderFeeSats ?? 0} fees + network fee).\n\nProceed?`),
+        `This spends ${total.toLocaleString()} sats from your wallet (${bondNote}publisher ${t.publisherFeeSats ?? 0} + holder ${t.holderFeeSats ?? 0} fees + network fee).\n\nProceed?`),
     })
     // The original UTXO is now spent; it was re-created at out[0] (token back to the holder = us, verbatim).
     store.markSent(t.txId, t.outputIndex)
