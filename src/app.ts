@@ -2202,21 +2202,38 @@ async function loadDiscThread(t: StoredToken): Promise<void> {
       setTimeout(() => { if (discAnchor === t) void loadDiscThread(t) }, 900)
     } catch (e) { statusEl.textContent = `Post failed: ${(e as Error).message}`; sendBtn.disabled = false }
   })()
-  renderDiscFeed(feedEl, result.posts)
-  if (result.posts.length) resolveAvatarsThen(result.posts.map(p => p.authorPubKeyHex), () => { if (discAnchor === t) renderDiscFeed(feedEl, result.posts) })
+  const ctx = { nodes: result.nodes, publisherHash: t.publisherPubKeyHashHex?.toLowerCase() }
+  renderDiscFeed(feedEl, result.posts, ctx)
+  if (result.posts.length) resolveAvatarsThen(result.posts.map(p => p.authorPubKeyHex), () => { if (discAnchor === t) renderDiscFeed(feedEl, result.posts, ctx) })
 }
 
-function renderDiscFeed(feedEl: HTMLElement, posts: Array<DiscPost & { node: CorridorNode }>): void {
+/** Un-spoofable identity badge for a post author, derived from lineage: 👑 creator (author hashes to the
+ *  covenant's publisher key), 🌱 original holder (a genesis node owner), ✓ holder (a resolved corridor owner). */
+function discIdentityBadge(authorPubKeyHex: string, ctx: { nodes: CorridorNode[]; publisherHash?: string }): string {
+  const a = authorPubKeyHex.toLowerCase()
+  try {
+    if (ctx.publisherHash != null && Utils.toHex(Hash.hash160(Utils.toArray(authorPubKeyHex, 'hex'))) === ctx.publisherHash) {
+      return '<span class="disc-badge creator" title="Verified creator — this key controls the collection’s covenant">👑 creator</span>'
+    }
+  } catch { /* malformed key — no badge */ }
+  const owned = ctx.nodes.find(n => n.ownerPubKeyHex !== '' && n.ownerPubKeyHex.toLowerCase() === a)
+  if (owned != null) return owned.isGenesis
+    ? '<span class="disc-badge senior" title="Original holder — owns a genesis copy">🌱 original holder</span>'
+    : '<span class="disc-badge senior" title="Verified holder in this lineage">✓ holder</span>'
+  return ''
+}
+
+function renderDiscFeed(feedEl: HTMLElement, posts: Array<DiscPost & { node: CorridorNode }>, ctx: { nodes: CorridorNode[]; publisherHash?: string }): void {
   if (posts.length === 0) { feedEl.innerHTML = '<p class="muted">No posts yet — be the first to post to your line.</p>'; return }
   feedEl.innerHTML = ''
   for (const p of posts) {
-    const badge = p.node.isDownstream ? '<span class="disc-badge down">⬇ downline</span>'
+    const pos = p.node.isDownstream ? '<span class="disc-badge down">⬇ downline</span>'
       : p.node.isRoot ? '<span class="disc-badge root">📣 everyone</span>'
       : p.node.isSelf ? '<span class="disc-badge self">your line</span>'
       : '<span class="disc-badge up">⬆ upline</span>'
     const el = document.createElement('div'); el.className = 'disc-post'
     el.innerHTML =
-      `<div class="disc-post-head">${nameChip(p.authorPubKeyHex)} ${badge}${p.sentAt ? ` · 🕒 ${escapeHtml(fmtTime(p.sentAt))}` : ''}</div>` +
+      `<div class="disc-post-head">${nameChip(p.authorPubKeyHex)} ${discIdentityBadge(p.authorPubKeyHex, ctx)} ${pos}${p.sentAt ? ` · 🕒 ${escapeHtml(fmtTime(p.sentAt))}` : ''}</div>` +
       `<div class="disc-post-text">${escapeHtml(p.text)}</div>`
     feedEl.append(el)
   }
