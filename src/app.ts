@@ -26,6 +26,7 @@ import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeToke
 import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime, downscaleToAvatar } from './thumbs.ts'
 import { publishProfile, resolveProfile } from './profile.ts'
 import { readCorridor, postToNodeFeed, type CorridorNode, type DiscPost } from './discussion.ts'
+import { publishConfigBackup, resolveConfigBackup, mergeConfig } from './configBackup.ts'
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
 import { decompress } from './compress.ts'
 
@@ -91,6 +92,10 @@ function switchWallet(k: PrivateKey, recover: boolean): void {
   if (recover) {
     setStatus('Wallet restored — recovering your purchases from chain…')
     void onCheckIncoming()
+    // Also pull your encrypted config backup (address book + alias + prefs) for this key, and merge it in.
+    void restoreConfigFromChain(true).then(n => {
+      if (n > 0) { renderContacts(); refreshNameSurfaces(); updateCfgBackupNote(); toast(`Restored ${n} contact${n > 1 ? 's' : ''} from your backup`) }
+    }).catch(() => { /* best-effort */ })
   }
 }
 
@@ -1097,6 +1102,7 @@ function escapeHtml(s: string): string {
 // key's self-claim; an unseen self-claim shows as "unverified" until you save it. All local, nothing extra
 // on-chain beyond the envelope part.
 let contacts: Record<string, string> = {} // pubkeyHex(lc) → your saved/verified alias (wins)
+let contactsAt: Record<string, number> = {} // pubkeyHex(lc) → updatedAt ms (for newest-wins backup merge)
 let seenAliases: Record<string, string> = {} // pubkeyHex(lc) → observed self-asserted alias (unverified)
 let pinned: Record<string, 1> = {} // pubkeyHex(lc) → 1 if you set a CUSTOM label (don't auto-follow renames)
 
@@ -1104,12 +1110,26 @@ function persist(k: string, v: object): void { try { localStorage.setItem(k, JSO
 
 function loadAliases(): void {
   try { contacts = JSON.parse(localStorage.getItem('p:contacts') ?? '{}') } catch { contacts = {} }
+  try { contactsAt = JSON.parse(localStorage.getItem('p:contactsAt') ?? '{}') } catch { contactsAt = {} }
   try { seenAliases = JSON.parse(localStorage.getItem('p:aliases') ?? '{}') } catch { seenAliases = {} }
   try { pinned = JSON.parse(localStorage.getItem('p:pinned') ?? '{}') } catch { pinned = {} }
   try { avatars = JSON.parse(localStorage.getItem('p:avatars') ?? '{}') } catch { avatars = {} }
 }
 function getMyAlias(): string { try { return (localStorage.getItem('p:myalias') ?? '').trim() } catch { return '' } }
-function setMyAlias(a: string): void { try { localStorage.setItem('p:myalias', a) } catch { /* fine */ } }
+function setMyAlias(a: string): void {
+  try { localStorage.setItem('p:myalias', a); localStorage.setItem('p:myaliasAt', String(nowMs())) } catch { /* fine */ }
+  markConfigDirty()
+}
+
+// ─── config backup bookkeeping ──────────────────────────────────────
+const nowMs = (): number => { try { return Date.now() } catch { return 0 } }
+/** updatedAt for a contact (set on save/rename/remove) — drives newest-wins restore merge + the dirty nudge. */
+function touchContact(k: string): void { contactsAt[k.toLowerCase()] = nowMs(); persist('p:contactsAt', contactsAt); markConfigDirty() }
+/** Mark local config changed since the last backup; refresh the nudge if the Contacts modal is open. */
+function markConfigDirty(): void {
+  try { localStorage.setItem('p:cfgDirty', String((parseInt(localStorage.getItem('p:cfgDirty') ?? '0', 10) || 0) + 1)) } catch { /* fine */ }
+  updateCfgBackupNote()
+}
 
 /** Record a self-asserted alias from a key. A saved contact you ACCEPTED (not pinned) follows the key's
  *  renames — it's provably the same key; a contact you gave a CUSTOM label (pinned) stays put. Unsaved keys
@@ -1118,7 +1138,7 @@ function rememberAlias(pubKeyHex: string, alias: string): void {
   if (alias === '') return
   const k = pubKeyHex.toLowerCase()
   if (contacts[k] != null) {
-    if (!pinned[k] && contacts[k] !== alias) { contacts[k] = alias; persist('p:contacts', contacts) } // follow rename
+    if (!pinned[k] && contacts[k] !== alias) { contacts[k] = alias; persist('p:contacts', contacts); touchContact(k) } // follow rename
     return
   }
   if (seenAliases[k] === alias) return
@@ -1145,12 +1165,14 @@ function saveContact(pubKeyHex: string, alias: string, customLabel = false): voi
   if (customLabel) pinned[k] = 1; else delete pinned[k]
   delete seenAliases[k]
   persist('p:contacts', contacts); persist('p:pinned', pinned); persist('p:aliases', seenAliases)
+  touchContact(k)
 }
 
 function removeContact(pubKeyHex: string): void {
   const k = pubKeyHex.toLowerCase()
   delete contacts[k]; delete pinned[k]
   persist('p:contacts', contacts); persist('p:pinned', pinned)
+  touchContact(k) // bump timestamp so a later backup reflects the change (deletes don't sync — no tombstones)
 }
 
 function ignoreSeen(pubKeyHex: string): void {
@@ -1453,9 +1475,72 @@ function updateMsgToName(): void {
   el.innerHTML = info.isMe ? '↪ that’s your own key' : (info.alias != null ? `→ ${nameChip(to, { save: true })}` : '')
 }
 
+// ─── config backup / restore ────────────────────────────────────────
+function cfgDirtyCount(): number { try { return parseInt(localStorage.getItem('p:cfgDirty') ?? '0', 10) || 0 } catch { return 0 } }
+function lastBackupAt(): number { try { return parseInt(localStorage.getItem('p:cfgBackupAt') ?? '0', 10) || 0 } catch { return 0 } }
+
+/** Refresh the "N changes since last backup" nudge in the Contacts modal (no-op if it isn't mounted). */
+function updateCfgBackupNote(): void {
+  const el = document.getElementById('cfgBackupNote'); if (el == null) return
+  const n = cfgDirtyCount(); const at = lastBackupAt()
+  el.textContent = at === 0
+    ? (Object.keys(contacts).length ? 'Not backed up yet.' : 'Nothing to back up yet.')
+    : n > 0 ? `⚠ ${n} change${n > 1 ? 's' : ''} since last backup (${fmtTime(at)}).`
+    : `✓ Backed up ${fmtTime(at)}.`
+}
+
+async function onConfigBackup(): Promise<void> {
+  const btn = $('btnCfgBackup') as HTMLButtonElement
+  btn.disabled = true; setStatus('Backing up your config (encrypted to your key)…')
+  try {
+    let prefs: Record<string, string> = {}
+    try { for (const k of ['p:nftview', 'p:nftsort']) { const v = localStorage.getItem(k); if (v != null) prefs[k] = v } } catch { prefs = {} }
+    const aliasAt = (() => { try { return parseInt(localStorage.getItem('p:myaliasAt') ?? '0', 10) || 0 } catch { return 0 } })()
+    const txId = await publishConfigBackup(provider, key,
+      { alias: getMyAlias() || undefined, aliasAt, contacts, contactsAt, prefs }, nowMs())
+    try { localStorage.setItem('p:cfgBackupAt', String(nowMs())); localStorage.setItem('p:cfgDirty', '0') } catch { /* fine */ }
+    updateCfgBackupNote()
+    setStatus(`☁ Config backed up (encrypted). Tx ${short(txId)}.`, 'ok')
+  } catch (e) {
+    setStatus(`Backup failed: ${(e as Error).message}`, 'error')
+  } finally { btn.disabled = false }
+}
+
+/** Restore the latest backup and merge it in (newest-wins). Returns how many entries the backup contributed. */
+async function restoreConfigFromChain(quiet = false): Promise<number> {
+  const blob = await resolveConfigBackup(provider, key)
+  if (blob == null) { if (!quiet) setStatus('No config backup found for this key.'); return 0 }
+  const aliasAt = (() => { try { return parseInt(localStorage.getItem('p:myaliasAt') ?? '0', 10) || 0 } catch { return 0 } })()
+  const merged = mergeConfig({ alias: getMyAlias() || undefined, aliasAt, contacts, contactsAt }, blob)
+  contacts = merged.contacts; contactsAt = merged.contactsAt
+  persist('p:contacts', contacts); persist('p:contactsAt', contactsAt)
+  if (merged.alias != null && merged.alias !== getMyAlias()) {
+    try { localStorage.setItem('p:myalias', merged.alias); if (merged.aliasAt != null) localStorage.setItem('p:myaliasAt', String(merged.aliasAt)) } catch { /* fine */ }
+    const ai = document.getElementById('myAlias') as HTMLInputElement | null
+    if (ai != null) ai.value = merged.alias ? '@' + merged.alias : ''
+  }
+  // Restore UI prefs (only sets that aren't already chosen locally is overkill — backup is authoritative for prefs).
+  if (blob.prefs != null) { try { for (const [k, v] of Object.entries(blob.prefs)) localStorage.setItem(k, v) } catch { /* fine */ } }
+  return merged.changed
+}
+
+async function onConfigRestore(): Promise<void> {
+  const btn = $('btnCfgRestore') as HTMLButtonElement
+  btn.disabled = true; setStatus('Looking for your config backup…')
+  try {
+    const changed = await restoreConfigFromChain()
+    if (changed >= 0) { renderContacts(); updateCfgBackupNote(); refreshNameSurfaces() }
+    if (changed > 0) setStatus(`⤓ Restored — ${changed} contact${changed > 1 ? 's' : ''} added/updated from your backup.`, 'ok')
+    else setStatus('Config restore: nothing new to merge (already up to date).', 'ok')
+  } catch (e) {
+    setStatus(`Restore failed: ${(e as Error).message}`, 'error')
+  } finally { btn.disabled = false }
+}
+
 // ─── address book ───────────────────────────────────────────────────
 function openContactsModal(): void {
   renderContacts()
+  updateCfgBackupNote()
   resolveAvatarsThen([...Object.keys(contacts), ...Object.keys(seenAliases)], renderContacts)
   $('contactsModal').style.display = 'flex'
 }
@@ -2348,6 +2433,8 @@ function init(): void {
   $('contactsClose').onclick = () => closeContactsModal()
   $('contactsModal').addEventListener('click', e => { if (e.target === $('contactsModal')) closeContactsModal() })
   $('contactAdd').onclick = () => onAddContact()
+  $('btnCfgBackup').onclick = () => void onConfigBackup()
+  $('btnCfgRestore').onclick = () => void onConfigRestore()
   $('btnCheckUpdates').onclick = () => void onCheckUpdates()
   $('btnNewWallet').onclick = () => {
     if (!confirm('Replace the current wallet with a new random key? Your current key is in the WIF box — back it up first.')) return

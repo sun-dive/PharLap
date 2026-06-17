@@ -46,6 +46,10 @@ export const RECORD_NOTE = 0x07
  *  on its own address. Resolved by pubkey (latest-by-height wins) so any reader sees a key's @name + face
  *  without a prior message. Self-gated: only that key funds txs on its address. See profile.ts. */
 export const RECORD_PROFILE = 0x08
+/** A key's ENCRYPTED self-backup of its local config (alias + address book + prefs), posted on its own
+ *  address and ECIES-encrypted to itself — only that key can read it. Resolved by scanning your own address
+ *  (latest-by-height wins) on WIF restore. See configBackup.ts. */
+export const RECORD_CONFIG = 0x09
 
 /** tokenRules restrictions bitfield. */
 export const RESTRICTION_FUNGIBLE = 0x0001 // interchangeable amounts (satoshis = units)
@@ -490,6 +494,43 @@ export function parseNoteScript(
   const fields = decodeNoteFields(d.fields)
   if (fields == null) return null
   return { authorPubKeyHex: d.pubKeyHex, fields }
+}
+
+// ─── CONFIG record (a key's encrypted self-backup) ──────────────────
+//   [ P, version, RECORD_CONFIG, envelope ]
+// Locked to your own pubkey, posted on your own address. The `envelope` is an ECIES-to-self message envelope
+// (see messageCodec) carrying the JSON config blob, so only your key decrypts it. Resolved latest-by-height.
+
+export interface ConfigFields {
+  /** Encrypted-to-self envelope bytes (header + ECIES body) carrying the config JSON. */
+  envelope: number[]
+}
+
+export function encodeConfigFields(data: ConfigFields): number[][] {
+  return [P_PREFIX, [P_VERSION], [RECORD_CONFIG], data.envelope]
+}
+
+export function decodeConfigFields(fields: number[][]): ConfigFields | null {
+  if (fields.length < 4) return null
+  if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null
+  if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
+  if (fields[2].length !== 1 || fields[2][0] !== RECORD_CONFIG) return null
+  return { envelope: fields[3] }
+}
+
+/** Build a CONFIG PushDrop locking script, locked to the owner's own public key. */
+export function buildConfigScript(ownerPubKeyHex: string, data: ConfigFields): LockingScript {
+  return pushDropLock(ownerPubKeyHex, encodeConfigFields(data))
+}
+
+export function parseConfigScript(
+  script: LockingScript,
+): { ownerPubKeyHex: string; fields: ConfigFields } | null {
+  const d = pushDropDecode(script)
+  if (d == null) return null
+  const fields = decodeConfigFields(d.fields)
+  if (fields == null) return null
+  return { ownerPubKeyHex: d.pubKeyHex, fields }
 }
 
 // ─── Token rules (8 bytes: 4 × uint16 LE) ───────────────────────────

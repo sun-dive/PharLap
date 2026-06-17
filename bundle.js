@@ -17078,6 +17078,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var RECORD_STOREFRONT = 6;
   var RECORD_NOTE = 7;
   var RECORD_PROFILE = 8;
+  var RECORD_CONFIG = 9;
   var RESTRICTION_FUNGIBLE = 1;
   var RESTRICTION_REPLICABLE = 2;
   var RESTRICTION_TRACK_TRANSFERS = 4;
@@ -17342,6 +17343,26 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const fields = decodeNoteFields(d.fields);
     if (fields == null) return null;
     return { authorPubKeyHex: d.pubKeyHex, fields };
+  }
+  function encodeConfigFields(data) {
+    return [P_PREFIX, [P_VERSION], [RECORD_CONFIG], data.envelope];
+  }
+  function decodeConfigFields(fields) {
+    if (fields.length < 4) return null;
+    if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null;
+    if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null;
+    if (fields[2].length !== 1 || fields[2][0] !== RECORD_CONFIG) return null;
+    return { envelope: fields[3] };
+  }
+  function buildConfigScript(ownerPubKeyHex, data) {
+    return lock(ownerPubKeyHex, encodeConfigFields(data));
+  }
+  function parseConfigScript(script) {
+    const d = decode(script);
+    if (d == null) return null;
+    const fields = decodeConfigFields(d.fields);
+    if (fields == null) return null;
+    return { ownerPubKeyHex: d.pubKeyHex, fields };
   }
   function encodeTokenRules(supply, divisibility, restrictions, version) {
     const buf = new ArrayBuffer(8);
@@ -20593,6 +20614,97 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return { nodes, posts };
   }
 
+  // src/configBackup.ts
+  var MAX_CONFIG_SCAN = 30;
+  var CONFIG_SCHEMA = 1;
+  async function publishConfigBackup(provider2, key2, cfg, savedAt) {
+    const pubHex = key2.toPublicKey().toString();
+    const blob = { schema: CONFIG_SCHEMA, alias: cfg.alias, aliasAt: cfg.aliasAt, contacts: cfg.contacts, contactsAt: cfg.contactsAt, prefs: cfg.prefs, savedAt };
+    const envelope = await buildEnvelope({
+      senderPriv: key2,
+      recipientPubKeyHex: pubHex,
+      parts: [{ kind: "text", text: JSON.stringify(blob) }],
+      encrypt: true
+    });
+    const estFee = Math.ceil((350 + envelope.length) * DEFAULT_FEE_PER_KB / 1e3);
+    const selected = selectFunding(await getSafeUtxos(provider2), PHARLAP_OUTPUT_SATS + estFee + 600);
+    const funding = await Promise.all(selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) })));
+    const tx = new Transaction();
+    for (const f2 of funding) {
+      tx.addInput({ sourceTransaction: f2.sourceTx, sourceOutputIndex: f2.utxo.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(key2) });
+    }
+    tx.addOutput({ lockingScript: buildConfigScript(pubHex, { envelope }), satoshis: PHARLAP_OUTPUT_SATS });
+    tx.addOutput({ lockingScript: new P2PKH().lock(key2.toAddress()), change: true });
+    await tx.fee(new SatoshisPerKilobyte(DEFAULT_FEE_PER_KB));
+    await tx.sign();
+    await provider2.broadcast(tx.toHex());
+    const txId = tx.id("hex");
+    provider2.registerPendingTx(
+      txId,
+      selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
+      (tx.outputs[1]?.satoshis ?? 0) > 0 ? { outputIndex: 1, satoshis: tx.outputs[1].satoshis ?? 0 } : void 0
+    );
+    return txId;
+  }
+  async function resolveConfigBackup(provider2, key2) {
+    const pubHex = key2.toPublicKey().toString();
+    const address2 = PublicKey.fromString(pubHex).toAddress();
+    const heightByTx = /* @__PURE__ */ new Map();
+    try {
+      for (const h of await provider2.getAddressHistory(address2)) heightByTx.set(h.txId, h.blockHeight || 0);
+    } catch {
+    }
+    try {
+      for (const txId of await provider2.getRecentTxIdsForAddress(address2)) if (!heightByTx.has(txId)) heightByTx.set(txId, 0);
+    } catch {
+    }
+    if (heightByTx.size === 0) return null;
+    const ordered = [...heightByTx.entries()].sort((a, b) => (b[1] || 1e12) - (a[1] || 1e12)).slice(0, MAX_CONFIG_SCAN);
+    const mine = pubHex.toLowerCase();
+    for (const [txId] of ordered) {
+      let tx;
+      try {
+        tx = await provider2.getSourceTransaction(txId);
+      } catch {
+        continue;
+      }
+      for (const o of tx.outputs) {
+        const c = parseConfigScript(o.lockingScript);
+        if (c == null || c.ownerPubKeyHex.toLowerCase() !== mine) continue;
+        const opened = await openEnvelope(c.fields.envelope, key2);
+        if (opened == null || opened.senderPubKeyHex.toLowerCase() !== mine) continue;
+        const textPart = opened.parts.find((p) => p.kind === "text");
+        if (textPart == null || textPart.kind !== "text") continue;
+        try {
+          const blob = JSON.parse(textPart.text);
+          if (blob != null && typeof blob === "object" && blob.contacts != null) return blob;
+        } catch {
+        }
+      }
+    }
+    return null;
+  }
+  function mergeConfig(local, backup) {
+    const contacts2 = { ...local.contacts };
+    const contactsAt2 = { ...local.contactsAt };
+    let changed = 0;
+    for (const [pk, name] of Object.entries(backup.contacts)) {
+      const bAt = backup.contactsAt?.[pk] ?? backup.savedAt ?? 0;
+      const lAt = contactsAt2[pk] ?? (contacts2[pk] != null ? 0 : -1);
+      if (lAt < 0 || bAt > lAt) {
+        if (contacts2[pk] !== name || contactsAt2[pk] !== bAt) changed++;
+        contacts2[pk] = name;
+        contactsAt2[pk] = bAt;
+      }
+    }
+    let alias = local.alias, aliasAt = local.aliasAt;
+    if (backup.alias != null && (backup.aliasAt ?? backup.savedAt ?? 0) > (local.aliasAt ?? -1)) {
+      alias = backup.alias;
+      aliasAt = backup.aliasAt ?? backup.savedAt;
+    }
+    return { alias, aliasAt, contacts: contacts2, contactsAt: contactsAt2, changed };
+  }
+
   // src/app.ts
   var WIF_KEY = "p:wallet:wif";
   var key;
@@ -20652,6 +20764,15 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (recover) {
       setStatus("Wallet restored \u2014 recovering your purchases from chain\u2026");
       void onCheckIncoming();
+      void restoreConfigFromChain(true).then((n) => {
+        if (n > 0) {
+          renderContacts();
+          refreshNameSurfaces();
+          updateCfgBackupNote();
+          toast(`Restored ${n} contact${n > 1 ? "s" : ""} from your backup`);
+        }
+      }).catch(() => {
+      });
     }
   }
   function renderWallet() {
@@ -21697,6 +21818,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     return s2.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
   var contacts = {};
+  var contactsAt = {};
   var seenAliases = {};
   var pinned = {};
   function persist(k, v) {
@@ -21710,6 +21832,11 @@ It's posted to your own address and spends a small network fee. Proceed?`
       contacts = JSON.parse(localStorage.getItem("p:contacts") ?? "{}");
     } catch {
       contacts = {};
+    }
+    try {
+      contactsAt = JSON.parse(localStorage.getItem("p:contactsAt") ?? "{}");
+    } catch {
+      contactsAt = {};
     }
     try {
       seenAliases = JSON.parse(localStorage.getItem("p:aliases") ?? "{}");
@@ -21737,8 +21864,29 @@ It's posted to your own address and spends a small network fee. Proceed?`
   function setMyAlias(a) {
     try {
       localStorage.setItem("p:myalias", a);
+      localStorage.setItem("p:myaliasAt", String(nowMs()));
     } catch {
     }
+    markConfigDirty();
+  }
+  var nowMs = () => {
+    try {
+      return Date.now();
+    } catch {
+      return 0;
+    }
+  };
+  function touchContact(k) {
+    contactsAt[k.toLowerCase()] = nowMs();
+    persist("p:contactsAt", contactsAt);
+    markConfigDirty();
+  }
+  function markConfigDirty() {
+    try {
+      localStorage.setItem("p:cfgDirty", String((parseInt(localStorage.getItem("p:cfgDirty") ?? "0", 10) || 0) + 1));
+    } catch {
+    }
+    updateCfgBackupNote();
   }
   function rememberAlias(pubKeyHex2, alias) {
     if (alias === "") return;
@@ -21747,6 +21895,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       if (!pinned[k] && contacts[k] !== alias) {
         contacts[k] = alias;
         persist("p:contacts", contacts);
+        touchContact(k);
       }
       return;
     }
@@ -21771,6 +21920,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     persist("p:contacts", contacts);
     persist("p:pinned", pinned);
     persist("p:aliases", seenAliases);
+    touchContact(k);
   }
   function removeContact(pubKeyHex2) {
     const k = pubKeyHex2.toLowerCase();
@@ -21778,6 +21928,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     delete pinned[k];
     persist("p:contacts", contacts);
     persist("p:pinned", pinned);
+    touchContact(k);
   }
   function ignoreSeen(pubKeyHex2) {
     delete seenAliases[pubKeyHex2.toLowerCase()];
@@ -22064,8 +22215,124 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     const info = displayName(to);
     el.innerHTML = info.isMe ? "\u21AA that\u2019s your own key" : info.alias != null ? `\u2192 ${nameChip(to, { save: true })}` : "";
   }
+  function cfgDirtyCount() {
+    try {
+      return parseInt(localStorage.getItem("p:cfgDirty") ?? "0", 10) || 0;
+    } catch {
+      return 0;
+    }
+  }
+  function lastBackupAt() {
+    try {
+      return parseInt(localStorage.getItem("p:cfgBackupAt") ?? "0", 10) || 0;
+    } catch {
+      return 0;
+    }
+  }
+  function updateCfgBackupNote() {
+    const el = document.getElementById("cfgBackupNote");
+    if (el == null) return;
+    const n = cfgDirtyCount();
+    const at = lastBackupAt();
+    el.textContent = at === 0 ? Object.keys(contacts).length ? "Not backed up yet." : "Nothing to back up yet." : n > 0 ? `\u26A0 ${n} change${n > 1 ? "s" : ""} since last backup (${fmtTime(at)}).` : `\u2713 Backed up ${fmtTime(at)}.`;
+  }
+  async function onConfigBackup() {
+    const btn = $("btnCfgBackup");
+    btn.disabled = true;
+    setStatus("Backing up your config (encrypted to your key)\u2026");
+    try {
+      let prefs = {};
+      try {
+        for (const k of ["p:nftview", "p:nftsort"]) {
+          const v = localStorage.getItem(k);
+          if (v != null) prefs[k] = v;
+        }
+      } catch {
+        prefs = {};
+      }
+      const aliasAt = (() => {
+        try {
+          return parseInt(localStorage.getItem("p:myaliasAt") ?? "0", 10) || 0;
+        } catch {
+          return 0;
+        }
+      })();
+      const txId = await publishConfigBackup(
+        provider,
+        key,
+        { alias: getMyAlias() || void 0, aliasAt, contacts, contactsAt, prefs },
+        nowMs()
+      );
+      try {
+        localStorage.setItem("p:cfgBackupAt", String(nowMs()));
+        localStorage.setItem("p:cfgDirty", "0");
+      } catch {
+      }
+      updateCfgBackupNote();
+      setStatus(`\u2601 Config backed up (encrypted). Tx ${short(txId)}.`, "ok");
+    } catch (e) {
+      setStatus(`Backup failed: ${e.message}`, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  async function restoreConfigFromChain(quiet = false) {
+    const blob = await resolveConfigBackup(provider, key);
+    if (blob == null) {
+      if (!quiet) setStatus("No config backup found for this key.");
+      return 0;
+    }
+    const aliasAt = (() => {
+      try {
+        return parseInt(localStorage.getItem("p:myaliasAt") ?? "0", 10) || 0;
+      } catch {
+        return 0;
+      }
+    })();
+    const merged = mergeConfig({ alias: getMyAlias() || void 0, aliasAt, contacts, contactsAt }, blob);
+    contacts = merged.contacts;
+    contactsAt = merged.contactsAt;
+    persist("p:contacts", contacts);
+    persist("p:contactsAt", contactsAt);
+    if (merged.alias != null && merged.alias !== getMyAlias()) {
+      try {
+        localStorage.setItem("p:myalias", merged.alias);
+        if (merged.aliasAt != null) localStorage.setItem("p:myaliasAt", String(merged.aliasAt));
+      } catch {
+      }
+      const ai = document.getElementById("myAlias");
+      if (ai != null) ai.value = merged.alias ? "@" + merged.alias : "";
+    }
+    if (blob.prefs != null) {
+      try {
+        for (const [k, v] of Object.entries(blob.prefs)) localStorage.setItem(k, v);
+      } catch {
+      }
+    }
+    return merged.changed;
+  }
+  async function onConfigRestore() {
+    const btn = $("btnCfgRestore");
+    btn.disabled = true;
+    setStatus("Looking for your config backup\u2026");
+    try {
+      const changed = await restoreConfigFromChain();
+      if (changed >= 0) {
+        renderContacts();
+        updateCfgBackupNote();
+        refreshNameSurfaces();
+      }
+      if (changed > 0) setStatus(`\u2913 Restored \u2014 ${changed} contact${changed > 1 ? "s" : ""} added/updated from your backup.`, "ok");
+      else setStatus("Config restore: nothing new to merge (already up to date).", "ok");
+    } catch (e) {
+      setStatus(`Restore failed: ${e.message}`, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  }
   function openContactsModal() {
     renderContacts();
+    updateCfgBackupNote();
     resolveAvatarsThen([...Object.keys(contacts), ...Object.keys(seenAliases)], renderContacts);
     $("contactsModal").style.display = "flex";
   }
@@ -23024,6 +23291,8 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
       if (e.target === $("contactsModal")) closeContactsModal();
     });
     $("contactAdd").onclick = () => onAddContact();
+    $("btnCfgBackup").onclick = () => void onConfigBackup();
+    $("btnCfgRestore").onclick = () => void onConfigRestore();
     $("btnCheckUpdates").onclick = () => void onCheckUpdates();
     $("btnNewWallet").onclick = () => {
       if (!confirm("Replace the current wallet with a new random key? Your current key is in the WIF box \u2014 back it up first.")) return;
