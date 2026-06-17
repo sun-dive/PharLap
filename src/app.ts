@@ -1799,8 +1799,8 @@ function initTabs(): void {
 
 function init(): void {
   store = new PharLapStore()
+  loadAliases() // before useKey(): renderWallet() draws your own avatar, which reads the loaded p:avatars cache
   useKey(loadKey())
-  loadAliases()
   try { if (localStorage.getItem('p:nftview') === 'grid') nftView = 'grid' } catch { /* default list */ }
   updateViewToggle()
   renderTokens()
