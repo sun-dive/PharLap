@@ -1,10 +1,10 @@
 // © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Transaction, P2PKH, PrivateKey, LockingScript, Spend, Hash } from '@bsv/sdk'
+import { Transaction, P2PKH, PrivateKey, LockingScript, Spend, Hash, Utils } from '@bsv/sdk'
 import {
   buildEditionGenesisTx, buildReplicateTx, buildReplicateV2Tx, buildEditionGenesisV2Tx, buildEditionTransferTx,
-  type EditionUtxo, type EditionTerms,
+  scanCollectionBuyers, type EditionUtxo, type EditionTerms,
 } from '../src/editionBuilder.ts'
 import { buildEditionLockV2, p2pkhScript, parseEditionAny } from '../src/covenant.ts'
 import { readNoteFromTx } from '../src/sellerNote.ts'
@@ -69,6 +69,35 @@ test('replicate: builds a valid permissionless mint (token, replica, fees, chang
   const rep = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer, funding: [faucet(buyer, 200000)] })
   assert.equal(rep.tx.outputs.length, 5)
   assert.equal(spendOk(rep.tx, LockingScript.fromBinary(utxo.lockBytes), 1), true)
+})
+
+test('scanCollectionBuyers: finds replica buyers, dedupes by key, excludes the publisher’s own copies', async () => {
+  const { genesis, utxo } = await genesisEdition()
+  const buyer1 = PrivateKey.fromRandom()
+  const buyer2 = PrivateKey.fromRandom()
+  // buyer1 replicates twice (from the holder's copy), buyer2 once.
+  const rep1a = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer1, funding: [faucet(buyer1, 200000)] })
+  const rep1b = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer1, funding: [faucet(buyer1, 200000)] })
+  const rep2 = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer2, funding: [faucet(buyer2, 200000)] })
+  const byId: Record<string, Transaction> = {
+    [genesis.txId]: genesis.tx, [rep1a.txId]: rep1a.tx, [rep1b.txId]: rep1b.tx, [rep2.txId]: rep2.tx,
+  }
+  const provider = {
+    getAddressHistory: async () => [
+      // genesis (out[1] owned by publisher → must be excluded), then the three sales.
+      { txId: genesis.txId, blockHeight: 100 }, { txId: rep1a.txId, blockHeight: 101 },
+      { txId: rep2.txId, blockHeight: 102 }, { txId: rep1b.txId, blockHeight: 103 },
+    ],
+    getSourceTransaction: async (id: string) => byId[id] ?? (() => { throw new Error(`no tx ${id}`) })(),
+  } as unknown as Parameters<typeof scanCollectionBuyers>[0]
+
+  const res = await scanCollectionBuyers(provider, { collectionId: TX1REF, publisherPubKeyHashHex: Utils.toHex(Hash.hash160(pub(publisher))) })
+  assert.equal(res.buyers.length, 2) // two distinct buyers, publisher's own genesis copy excluded
+  const b1 = res.buyers.find(b => b.pubKeyHex === buyer1.toPublicKey().toString())
+  const b2 = res.buyers.find(b => b.pubKeyHex === buyer2.toPublicKey().toString())
+  assert.equal(b1?.count, 2) // buyer1 replicated twice
+  assert.equal(b2?.count, 1)
+  assert.equal(res.buyers.every(b => b.pubKeyHex !== publisher.toPublicKey().toString()), true) // never the publisher
 })
 
 test('replicate with a seller-note echoes a NOTE output to the buyer, covenant still valid', async () => {
