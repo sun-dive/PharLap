@@ -104,8 +104,12 @@
     .link-btn:hover { filter:brightness(1.15); }
     /* 👥 Buyers list modal */
     .buyers-list { display:flex; flex-direction:column; gap:6px; max-height:50vh; overflow:auto; }
-    .buyer-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; }
-    .buyer-who { display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:13px; min-width:0; }
+    .buyer-row { display:flex; align-items:center; gap:10px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; }
+    .buyer-who { display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:13px; min-width:0; flex:1; }
+    .buyers-toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 0 8px; }
+    .buyers-selall { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+    .compose-many { display:flex; flex-wrap:wrap; gap:6px 10px; max-height:96px; overflow:auto; }
+    .compose-hint code { background:var(--line); padding:0 4px; border-radius:4px; }
     .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
     .token-tile { display:flex; flex-direction:column; gap:6px; padding:8px; background:#0d1117; border:1px solid var(--line);
                   border-radius:8px; cursor:pointer; text-align:left; color:var(--fg); font:inherit; }

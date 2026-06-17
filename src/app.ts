@@ -1328,19 +1328,30 @@ function resolvePublisherIdentitiesThen(tokens: StoredToken[], rerender: () => v
   })
 }
 
-/** Message a key without leaving the current page: a compose overlay layered over My NFTs (so you return to
- *  the exact same card/scroll on close). Reuses the same encrypted-send path as the Messages tab. */
-function composeTo(pubKeyHex: string, who: string): void {
+/** Substitute message wildcards for one recipient: %alias% → their name (or "there"), %product% → ctx.product. */
+function fillWildcards(text: string, pubKeyHex: string, ctx: { product?: string }): string {
+  const alias = displayName(pubKeyHex).alias ?? 'there'
+  return text.split('%alias%').join(alias).split('%product%').join(ctx.product ?? '')
+}
+
+/** Compose overlay over the current page (so you return to the same card/scroll on close). One recipient, or
+ *  many (a personalized mail-merge: %alias% per recipient, %product% = the collection — one encrypted tx each).
+ *  Reuses the same encrypted-send path as the Messages tab. */
+function openCompose(recipients: string[], opts: { who: string; product?: string }): void {
+  if (recipients.length === 0) return
+  const multi = recipients.length > 1
   const overlay = document.createElement('div')
   overlay.className = 'modal'
   overlay.innerHTML =
     '<div class="modal-box compose-box">' +
-    `<div class="modal-head"><span>✉ Message ${escapeHtml(who)}</span><button class="secondary compose-close">✕ Close</button></div>` +
-    `<div class="compose-to">${nameChip(pubKeyHex)}</div>` +
+    `<div class="modal-head"><span>✉ Message ${escapeHtml(opts.who)}</span><button class="secondary compose-close">✕ Close</button></div>` +
+    `<div class="compose-to${multi ? ' compose-many' : ''}">${recipients.map(r => nameChip(r)).join(multi ? ' ' : '')}</div>` +
     '<textarea class="compose-text" rows="4" placeholder="Write a message…"></textarea>' +
+    `<p class="compose-hint muted" style="font-size:11px">Personalize with <code>%alias%</code> (recipient’s name)${opts.product != null ? ' · <code>%product%</code>' : ''}</p>` +
+    '<div class="compose-preview muted" style="font-size:11px"></div>' +
     '<label class="compose-row"><span>📎 Attach a file</span> <input type="file" class="compose-file" /></label>' +
     '<label class="compose-row"><span><input type="checkbox" class="compose-encrypt" checked /> Encrypt</span> <span class="muted" style="font-size:11px">only they can read it</span></label>' +
-    '<div class="row" style="margin-top:10px"><button class="compose-send">Send</button></div>' +
+    `<div class="row" style="margin-top:10px"><button class="compose-send">${multi ? `Send to ${recipients.length}` : 'Send'}</button></div>` +
     '<p class="compose-status muted" style="font-size:12px;margin-top:8px"></p>' +
     '</div>'
   const close = (): void => overlay.remove()
@@ -1351,30 +1362,49 @@ function composeTo(pubKeyHex: string, who: string): void {
   const encEl = overlay.querySelector('.compose-encrypt') as HTMLInputElement
   const sendBtn = overlay.querySelector('.compose-send') as HTMLButtonElement
   const statusEl = overlay.querySelector('.compose-status') as HTMLElement
+  const previewEl = overlay.querySelector('.compose-preview') as HTMLElement
+  // Live preview of the merge for the first recipient (only when a wildcard is actually used).
+  const updatePreview = (): void => {
+    const filled = fillWildcards(textEl.value, recipients[0], opts)
+    previewEl.textContent = filled !== textEl.value ? `Preview → ${displayName(recipients[0]).name}: ${filled}` : ''
+  }
+  textEl.addEventListener('input', updatePreview)
   sendBtn.onclick = () => void (async () => {
     const text = textEl.value
     const file = await readFile(fileEl)
-    const parts: Part[] = []
-    if (text.trim()) parts.push({ kind: 'text', text })
-    if (file) parts.push({ kind: 'file', mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes })
-    if (parts.length === 0) { statusEl.textContent = 'Write a message or attach a file first.'; return }
+    if (!text.trim() && file == null) { statusEl.textContent = 'Write a message or attach a file first.'; return }
+    if (multi && !confirm(
+      `Send this message to ${recipients.length} recipients?\n\n` +
+      `That's ${recipients.length} separate encrypted transactions — one network fee each` +
+      `${file != null ? ' (the file is sent to each)' : ''}. Proceed?`)) return
     sendBtn.disabled = true
-    statusEl.textContent = `Sending ${encEl.checked ? 'encrypted' : 'public'} message…`
-    try {
-      const r = await sendMessage(provider, key, { toPubKeyHex: pubKeyHex, parts, encrypt: encEl.checked, senderAlias: getMyAlias() })
-      statusEl.textContent = `✅ Sent. Tx ${short(r.txId)}.`
-      setTimeout(close, 1200)
-    } catch (e) {
-      statusEl.textContent = `Send failed: ${(e as Error).message}`
-      sendBtn.disabled = false
+    let ok = 0, failed = 0
+    for (let i = 0; i < recipients.length; i++) {
+      const r = recipients[i]
+      statusEl.textContent = multi ? `Sending ${i + 1}/${recipients.length}…` : 'Sending…'
+      const parts: Part[] = []
+      const filled = fillWildcards(text, r, opts)
+      if (filled.trim()) parts.push({ kind: 'text', text: filled })
+      if (file) parts.push({ kind: 'file', mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes })
+      if (parts.length === 0) continue
+      try { await sendMessage(provider, key, { toPubKeyHex: r, parts, encrypt: encEl.checked, senderAlias: getMyAlias() }); ok++ }
+      catch { failed++ }
     }
+    statusEl.textContent = failed === 0
+      ? `✅ Sent${multi ? ` to ${ok}` : ''}.`
+      : `Sent ${ok}, ${failed} failed${multi ? ' — close and retry the rest' : ''}.`
+    if (failed === 0) setTimeout(close, multi ? 1600 : 1200)
+    else sendBtn.disabled = false
   })()
   document.body.append(overlay)
   textEl.focus()
 }
 
+/** Message one key (NFT-card publisher chip / single buyer row). */
+function composeTo(pubKeyHex: string, who: string, product?: string): void { openCompose([pubKeyHex], { who, product }) }
+
 /** "Message publisher" from an NFT card. */
-function onMessagePublisher(pubKeyHex: string): void { composeTo(pubKeyHex, 'the publisher') }
+function onMessagePublisher(pubKeyHex: string, product?: string): void { composeTo(pubKeyHex, 'the publisher', product) }
 
 /** A small "by @publisher [avatar] ✉ Message" row for an edition card; null for non-editions. */
 function publisherRowEl(t: StoredToken, myHash: string): HTMLElement | null {
@@ -1387,7 +1417,7 @@ function publisherRowEl(t: StoredToken, myHash: string): HTMLElement | null {
   row.innerHTML = `<span class="muted">by</span> ${nameChip(pk)} `
   const msg = document.createElement('button')
   msg.className = 'link-btn'; msg.textContent = '✉ Message'
-  msg.onclick = e => { e.stopPropagation(); onMessagePublisher(pk) }
+  msg.onclick = e => { e.stopPropagation(); onMessagePublisher(pk, t.collectionName) }
   row.append(msg)
   return row
 }
@@ -2011,6 +2041,8 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
     '<span class="row" style="gap:6px"><button class="secondary buyers-refresh">🔄 Refresh</button>' +
     '<button class="secondary buyers-close">✕ Close</button></span></div>' +
     '<p class="buyers-status muted" style="font-size:12px">Scanning your sales…</p>' +
+    '<div class="buyers-toolbar" hidden><label class="buyers-selall"><input type="checkbox" class="buyers-all" /> Select all</label>' +
+    '<button class="buyers-msg-sel" disabled>✉ Message selected (0)</button></div>' +
     '<div class="buyers-list"></div>' +
     '<p class="muted" style="font-size:11px;margin-top:10px">Buyers at point of sale (when they replicated a copy). Onward transfers aren’t visible to you, so this isn’t a current-owner list.</p>' +
     '</div>'
@@ -2022,23 +2054,45 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
   const statusEl = overlay.querySelector('.buyers-status') as HTMLElement
   const listEl = overlay.querySelector('.buyers-list') as HTMLElement
   const refreshBtn = overlay.querySelector('.buyers-refresh') as HTMLButtonElement
+  const toolbarEl = overlay.querySelector('.buyers-toolbar') as HTMLElement
+  const allEl = overlay.querySelector('.buyers-all') as HTMLInputElement
+  const msgSelBtn = overlay.querySelector('.buyers-msg-sel') as HTMLButtonElement
+  const selected = new Set<string>()
+  let lastBuyers: BuyerRecord[] = []
+  const updateSelUI = (): void => {
+    msgSelBtn.disabled = selected.size === 0
+    msgSelBtn.textContent = `✉ Message selected (${selected.size})`
+    allEl.checked = lastBuyers.length > 0 && lastBuyers.every(b => selected.has(b.pubKeyHex))
+  }
   const render = (res: { buyers: BuyerRecord[]; scanned: number; capped: boolean }): void => {
+    lastBuyers = res.buyers
     if (res.buyers.length === 0) {
       statusEl.textContent = `No buyers yet — no one has replicated a copy (scanned ${res.scanned} tx${res.scanned === 1 ? '' : 's'}).`
+      toolbarEl.hidden = true
       return
     }
     statusEl.textContent = `${res.buyers.length} buyer${res.buyers.length > 1 ? 's' : ''}${res.capped ? ` · most recent ${res.scanned} txs` : ''}`
+    toolbarEl.hidden = false
     listEl.innerHTML = ''
     for (const b of res.buyers) {
       const row = document.createElement('div'); row.className = 'buyer-row'
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'buyer-sel'; cb.checked = selected.has(b.pubKeyHex)
+      cb.onchange = () => { if (cb.checked) selected.add(b.pubKeyHex); else selected.delete(b.pubKeyHex); updateSelUI() }
       const who = document.createElement('div'); who.className = 'buyer-who'
       who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">×${b.count}</span>` : ''}`
       const msg = document.createElement('button'); msg.className = 'secondary'; msg.textContent = '✉ Message'
-      msg.onclick = () => composeTo(b.pubKeyHex, 'this buyer') // stacks over the buyers list — message several in a row
-      row.append(who, msg)
+      msg.onclick = () => composeTo(b.pubKeyHex, 'this buyer', title) // stacks over the list — message several in a row
+      row.append(cb, who, msg)
       listEl.append(row)
     }
+    updateSelUI()
   }
+  allEl.onchange = () => {
+    if (allEl.checked) lastBuyers.forEach(b => selected.add(b.pubKeyHex)); else selected.clear()
+    listEl.querySelectorAll('.buyer-sel').forEach((cb, i) => { (cb as HTMLInputElement).checked = selected.has(lastBuyers[i].pubKeyHex) })
+    updateSelUI()
+  }
+  msgSelBtn.onclick = () => { if (selected.size) openCompose([...selected], { who: `${selected.size} buyers`, product: title }) }
   const scan = async (): Promise<void> => {
     refreshBtn.disabled = true; listEl.innerHTML = ''; statusEl.textContent = 'Scanning your sales…'
     try {
