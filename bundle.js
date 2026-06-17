@@ -16922,11 +16922,24 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         kind: token.kind,
         lockHex: token.lockHex,
         publisherPubKeyHashHex: token.publisherPubKeyHashHex,
+        publisherPubKeyHex: token.publisherPubKeyHex,
         publisherFeeSats: token.publisherFeeSats,
-        holderFeeSats: token.holderFeeSats
+        holderFeeSats: token.holderFeeSats,
+        // Previously dropped on the floor: these were passed by storeEdition but never persisted, so the bond
+        // amount / seller note / bonus were lost on reload. Persist them.
+        tokenSats: token.tokenSats,
+        sellerNote: token.sellerNote,
+        bonusKind: token.bonusKind,
+        bonusValue: token.bonusValue
       });
       this.write(tokens);
       return true;
+    }
+    /** Cache the publisher's recovered full pubkey on every held copy of a collection (set lazily after a
+     *  TX1 input lookup). Keyed by collectionId since all editions of a collection share one publisher. */
+    setPublisherPubKey(collectionId, publisherPubKeyHex) {
+      const tokens = this.list().map((t) => t.collectionId === collectionId ? { ...t, publisherPubKeyHex } : t);
+      this.write(tokens);
     }
     /** Update the cached collection name of a stored token (e.g. once resolved from TX1). */
     setCollectionName(txId, outputIndex, collectionName) {
@@ -20362,6 +20375,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var provider;
   var store2;
   var nftView = "list";
+  var nftSort = "recent";
   var lastInbox = [];
   var lastUpdatesFeed = null;
   var $ = (id) => {
@@ -21097,6 +21111,10 @@ It's posted to your own address and spends a small network fee. Proceed?`
       if (g != null) g.push(t);
       else groups.set(t.collectionId, [t]);
     }
+    if (nftSort === "publisher") {
+      renderTokensByPublisher(host, active, groups, myHash);
+      return;
+    }
     const buckets = /* @__PURE__ */ new Map();
     let anyPending = false;
     for (const [collectionId, copies] of groups) {
@@ -21117,6 +21135,30 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const pending = buckets.get("pending");
     if (pending?.length) host.append(sectionEl("\u23F3 Identifying type\u2026", pending, myHash));
     if (anyPending) void warmAndRerender([...groups.keys()]);
+    resolvePublisherIdentitiesThen(active, () => renderTokens(true));
+  }
+  function renderTokensByPublisher(host, active, groups, myHash) {
+    const buckets = /* @__PURE__ */ new Map();
+    for (const [collectionId, copies] of groups) {
+      const t0 = copies[0];
+      const k = t0.publisherPubKeyHashHex == null ? "none" : t0.publisherPubKeyHashHex === myHash ? "you" : t0.publisherPubKeyHex ?? "pending";
+      const arr = buckets.get(k);
+      if (arr != null) arr.push([collectionId, copies]);
+      else buckets.set(k, [[collectionId, copies]]);
+    }
+    const isPub = (k) => k !== "you" && k !== "pending" && k !== "none";
+    const order = [...buckets.keys()].sort((a, b) => {
+      const rank = (k) => k === "you" ? 0 : isPub(k) ? 1 : k === "pending" ? 2 : 3;
+      if (rank(a) !== rank(b)) return rank(a) - rank(b);
+      return isPub(a) ? displayName(a).name.localeCompare(displayName(b).name) : 0;
+    });
+    host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held \u2014 by publisher</p>`;
+    for (const k of order) {
+      const items = buckets.get(k);
+      const label = k === "you" ? "\u{1F4E4} Published by you" : k === "pending" ? "\u23F3 Resolving publisher\u2026" : k === "none" ? "\u{1FA99} No publisher" : nameChip(k);
+      host.append(sectionEl(label, items, myHash));
+    }
+    resolvePublisherIdentitiesThen(active, () => renderTokens(true));
   }
   function card(collectionId, copies, myHash) {
     return copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash);
@@ -21139,7 +21181,8 @@ It's posted to your own address and spends a small network fee. Proceed?`
     head.innerHTML = `<span class="chev">\u25BE</span> <span class="token-section-label">${label}</span> <span class="count">${items.length}</span>`;
     const bodyEl = sectionBody(items, myHash);
     bodyEl.classList.add("token-section-body");
-    head.onclick = () => {
+    head.onclick = (e) => {
+      if (e.target.closest(".copy-id, button") != null) return;
       bodyEl.hidden = !bodyEl.hidden;
       head.querySelector(".chev").textContent = bodyEl.hidden ? "\u25B8" : "\u25BE";
     };
@@ -21181,6 +21224,20 @@ It's posted to your own address and spends a small network fee. Proceed?`
     }
     updateViewToggle();
     renderTokens();
+  }
+  function setNftSort(s2) {
+    if (nftSort === s2) return;
+    nftSort = s2;
+    try {
+      localStorage.setItem("p:nftsort", s2);
+    } catch {
+    }
+    updateSortToggle();
+    renderTokens();
+  }
+  function updateSortToggle() {
+    $("btnSortRecent").classList.toggle("active", nftSort === "recent");
+    $("btnSortPublisher").classList.toggle("active", nftSort === "publisher");
   }
   function updateViewToggle() {
     $("btnViewList").classList.toggle("active", nftView === "list");
@@ -21272,6 +21329,8 @@ It's posted to your own address and spends a small network fee. Proceed?`
     <div class="token-name">${escapeHtml(t.collectionName ?? "Collection")}${isEdition ? ' <span class="badge">edition</span>' : ""}</div>
     <div class="mono token-ids">collection <span class="copy-id" data-copy="${t.collectionId}" title="${t.collectionId} \u2014 click to copy">${short(t.collectionId)}</span> \xB7 utxo <span class="copy-id" data-copy="${t.txId}" title="${t.txId} \u2014 click to copy">${short(t.txId)}</span>:${t.outputIndex}</div>
     ${tokenExtrasHtml(t)}`;
+    const pubRow = publisherRowEl(t, myHash);
+    if (pubRow != null) body.append(pubRow);
     body.append(tokenActions(t, myHash));
     card2.append(tokenThumbEl(t.collectionId), body);
     return card2;
@@ -21289,6 +21348,8 @@ It's posted to your own address and spends a small network fee. Proceed?`
     headBody.innerHTML = `
     <div class="token-name">${escapeHtml(t0.collectionName ?? "Collection")}${isEdition ? ' <span class="badge">edition</span>' : ""} <span class="count">\xD7${copies.length}</span></div>
     <div class="mono token-ids">collection <span class="copy-id" data-copy="${collectionId}" title="${collectionId} \u2014 click to copy">${short(collectionId)}</span> \xB7 ${copies.length} copies held</div>`;
+    const pubRow = publisherRowEl(t0, myHash);
+    if (pubRow != null) headBody.append(pubRow);
     const chev = document.createElement("span");
     chev.className = "chev";
     chev.textContent = startOpen ? "\u25BE" : "\u25B8";
@@ -21610,6 +21671,84 @@ It's posted to your own address and spends a small network fee. Proceed?`
     void Promise.all(todo.map(ensureAvatar)).then((changed) => {
       if (changed.some(Boolean)) rerender();
     });
+  }
+  var publisherKeyInFlight = /* @__PURE__ */ new Map();
+  function myPubKeyHash() {
+    return utils_exports.toHex(Hash_exports.hash160(key.toPublicKey().encode(true)));
+  }
+  async function recoverPublisherKey(collectionId, publisherHashHex) {
+    try {
+      const tx1 = await provider.getSourceTransaction(collectionId);
+      for (const input of tx1.inputs) {
+        for (const c of input.unlockingScript?.chunks ?? []) {
+          const d = c.data;
+          if (d != null && (d.length === 33 || d.length === 65) && utils_exports.toHex(Hash_exports.hash160(d)) === publisherHashHex) {
+            const hex = utils_exports.toHex(d);
+            store2.setPublisherPubKey(collectionId, hex);
+            return hex;
+          }
+        }
+      }
+    } catch {
+    }
+    return null;
+  }
+  function resolvePublisherKey(t) {
+    if (t.publisherPubKeyHex != null) return Promise.resolve(t.publisherPubKeyHex);
+    if (t.publisherPubKeyHashHex == null) return Promise.resolve(null);
+    let p = publisherKeyInFlight.get(t.collectionId);
+    if (p == null) {
+      p = recoverPublisherKey(t.collectionId, t.publisherPubKeyHashHex);
+      publisherKeyInFlight.set(t.collectionId, p);
+    }
+    return p;
+  }
+  function resolvePublisherIdentitiesThen(tokens, rerender) {
+    const mine = myPubKeyHash();
+    const seen = /* @__PURE__ */ new Set();
+    const todo = tokens.filter((t) => t.publisherPubKeyHex == null && t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex !== mine && !seen.has(t.collectionId) && (seen.add(t.collectionId), true));
+    const known = tokens.map((t) => t.publisherPubKeyHex).filter((v) => v != null);
+    if (known.length) resolveAvatarsThen(known, rerender);
+    if (todo.length === 0) return;
+    void Promise.all(todo.map(resolvePublisherKey)).then((keys) => {
+      const got = keys.filter((v) => v != null);
+      if (got.length === 0) return;
+      resolveAvatarsThen(got, rerender);
+      rerender();
+    });
+  }
+  function onMessagePublisher(pubKeyHex2) {
+    ;
+    $("msgTo").value = pubKeyHex2;
+    $("msgEncrypt").checked = true;
+    updateMsgToName();
+    activateTab("messages");
+    $("msgText").focus();
+    setStatus(`Messaging the publisher ${displayName(pubKeyHex2).name}.`);
+  }
+  function publisherRowEl(t, myHash) {
+    if (t.publisherPubKeyHashHex == null) return null;
+    const row = document.createElement("div");
+    row.className = "token-publisher";
+    if (t.publisherPubKeyHashHex === myHash) {
+      row.innerHTML = '<span class="muted">\u{1F4E4} published by you</span>';
+      return row;
+    }
+    const pk = t.publisherPubKeyHex;
+    if (pk == null) {
+      row.innerHTML = '<span class="muted">by publisher\u2026</span>';
+      return row;
+    }
+    row.innerHTML = `<span class="muted">by</span> ${nameChip(pk)} `;
+    const msg = document.createElement("button");
+    msg.className = "link-btn";
+    msg.textContent = "\u2709 Message";
+    msg.onclick = (e) => {
+      e.stopPropagation();
+      onMessagePublisher(pk);
+    };
+    row.append(msg);
+    return row;
   }
   function onAliasSaveClick(e) {
     const btn = e.target?.closest(".alias-save");
@@ -22289,29 +22428,28 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
       (b) => `<div class="token msg"><div class="token-name">\u{1F4E3} ${escapeHtml(b.name || "Collection")}</div><div class="mono" style="font-size:12px">by ${nameChip(b.publisherPubKeyHex, { save: true })}</div><div class="state" style="color:var(--accent);white-space:pre-wrap">${escapeHtml(b.text)}</div><div class="mono">${short(b.txId)}</div></div>`
     ).join("");
   }
+  function activateTab(name) {
+    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
+    document.querySelectorAll(".tabpanel").forEach((p) => p.classList.toggle("is-active", p.id === `tab-${name}`));
+    try {
+      localStorage.setItem("p:activeTab", name);
+    } catch {
+    }
+  }
   function initTabs() {
     const tabs = Array.from(document.querySelectorAll(".tab"));
-    const panels = Array.from(document.querySelectorAll(".tabpanel"));
-    const activate = (name) => {
-      tabs.forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
-      panels.forEach((p) => p.classList.toggle("is-active", p.id === `tab-${name}`));
-      try {
-        localStorage.setItem("p:activeTab", name);
-      } catch {
-      }
-    };
     tabs.forEach((t) => {
-      t.onclick = () => activate(t.dataset.tab);
+      t.onclick = () => activateTab(t.dataset.tab);
     });
     document.querySelectorAll("[data-goto]").forEach((el) => {
-      el.onclick = () => activate(el.dataset.goto);
+      el.onclick = () => activateTab(el.dataset.goto);
     });
     let saved = null;
     try {
       saved = localStorage.getItem("p:activeTab");
     } catch {
     }
-    if (saved && tabs.some((t) => t.dataset.tab === saved)) activate(saved);
+    if (saved && tabs.some((t) => t.dataset.tab === saved)) activateTab(saved);
   }
   function init() {
     store2 = new PharLapStore();
@@ -22321,7 +22459,12 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
       if (localStorage.getItem("p:nftview") === "grid") nftView = "grid";
     } catch {
     }
+    try {
+      if (localStorage.getItem("p:nftsort") === "publisher") nftSort = "publisher";
+    } catch {
+    }
     updateViewToggle();
+    updateSortToggle();
     renderTokens();
     initTabs();
     document.addEventListener("click", onCopyClick);
@@ -22335,6 +22478,8 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     };
     $("btnViewList").onclick = () => setNftView("list");
     $("btnViewGrid").onclick = () => setNftView("grid");
+    $("btnSortRecent").onclick = () => setNftSort("recent");
+    $("btnSortPublisher").onclick = () => setNftSort("publisher");
     $("tokenModalClose").onclick = () => closeTokenModal();
     $("tokenModal").addEventListener("click", (e) => {
       if (e.target === $("tokenModal")) closeTokenModal();

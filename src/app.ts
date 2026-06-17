@@ -36,6 +36,7 @@ let address: string
 let provider: WalletProvider
 let store: PharLapStore
 let nftView: 'list' | 'grid' = 'list' // My-NFTs view mode (persisted in localStorage)
+let nftSort: 'recent' | 'publisher' = 'recent' // My-NFTs grouping: by recency (then MIME) or by publisher
 let lastInbox: IncomingMessage[] = [] // last scanned inbox, for re-render after saving an alias
 let lastUpdatesFeed: UpdateItem[] | null = null // last updates feed, for re-render after saving an alias
 
@@ -715,6 +716,7 @@ function renderTokens(skipWarm = false): void {
     const g = groups.get(t.collectionId)
     if (g != null) g.push(t); else groups.set(t.collectionId, [t])
   }
+  if (nftSort === 'publisher') { renderTokensByPublisher(host, active, groups, myHash); return }
   // Bucket each collection by content type. A collection whose MIME isn't cached yet sits in a temporary
   // "identifying…" section until the metadata fetch warms the cache (then we re-render once). On the warm
   // re-render (skipWarm) any still-unresolved collection has failed to fetch — show it under Other.
@@ -739,6 +741,38 @@ function renderTokens(skipWarm = false): void {
   if (pending?.length) host.append(sectionEl('⏳ Identifying type…', pending, myHash))
 
   if (anyPending) void warmAndRerender([...groups.keys()])
+  resolvePublisherIdentitiesThen(active, () => renderTokens(true))
+}
+
+/** "Sort by publisher" view: collections grouped under their publisher (avatar + @alias) instead of by type. */
+function renderTokensByPublisher(host: HTMLElement, active: StoredToken[], groups: Map<string, StoredToken[]>, myHash: string): void {
+  // Bucket collections by publisher: a resolved pubkey, else 'you' / 'pending' / 'none'.
+  const buckets = new Map<string, Array<[string, StoredToken[]]>>()
+  for (const [collectionId, copies] of groups) {
+    const t0 = copies[0]
+    const k = t0.publisherPubKeyHashHex == null ? 'none'
+      : t0.publisherPubKeyHashHex === myHash ? 'you'
+      : t0.publisherPubKeyHex ?? 'pending'
+    const arr = buckets.get(k); if (arr != null) arr.push([collectionId, copies]); else buckets.set(k, [[collectionId, copies]])
+  }
+  // Order: your own first, then resolved publishers (by display name), then still-resolving, then publisher-less.
+  const isPub = (k: string) => k !== 'you' && k !== 'pending' && k !== 'none'
+  const order = [...buckets.keys()].sort((a, b) => {
+    const rank = (k: string) => (k === 'you' ? 0 : isPub(k) ? 1 : k === 'pending' ? 2 : 3)
+    if (rank(a) !== rank(b)) return rank(a) - rank(b)
+    return isPub(a) ? displayName(a).name.localeCompare(displayName(b).name) : 0
+  })
+
+  host.innerHTML = `<p class="muted" style="font-size:12px;margin:0 0 8px">${active.length} held — by publisher</p>`
+  for (const k of order) {
+    const items = buckets.get(k)!
+    const label = k === 'you' ? '📤 Published by you'
+      : k === 'pending' ? '⏳ Resolving publisher…'
+      : k === 'none' ? '🪙 No publisher'
+      : nameChip(k)
+    host.append(sectionEl(label, items, myHash))
+  }
+  resolvePublisherIdentitiesThen(active, () => renderTokens(true))
 }
 
 function card(collectionId: string, copies: StoredToken[], myHash: string): HTMLElement {
@@ -766,7 +800,8 @@ function sectionEl(label: string, items: Array<[string, StoredToken[]]>, myHash:
   head.innerHTML = `<span class="chev">▾</span> <span class="token-section-label">${label}</span> <span class="count">${items.length}</span>`
   const bodyEl = sectionBody(items, myHash)
   bodyEl.classList.add('token-section-body')
-  head.onclick = () => {
+  head.onclick = e => {
+    if ((e.target as HTMLElement).closest('.copy-id, button') != null) return // let chip copy / buttons win
     bodyEl.hidden = !bodyEl.hidden
     head.querySelector('.chev')!.textContent = bodyEl.hidden ? '▸' : '▾'
   }
@@ -812,6 +847,19 @@ function setNftView(v: 'list' | 'grid'): void {
   try { localStorage.setItem('p:nftview', v) } catch { /* fine */ }
   updateViewToggle()
   renderTokens()
+}
+
+function setNftSort(s: 'recent' | 'publisher'): void {
+  if (nftSort === s) return
+  nftSort = s
+  try { localStorage.setItem('p:nftsort', s) } catch { /* fine */ }
+  updateSortToggle()
+  renderTokens()
+}
+
+function updateSortToggle(): void {
+  $('btnSortRecent').classList.toggle('active', nftSort === 'recent')
+  $('btnSortPublisher').classList.toggle('active', nftSort === 'publisher')
 }
 
 function updateViewToggle(): void {
@@ -911,6 +959,7 @@ function singleCard(t: StoredToken, myHash: string): HTMLElement {
     <div class="token-name">${escapeHtml(t.collectionName ?? 'Collection')}${isEdition ? ' <span class="badge">edition</span>' : ''}</div>
     <div class="mono token-ids">collection <span class="copy-id" data-copy="${t.collectionId}" title="${t.collectionId} — click to copy">${short(t.collectionId)}</span> · utxo <span class="copy-id" data-copy="${t.txId}" title="${t.txId} — click to copy">${short(t.txId)}</span>:${t.outputIndex}</div>
     ${tokenExtrasHtml(t)}`
+  const pubRow = publisherRowEl(t, myHash); if (pubRow != null) body.append(pubRow)
   body.append(tokenActions(t, myHash))
   card.append(tokenThumbEl(t.collectionId), body)
   return card
@@ -930,6 +979,7 @@ function groupCard(collectionId: string, copies: StoredToken[], myHash: string, 
   headBody.innerHTML = `
     <div class="token-name">${escapeHtml(t0.collectionName ?? 'Collection')}${isEdition ? ' <span class="badge">edition</span>' : ''} <span class="count">×${copies.length}</span></div>
     <div class="mono token-ids">collection <span class="copy-id" data-copy="${collectionId}" title="${collectionId} — click to copy">${short(collectionId)}</span> · ${copies.length} copies held</div>`
+  const pubRow = publisherRowEl(t0, myHash); if (pubRow != null) headBody.append(pubRow)
   const chev = document.createElement('span')
   chev.className = 'chev'; chev.textContent = startOpen ? '▾' : '▸'
   head.append(tokenThumbEl(collectionId), headBody, chev)
@@ -1221,6 +1271,84 @@ function resolveAvatarsThen(pubKeys: string[], rerender: () => void): void {
   const todo = [...new Set(pubKeys.map(p => p.toLowerCase()))].filter(k => !profileChecked.has(k))
   if (todo.length === 0) return
   void Promise.all(todo.map(ensureAvatar)).then(changed => { if (changed.some(Boolean)) rerender() })
+}
+
+// ── Publisher identity ────────────────────────────────────────────────
+// The covenant carries only the publisher's hash160; their full pubkey (needed to show an avatar/alias and to
+// message them) is recovered once per collection from TX1's funding input (`<sig> <pubkey>`, hash-verified),
+// then cached on every held copy of that collection.
+const publisherKeyInFlight = new Map<string, Promise<string | null>>()
+
+function myPubKeyHash(): string { return Utils.toHex(Hash.hash160(key.toPublicKey().encode(true) as number[])) }
+
+async function recoverPublisherKey(collectionId: string, publisherHashHex: string): Promise<string | null> {
+  try {
+    const tx1 = await provider.getSourceTransaction(collectionId)
+    for (const input of tx1.inputs) {
+      for (const c of input.unlockingScript?.chunks ?? []) {
+        const d = c.data
+        if (d != null && (d.length === 33 || d.length === 65) && Utils.toHex(Hash.hash160(d)) === publisherHashHex) {
+          const hex = Utils.toHex(d)
+          store.setPublisherPubKey(collectionId, hex)
+          return hex
+        }
+      }
+    }
+  } catch { /* transient (e.g. TX1 not fetchable yet) — leave unresolved for a later pass */ }
+  return null
+}
+
+function resolvePublisherKey(t: StoredToken): Promise<string | null> {
+  if (t.publisherPubKeyHex != null) return Promise.resolve(t.publisherPubKeyHex)
+  if (t.publisherPubKeyHashHex == null) return Promise.resolve(null)
+  let p = publisherKeyInFlight.get(t.collectionId)
+  if (p == null) { p = recoverPublisherKey(t.collectionId, t.publisherPubKeyHashHex); publisherKeyInFlight.set(t.collectionId, p) }
+  return p
+}
+
+/** Recover unresolved publisher pubkeys (then warm their profiles) in the background; re-render on success. */
+function resolvePublisherIdentitiesThen(tokens: StoredToken[], rerender: () => void): void {
+  const mine = myPubKeyHash()
+  const seen = new Set<string>()
+  const todo = tokens.filter(t =>
+    t.publisherPubKeyHex == null && t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex !== mine &&
+    !seen.has(t.collectionId) && (seen.add(t.collectionId), true))
+  // Warm avatars/aliases for already-resolved publishers regardless.
+  const known = tokens.map(t => t.publisherPubKeyHex).filter((v): v is string => v != null)
+  if (known.length) resolveAvatarsThen(known, rerender)
+  if (todo.length === 0) return
+  void Promise.all(todo.map(resolvePublisherKey)).then(keys => {
+    const got = keys.filter((v): v is string => v != null)
+    if (got.length === 0) return
+    resolveAvatarsThen(got, rerender) // pull their profiles too
+    rerender()                        // show the chip now (identicon until the avatar lands)
+  })
+}
+
+/** "Message publisher": preload the compose box with the publisher's key and jump to the Messages tab. */
+function onMessagePublisher(pubKeyHex: string): void {
+  ;($('msgTo') as HTMLInputElement).value = pubKeyHex
+  ;($('msgEncrypt') as HTMLInputElement).checked = true
+  updateMsgToName()
+  activateTab('messages')
+  ;($('msgText') as HTMLTextAreaElement).focus()
+  setStatus(`Messaging the publisher ${displayName(pubKeyHex).name}.`)
+}
+
+/** A small "by @publisher [avatar] ✉ Message" row for an edition card; null for non-editions. */
+function publisherRowEl(t: StoredToken, myHash: string): HTMLElement | null {
+  if (t.publisherPubKeyHashHex == null) return null // not an edition / no publisher recorded
+  const row = document.createElement('div')
+  row.className = 'token-publisher'
+  if (t.publisherPubKeyHashHex === myHash) { row.innerHTML = '<span class="muted">📤 published by you</span>'; return row }
+  const pk = t.publisherPubKeyHex
+  if (pk == null) { row.innerHTML = '<span class="muted">by publisher…</span>'; return row } // resolving
+  row.innerHTML = `<span class="muted">by</span> ${nameChip(pk)} `
+  const msg = document.createElement('button')
+  msg.className = 'link-btn'; msg.textContent = '✉ Message'
+  msg.onclick = e => { e.stopPropagation(); onMessagePublisher(pk) }
+  row.append(msg)
+  return row
 }
 
 function onAliasSaveClick(e: MouseEvent): void {
@@ -1874,22 +2002,23 @@ function renderUpdatesFeed(feed: UpdateItem[]): void {
 }
 
 /** Wire the wallet section tabs (show one panel at a time) and restore the last-viewed tab. */
+/** Switch the active wallet tab (also reachable programmatically, e.g. "Message publisher" → Messages). */
+function activateTab(name: string): void {
+  document.querySelectorAll<HTMLElement>('.tab').forEach(t => t.classList.toggle('is-active', t.dataset.tab === name))
+  document.querySelectorAll<HTMLElement>('.tabpanel').forEach(p => p.classList.toggle('is-active', p.id === `tab-${name}`))
+  try { localStorage.setItem('p:activeTab', name) } catch { /* private mode — ignore */ }
+}
+
 function initTabs(): void {
   const tabs = Array.from(document.querySelectorAll<HTMLElement>('.tab'))
-  const panels = Array.from(document.querySelectorAll<HTMLElement>('.tabpanel'))
-  const activate = (name: string) => {
-    tabs.forEach(t => t.classList.toggle('is-active', t.dataset.tab === name))
-    panels.forEach(p => p.classList.toggle('is-active', p.id === `tab-${name}`))
-    try { localStorage.setItem('p:activeTab', name) } catch { /* private mode — ignore */ }
-  }
-  tabs.forEach(t => { t.onclick = () => activate(t.dataset.tab!) })
+  tabs.forEach(t => { t.onclick = () => activateTab(t.dataset.tab!) })
   // Home-page cards (and any other in-app shortcut) jump to a tab via data-goto.
   document.querySelectorAll<HTMLElement>('[data-goto]').forEach(el => {
-    el.onclick = () => activate(el.dataset.goto!)
+    el.onclick = () => activateTab(el.dataset.goto!)
   })
   let saved: string | null = null
   try { saved = localStorage.getItem('p:activeTab') } catch { /* ignore */ }
-  if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved)
+  if (saved && tabs.some(t => t.dataset.tab === saved)) activateTab(saved)
 }
 
 function init(): void {
@@ -1897,7 +2026,9 @@ function init(): void {
   loadAliases() // before useKey(): renderWallet() draws your own avatar, which reads the loaded p:avatars cache
   useKey(loadKey())
   try { if (localStorage.getItem('p:nftview') === 'grid') nftView = 'grid' } catch { /* default list */ }
+  try { if (localStorage.getItem('p:nftsort') === 'publisher') nftSort = 'publisher' } catch { /* default recent */ }
   updateViewToggle()
+  updateSortToggle()
   renderTokens()
   initTabs()
   document.addEventListener('click', onCopyClick) // click-to-copy for any [data-copy] element
@@ -1911,6 +2042,8 @@ function init(): void {
   }
   $('btnViewList').onclick = () => setNftView('list')
   $('btnViewGrid').onclick = () => setNftView('grid')
+  $('btnSortRecent').onclick = () => setNftSort('recent')
+  $('btnSortPublisher').onclick = () => setNftSort('publisher')
   $('tokenModalClose').onclick = () => closeTokenModal()
   $('tokenModal').addEventListener('click', e => { if (e.target === $('tokenModal')) closeTokenModal() })
   // Any action button inside the detail modal navigates or mutates — hide the modal so it doesn't stack over

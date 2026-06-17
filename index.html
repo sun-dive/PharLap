@@ -93,10 +93,15 @@
     .token-section-head .chev { color:var(--muted); font-size:12px; }
     .token-section-head .count { color:var(--muted); font-weight:500; font-size:12px; margin-left:auto; }
     .token-section-body[hidden] { display:none; }
-    .nft-toolbar { display:flex; justify-content:flex-end; margin-bottom:10px; }
+    .nft-toolbar { display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px; }
     .view-toggle { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
     .view-toggle button { background:transparent; border:none; color:var(--muted); padding:5px 12px; font-size:13px; cursor:pointer; }
     .view-toggle button.active { background:var(--accent2); color:#04122a; font-weight:600; }
+    /* "by @publisher ✉ Message" row on an NFT card */
+    .token-publisher { display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:12px; margin:4px 0 2px; }
+    .token-publisher .identicon { vertical-align:middle; }
+    .link-btn { background:transparent; border:none; color:var(--accent2); padding:0; font-size:12px; cursor:pointer; text-decoration:underline; }
+    .link-btn:hover { filter:brightness(1.15); }
     .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
     .token-tile { display:flex; flex-direction:column; gap:6px; padding:8px; background:#0d1117; border:1px solid var(--line);
                   border-radius:8px; cursor:pointer; text-align:left; color:var(--fg); font:inherit; }
@@ -369,6 +374,10 @@
       <input id="sendPubKey" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
       <div class="row" style="margin:10px 0"><button id="btnIncoming" class="secondary">Check incoming / recover</button></div>
       <div class="nft-toolbar">
+        <div class="view-toggle">
+          <button id="btnSortRecent" type="button">🕑 Recent</button>
+          <button id="btnSortPublisher" type="button">📤 Publisher</button>
+        </div>
         <div class="view-toggle">
           <button id="btnViewList" type="button">☰ List</button>
           <button id="btnViewGrid" type="button">▦ Grid</button>
