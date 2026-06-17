@@ -2173,11 +2173,11 @@ async function loadDiscThread(t: StoredToken): Promise<void> {
   const statusEl = thread.querySelector('.disc-status') as HTMLElement
   sendBtn.disabled = false // re-enable on every (re)load — a prior successful post left it disabled
   feedEl.innerHTML = '<p class="muted">Loading corridor…</p>'
+  const iAmPublisher = t.publisherPubKeyHashHex === myPubKeyHash()
   let result: { nodes: CorridorNode[]; posts: Array<DiscPost & { node: CorridorNode }> }
-  try { result = await readCorridor(provider, t.txId, t.outputIndex, t.collectionId) }
+  try { result = await readCorridor(provider, t.txId, t.outputIndex, t.collectionId, { rootDownstream: iAmPublisher }) }
   catch (e) { feedEl.innerHTML = `<p class="muted">Couldn’t load this corridor: ${escapeHtml((e as Error).message)}</p>`; return }
   // Post targets: your line (self) + reply to any upline; the publisher can also post to everyone (root).
-  const iAmPublisher = t.publisherPubKeyHashHex === myPubKeyHash()
   const opts: Array<{ node: CorridorNode; label: string }> = []
   const selfNode = result.nodes.find(n => n.isSelf)
   if (selfNode) opts.push({ node: selfNode, label: 'your line' })
@@ -2191,9 +2191,13 @@ async function loadDiscThread(t: StoredToken): Promise<void> {
     if (text === '') { statusEl.textContent = 'Write something first.'; return }
     const target = opts[parseInt(targetEl.value || '0', 10)]?.node
     if (target == null) { statusEl.textContent = 'No post target available.'; return }
+    // Drop a downstream breadcrumb on every node ABOVE the target (its ancestors in the corridor) so they
+    // discover this post; root is included, giving the publisher the whole-tree view.
+    const targetIdx = result.nodes.indexOf(target)
+    const downBreadcrumbs = result.nodes.slice(0, targetIdx < 0 ? 0 : targetIdx).map(n => n.downHash160)
     sendBtn.disabled = true; statusEl.textContent = 'Posting…'
     try {
-      await postToNodeFeed(provider, key, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias() })
+      await postToNodeFeed(provider, key, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias(), downBreadcrumbs })
       textEl.value = ''; statusEl.textContent = '✅ Posted.'
       setTimeout(() => { if (discAnchor === t) void loadDiscThread(t) }, 900)
     } catch (e) { statusEl.textContent = `Post failed: ${(e as Error).message}`; sendBtn.disabled = false }
@@ -2206,7 +2210,8 @@ function renderDiscFeed(feedEl: HTMLElement, posts: Array<DiscPost & { node: Cor
   if (posts.length === 0) { feedEl.innerHTML = '<p class="muted">No posts yet — be the first to post to your line.</p>'; return }
   feedEl.innerHTML = ''
   for (const p of posts) {
-    const badge = p.node.isRoot ? '<span class="disc-badge root">📣 everyone</span>'
+    const badge = p.node.isDownstream ? '<span class="disc-badge down">⬇ downline</span>'
+      : p.node.isRoot ? '<span class="disc-badge root">📣 everyone</span>'
       : p.node.isSelf ? '<span class="disc-badge self">your line</span>'
       : '<span class="disc-badge up">⬆ upline</span>'
     const el = document.createElement('div'); el.className = 'disc-post'

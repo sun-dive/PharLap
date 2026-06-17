@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, Hash } from '@bsv/sdk'
 import { buildEditionGenesisTx, buildReplicateTx, type EditionUtxo, type EditionTerms } from '../src/editionBuilder.ts'
-import { walkNodeAncestors, nodeFeedHash160, rootFeedHash160, nodeRef } from '../src/discussion.ts'
+import { walkNodeAncestors, nodeFeedHash160, rootFeedHash160, nodeRef, downFeedHash160, rootDownFeedHash160 } from '../src/discussion.ts'
 import type { FundingInput } from '../src/collectionBuilder.ts'
 
 const TX1REF = 'cd'.repeat(32)
@@ -65,4 +65,14 @@ test('feed hashes are deterministic + separated by node / collection / root', ()
   assert.match(nodeRef(c, t, 1), /^[0-9a-f]{64}$/)
   assert.equal(nodeRef(c, t, 1), nodeRef(c, t, 1))         // deterministic
   assert.notEqual(nodeRef(c, t, 1), nodeRef(c, t, 0))      // per-node
+})
+
+test('downstream channel is a SEPARATE address from the post feed (no lateral leak)', () => {
+  const c = 'ab'.repeat(32), t = 'ef'.repeat(32)
+  // The whole anti-cousin-leak invariant: a node's downstream channel must never collide with ANY post feed.
+  assert.notDeepEqual(downFeedHash160(c, t, 1), nodeFeedHash160(c, t, 1)) // down ≠ its own post feed
+  assert.notDeepEqual(rootDownFeedHash160(c), rootFeedHash160(c))         // root down ≠ root post feed
+  assert.notDeepEqual(downFeedHash160(c, t, 1), rootDownFeedHash160(c))   // node down ≠ root down
+  assert.deepEqual(downFeedHash160(c, t, 1), downFeedHash160(c, t, 1))    // deterministic
+  assert.notDeepEqual(downFeedHash160(c, t, 1), downFeedHash160(c, t, 0)) // per-node
 })

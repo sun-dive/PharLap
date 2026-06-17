@@ -20426,22 +20426,23 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function u32le(n) {
     return [n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255];
   }
-  function nodeSeed(collectionId, birthTxId, birthVout) {
-    return [
-      ...utils_exports.toArray("PHARLAP-DISC-NODE-v1", "utf8"),
-      ...utils_exports.toArray(collectionId, "hex"),
-      ...utils_exports.toArray(birthTxId, "hex"),
-      ...u32le(birthVout)
-    ];
+  function nodeSeed(tag, collectionId, birthTxId, birthVout) {
+    return [...utils_exports.toArray(tag, "utf8"), ...utils_exports.toArray(collectionId, "hex"), ...utils_exports.toArray(birthTxId, "hex"), ...u32le(birthVout)];
   }
   function nodeFeedHash160(collectionId, birthTxId, birthVout) {
-    return Hash_exports.hash160(nodeSeed(collectionId, birthTxId, birthVout));
+    return Hash_exports.hash160(nodeSeed("PHARLAP-DISC-NODE-v1", collectionId, birthTxId, birthVout));
   }
   function rootFeedHash160(collectionId) {
     return Hash_exports.hash160([...utils_exports.toArray("PHARLAP-DISC-ROOT-v1", "utf8"), ...utils_exports.toArray(collectionId, "hex")]);
   }
+  function downFeedHash160(collectionId, birthTxId, birthVout) {
+    return Hash_exports.hash160(nodeSeed("PHARLAP-DISC-DOWN-v1", collectionId, birthTxId, birthVout));
+  }
+  function rootDownFeedHash160(collectionId) {
+    return Hash_exports.hash160([...utils_exports.toArray("PHARLAP-DISC-DOWNROOT-v1", "utf8"), ...utils_exports.toArray(collectionId, "hex")]);
+  }
   function nodeRef(collectionId, birthTxId, birthVout) {
-    return utils_exports.toHex(Hash_exports.sha256(nodeSeed(collectionId, birthTxId, birthVout)));
+    return utils_exports.toHex(Hash_exports.sha256(nodeSeed("PHARLAP-DISC-NODE-v1", collectionId, birthTxId, birthVout)));
   }
   async function walkNodeAncestors(provider2, startTxId, startVout, collectionId, maxHops = MAX_WALK_HOPS) {
     const nodes = [];
@@ -20483,6 +20484,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const trimmed = params.text.trim();
     if (trimmed.length === 0) throw new Error("post is empty");
     if (new TextEncoder().encode(trimmed).length > MAX_POST_BYTES) throw new Error(`post exceeds ${MAX_POST_BYTES} bytes`);
+    const downs = params.downBreadcrumbs ?? [];
     const pubHex = key2.toPublicKey().toString();
     const envelope = await buildEnvelope({
       senderPriv: key2,
@@ -20492,7 +20494,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       senderAlias: params.senderAlias,
       sentAt: Date.now()
     });
-    const selected = selectFunding(await getSafeUtxos(provider2), PHARLAP_OUTPUT_SATS + 1 + 700);
+    const selected = selectFunding(await getSafeUtxos(provider2), PHARLAP_OUTPUT_SATS + 1 + downs.length + 700);
     const funding = await Promise.all(selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) })));
     const tx = new Transaction();
     for (const f2 of funding) {
@@ -20500,19 +20502,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     tx.addOutput({ lockingScript: buildMessageScript(pubHex, { ref: params.ref, envelope }), satoshis: PHARLAP_OUTPUT_SATS });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(params.feedHash160)), satoshis: 1 });
+    for (const h of downs) tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(h)), satoshis: 1 });
     tx.addOutput({ lockingScript: new P2PKH().lock(key2.toAddress()), change: true });
     await tx.fee(new SatoshisPerKilobyte(params.feePerKb ?? DEFAULT_FEE_PER_KB));
     await tx.sign();
     await provider2.broadcast(tx.toHex());
     const txId = tx.id("hex");
+    const changeVout = tx.outputs.length - 1;
     provider2.registerPendingTx(
       txId,
       selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
-      (tx.outputs[2]?.satoshis ?? 0) > 0 ? { outputIndex: 2, satoshis: tx.outputs[2].satoshis ?? 0 } : void 0
+      (tx.outputs[changeVout]?.satoshis ?? 0) > 0 ? { outputIndex: changeVout, satoshis: tx.outputs[changeVout].satoshis ?? 0 } : void 0
     );
     return txId;
   }
-  async function scanNodeFeed(provider2, feedHash160, ref) {
+  async function scanNodeFeed(provider2, feedHash160, wantRef) {
     const sh2 = wocScriptHash(p2pkhScript(feedHash160));
     let utxos = [];
     try {
@@ -20520,7 +20524,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     } catch {
       return [];
     }
-    const want = ref.toLowerCase();
+    const want = wantRef?.toLowerCase();
     const seenTx = /* @__PURE__ */ new Set();
     const posts = [];
     for (const u of utxos) {
@@ -20535,12 +20539,13 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       }
       for (const o of tx.outputs) {
         const m = parseMessageScript(o.lockingScript);
-        if (m == null || m.fields.ref.toLowerCase() !== want) continue;
+        if (m == null) continue;
+        if (want != null && m.fields.ref.toLowerCase() !== want) continue;
         const opened = await openPublicEnvelope(m.fields.envelope);
         if (opened == null || opened.senderPubKeyHex.toLowerCase() !== m.recipientPubKeyHex.toLowerCase()) continue;
         const textPart = opened.parts.find((p) => p.kind === "text");
         if (textPart && textPart.kind === "text") {
-          posts.push({ text: textPart.text, authorPubKeyHex: opened.senderPubKeyHex, senderAlias: opened.senderAlias, sentAt: opened.sentAt, txId: u.txId, ref });
+          posts.push({ text: textPart.text, authorPubKeyHex: opened.senderPubKeyHex, senderAlias: opened.senderAlias, sentAt: opened.sentAt, txId: u.txId, ref: m.fields.ref });
         }
       }
     }
@@ -20554,6 +20559,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       ownerPubKeyHex: "",
       isGenesis: false,
       feedHash160: rootFeedHash160(collectionId),
+      downHash160: rootDownFeedHash160(collectionId),
       ref: collectionId,
       isRoot: true,
       isSelf: false
@@ -20561,20 +20567,29 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     ancestors.forEach((n, i) => out.push({
       ...n,
       feedHash160: nodeFeedHash160(collectionId, n.birthTxId, n.birthVout),
+      downHash160: downFeedHash160(collectionId, n.birthTxId, n.birthVout),
       ref: nodeRef(collectionId, n.birthTxId, n.birthVout),
       isRoot: false,
       isSelf: i === ancestors.length - 1
     }));
     return out;
   }
-  async function readCorridor(provider2, startTxId, startVout, collectionId) {
+  async function readCorridor(provider2, startTxId, startVout, collectionId, opts = {}) {
     const nodes = await resolveCorridor(provider2, startTxId, startVout, collectionId);
-    const posts = [];
-    for (const node of nodes) {
-      const feed = await scanNodeFeed(provider2, node.feedHash160, node.ref);
-      for (const p of feed) posts.push({ ...p, node });
+    const byTx = /* @__PURE__ */ new Map();
+    const add2 = (p, node) => {
+      if (!byTx.has(p.txId)) byTx.set(p.txId, { ...p, node });
+    };
+    for (const node of nodes) for (const p of await scanNodeFeed(provider2, node.feedHash160, node.ref)) add2(p, node);
+    const selfNode = nodes.find((n) => n.isSelf);
+    const downChannels = [];
+    if (selfNode) downChannels.push({ h: selfNode.downHash160, tag: { ...selfNode, isSelf: false, isDownstream: true } });
+    if (opts.rootDownstream) {
+      const root = nodes[0];
+      downChannels.push({ h: root.downHash160, tag: { ...root, isRoot: false, isDownstream: true } });
     }
-    posts.sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0));
+    for (const ch of downChannels) for (const p of await scanNodeFeed(provider2, ch.h)) add2(p, ch.tag);
+    const posts = [...byTx.values()].sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0));
     return { nodes, posts };
   }
 
@@ -22815,14 +22830,14 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     const statusEl = thread.querySelector(".disc-status");
     sendBtn.disabled = false;
     feedEl.innerHTML = '<p class="muted">Loading corridor\u2026</p>';
+    const iAmPublisher = t.publisherPubKeyHashHex === myPubKeyHash();
     let result;
     try {
-      result = await readCorridor(provider, t.txId, t.outputIndex, t.collectionId);
+      result = await readCorridor(provider, t.txId, t.outputIndex, t.collectionId, { rootDownstream: iAmPublisher });
     } catch (e) {
       feedEl.innerHTML = `<p class="muted">Couldn\u2019t load this corridor: ${escapeHtml(e.message)}</p>`;
       return;
     }
-    const iAmPublisher = t.publisherPubKeyHashHex === myPubKeyHash();
     const opts = [];
     const selfNode = result.nodes.find((n) => n.isSelf);
     if (selfNode) opts.push({ node: selfNode, label: "your line" });
@@ -22845,10 +22860,12 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
         statusEl.textContent = "No post target available.";
         return;
       }
+      const targetIdx = result.nodes.indexOf(target);
+      const downBreadcrumbs = result.nodes.slice(0, targetIdx < 0 ? 0 : targetIdx).map((n) => n.downHash160);
       sendBtn.disabled = true;
       statusEl.textContent = "Posting\u2026";
       try {
-        await postToNodeFeed(provider, key, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias() });
+        await postToNodeFeed(provider, key, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias(), downBreadcrumbs });
         textEl.value = "";
         statusEl.textContent = "\u2705 Posted.";
         setTimeout(() => {
@@ -22871,7 +22888,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     }
     feedEl.innerHTML = "";
     for (const p of posts) {
-      const badge = p.node.isRoot ? '<span class="disc-badge root">\u{1F4E3} everyone</span>' : p.node.isSelf ? '<span class="disc-badge self">your line</span>' : '<span class="disc-badge up">\u2B06 upline</span>';
+      const badge = p.node.isDownstream ? '<span class="disc-badge down">\u2B07 downline</span>' : p.node.isRoot ? '<span class="disc-badge root">\u{1F4E3} everyone</span>' : p.node.isSelf ? '<span class="disc-badge self">your line</span>' : '<span class="disc-badge up">\u2B06 upline</span>';
       const el = document.createElement("div");
       el.className = "disc-post";
       el.innerHTML = `<div class="disc-post-head">${nameChip(p.authorPubKeyHex)} ${badge}${p.sentAt ? ` \xB7 \u{1F552} ${escapeHtml(fmtTime(p.sentAt))}` : ""}</div><div class="disc-post-text">${escapeHtml(p.text)}</div>`;
