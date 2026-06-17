@@ -20567,6 +20567,7 @@ Proceed?`
       return;
     }
     const name = t.collectionName ?? "this edition";
+    const bondNote = editionSupportsBurn(utils_exports.toArray(t.lockHex, "hex")) ? "a refundable bond for your copy (reclaim it by burning) + " : "";
     setStatus("Preparing the replication\u2026");
     try {
       if (parseEditionScriptV2(LockingScript.fromHex(t.lockHex)) != null) {
@@ -20577,7 +20578,7 @@ Proceed?`
           confirmSpend: (total) => confirm(
             `Replicate a copy of \u201C${name}\u201D?
 
-This spends ${total.toLocaleString()} sats from your wallet (the seller\u2019s price + network fee).
+This spends ${total.toLocaleString()} sats from your wallet (${bondNote}the seller\u2019s price + network fee).
 
 Proceed?`
           )
@@ -20599,7 +20600,7 @@ Proceed?`
         confirmSpend: (total) => confirm(
           `Replicate a copy of \u201C${name}\u201D?
 
-This spends ${total.toLocaleString()} sats from your wallet (publisher ${t.publisherFeeSats ?? 0} + holder ${t.holderFeeSats ?? 0} fees + network fee).
+This spends ${total.toLocaleString()} sats from your wallet (${bondNote}publisher ${t.publisherFeeSats ?? 0} + holder ${t.holderFeeSats ?? 0} fees + network fee).
 
 Proceed?`
         )
