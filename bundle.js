@@ -18788,25 +18788,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     );
     return { txId: r2.txId, reclaimSats: r2.reclaimSats };
   }
-  async function broadcastV2Probe(provider2, key2, feePerKb) {
-    const selected = selectFunding(await getSafeUtxos(provider2), 1e3);
-    const funding = await toFundingInputs(provider2, selected);
-    const tx = new Transaction();
-    tx.version = 2;
-    for (const f2 of funding) {
-      tx.addInput({ sourceTransaction: f2.sourceTx, sourceOutputIndex: f2.utxo.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(key2) });
-    }
-    tx.addOutput({ lockingScript: new P2PKH().lock(key2.toAddress()), change: true });
-    await tx.fee(new SatoshisPerKilobyte(feePerKb ?? DEFAULT_FEE_PER_KB));
-    await tx.sign();
-    await provider2.broadcast(tx.toHex());
-    provider2.registerPendingTx(
-      tx.id("hex"),
-      selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
-      tx.outputs[0]?.satoshis != null ? { outputIndex: 0, satoshis: tx.outputs[0].satoshis } : void 0
-    );
-    return tx.id("hex");
-  }
   function wocScriptHash(scriptBytes) {
     return utils_exports.toHex(Hash_exports.sha256(scriptBytes).reverse());
   }
@@ -20534,16 +20515,6 @@ Proceed?`
       ...note?.text ? { sellerNote: note.text } : {},
       ...note?.bonusValue ? { bonusKind: note.bonusKind, bonusValue: note.bonusValue } : {}
     });
-  }
-  async function onV2Probe() {
-    if (!confirm("Broadcast a tiny version-2 (Chronicle) self-send to confirm the network accepts v2 txs? Costs only the miner fee.")) return;
-    setStatus("Broadcasting v2 probe\u2026");
-    try {
-      const txId = await broadcastV2Probe(provider, key);
-      setStatus(`\u2705 v2 tx accepted by broadcast: ${short(txId)}. Confirm it on WhatsOnChain.`, "ok");
-    } catch (e) {
-      setStatus(`v2 probe rejected: ${e.message}`, "error");
-    }
   }
   async function onMintEdition() {
     const name = val("edName");
@@ -22339,7 +22310,6 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     }, true);
     $("btnRefresh").onclick = () => void refreshBalance();
     $("btnMint").onclick = () => void onMint();
-    $("btnV2Probe").onclick = () => void onV2Probe();
     $("btnMintEdition").onclick = () => void onMintEdition();
     $("btnIncoming").onclick = () => void onCheckIncoming();
     $("btnSendMessage").onclick = () => void onSendMessage();
