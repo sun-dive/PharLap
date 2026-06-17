@@ -20573,6 +20573,18 @@ Proceed?`
     if (t.sellerNote || t.bonusValue) return { text: t.sellerNote ?? "", bonusKind: t.bonusKind, bonusValue: t.bonusValue };
     return void 0;
   }
+  async function pruneIfEditionSpent(t) {
+    if (!t.lockHex) return false;
+    try {
+      const unspent = await provider.getUnspentByScriptHash(wocScriptHash(utils_exports.toArray(t.lockHex, "hex")));
+      if (unspent.some((u) => u.txId === t.txId && u.outputIndex === t.outputIndex)) return false;
+      store2.markSent(t.txId, t.outputIndex);
+      renderTokens();
+      return true;
+    } catch {
+      return false;
+    }
+  }
   async function onReplicate(t) {
     if (!t.lockHex) {
       setStatus("Missing edition script; cannot replicate.", "error");
@@ -20635,11 +20647,16 @@ Proceed?`
       renderTokens();
       setStatus(`\u2705 Replicated. Tx ${short(r2.txId)} \u2014 NFT returned to holder, replica minted, fees paid.`, "ok");
     } catch (e) {
-      if (e.message === SPEND_CANCELLED) {
+      const msg = e.message;
+      if (msg === SPEND_CANCELLED) {
         setStatus("Replication cancelled \u2014 nothing was spent.");
         return;
       }
-      setStatus(`Replicate failed: ${e.message}`, "error");
+      if (/missing inputs|missingorspent/i.test(msg) && await pruneIfEditionSpent(t)) {
+        setStatus("That edition had already been spent (moved or burned elsewhere) \u2014 removed it from your holdings.", "ok");
+        return;
+      }
+      setStatus(`Replicate failed: ${msg}`, "error");
     }
   }
   async function onTransferEdition(t) {
@@ -20666,7 +20683,12 @@ Proceed?`
       renderTokens();
       setStatus(`\u2705 Transferred. Tx ${short(r2.txId)} \u2014 covenant re-created for the new owner.`, "ok");
     } catch (e) {
-      setStatus(`Transfer failed: ${e.message}`, "error");
+      const msg = e.message;
+      if (/missing inputs|missingorspent/i.test(msg) && await pruneIfEditionSpent(t)) {
+        setStatus("That edition had already been spent (moved or burned elsewhere) \u2014 removed it from your holdings.", "ok");
+        return;
+      }
+      setStatus(`Transfer failed: ${msg}`, "error");
     }
   }
   async function onBurn(t) {
@@ -20689,7 +20711,8 @@ Proceed?`
       const msg = e.message;
       console.error(`[burn] failed for ${t.txId}:${t.outputIndex} \u2014`, msg);
       if (/missing inputs|missingorspent/i.test(msg)) {
-        setStatus("Burn failed: the network can\u2019t spend this edition\u2019s UTXO \u2014 it\u2019s either not confirmed/propagated yet, or it has already been spent (moved or burned). If you just minted it, wait a few minutes and retry; otherwise tap Refresh to resync your holdings.", "error");
+        const pruned = await pruneIfEditionSpent(t);
+        setStatus(pruned ? "This edition had already been spent (moved or burned elsewhere) \u2014 removed it from your holdings." : "Burn failed: this edition isn\u2019t confirmed/propagated yet. Wait a few minutes, then try again.", pruned ? "ok" : "error");
       } else if (/raw TX fetch failed/i.test(msg)) {
         setStatus("Burn failed: this edition\u2019s transaction isn\u2019t on-chain yet. Wait for it to confirm (usually a few minutes), then try again.", "error");
       } else {

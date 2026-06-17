@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, wocScriptHash, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -228,6 +228,24 @@ async function noteToPropagate(t: StoredToken): Promise<SellerNote | undefined> 
   return undefined
 }
 
+/** When a covenant action is rejected with "missing or spent", the edition's UTXO may be genuinely gone
+ *  (already moved/burned, possibly in another session/wallet) while still lingering in the local cache —
+ *  PushDrop editions aren't address-indexed, so Refresh can't reconcile them. Confirm by querying the
+ *  edition's own locking script: if its exact outpoint is no longer unspent, drop the stale entry so the
+ *  dead card self-heals. Returns true if it pruned (genuinely spent), false if still live (transient/unpropagated). */
+async function pruneIfEditionSpent(t: StoredToken): Promise<boolean> {
+  if (!t.lockHex) return false
+  try {
+    const unspent = await provider.getUnspentByScriptHash(wocScriptHash(Utils.toArray(t.lockHex, 'hex')))
+    if (unspent.some(u => u.txId === t.txId && u.outputIndex === t.outputIndex)) return false // still live — keep it
+    store.markSent(t.txId, t.outputIndex) // genuinely spent: retire the stale active entry
+    renderTokens()
+    return true
+  } catch {
+    return false // network hiccup — don't prune on uncertainty
+  }
+}
+
 async function onReplicate(t: StoredToken): Promise<void> {
   if (!t.lockHex) { setStatus('Missing edition script; cannot replicate.', 'error'); return }
   const name = t.collectionName ?? 'this edition'
@@ -269,8 +287,12 @@ async function onReplicate(t: StoredToken): Promise<void> {
     renderTokens()
     setStatus(`✅ Replicated. Tx ${short(r.txId)} — NFT returned to holder, replica minted, fees paid.`, 'ok')
   } catch (e) {
-    if ((e as Error).message === SPEND_CANCELLED) { setStatus('Replication cancelled — nothing was spent.'); return }
-    setStatus(`Replicate failed: ${(e as Error).message}`, 'error')
+    const msg = (e as Error).message
+    if (msg === SPEND_CANCELLED) { setStatus('Replication cancelled — nothing was spent.'); return }
+    if (/missing inputs|missingorspent/i.test(msg) && await pruneIfEditionSpent(t)) {
+      setStatus('That edition had already been spent (moved or burned elsewhere) — removed it from your holdings.', 'ok'); return
+    }
+    setStatus(`Replicate failed: ${msg}`, 'error')
   }
 }
 
@@ -291,7 +313,11 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
     renderTokens()
     setStatus(`✅ Transferred. Tx ${short(r.txId)} — covenant re-created for the new owner.`, 'ok')
   } catch (e) {
-    setStatus(`Transfer failed: ${(e as Error).message}`, 'error')
+    const msg = (e as Error).message
+    if (/missing inputs|missingorspent/i.test(msg) && await pruneIfEditionSpent(t)) {
+      setStatus('That edition had already been spent (moved or burned elsewhere) — removed it from your holdings.', 'ok'); return
+    }
+    setStatus(`Transfer failed: ${msg}`, 'error')
   }
 }
 
@@ -314,7 +340,10 @@ async function onBurn(t: StoredToken): Promise<void> {
     // visible (unconfirmed/unpropagated) OR already spent. A raw-tx fetch 404 = the parent tx isn't indexed yet.
     // Don't claim "unconfirmed" — it may have been moved or already burned and the local cache is stale.
     if (/missing inputs|missingorspent/i.test(msg)) {
-      setStatus('Burn failed: the network can’t spend this edition’s UTXO — it’s either not confirmed/propagated yet, or it has already been spent (moved or burned). If you just minted it, wait a few minutes and retry; otherwise tap Refresh to resync your holdings.', 'error')
+      const pruned = await pruneIfEditionSpent(t)
+      setStatus(pruned
+        ? 'This edition had already been spent (moved or burned elsewhere) — removed it from your holdings.'
+        : 'Burn failed: this edition isn’t confirmed/propagated yet. Wait a few minutes, then try again.', pruned ? 'ok' : 'error')
     } else if (/raw TX fetch failed/i.test(msg)) {
       setStatus('Burn failed: this edition’s transaction isn’t on-chain yet. Wait for it to confirm (usually a few minutes), then try again.', 'error')
     } else {
