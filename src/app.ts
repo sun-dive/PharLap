@@ -1328,16 +1328,22 @@ function resolvePublisherIdentitiesThen(tokens: StoredToken[], rerender: () => v
   })
 }
 
-/** Substitute message wildcards for one recipient: %alias% → their name (or "there"), %product% → ctx.product. */
-function fillWildcards(text: string, pubKeyHex: string, ctx: { product?: string }): string {
-  const alias = displayName(pubKeyHex).alias ?? 'there'
-  return text.split('%alias%').join(alias).split('%product%').join(ctx.product ?? '')
+interface ComposeCtx { product?: string; recipientRole: 'buyer' | 'publisher' }
+
+/** Substitute message wildcards for one recipient. %buyer% / %publisher% map to the recipient or to you (the
+ *  sender) depending on which role the recipient plays; %product% → the collection name. */
+function fillWildcards(text: string, recipientKey: string, ctx: ComposeCtx): string {
+  const mine = getMyAlias()
+  const recip = displayName(recipientKey).alias
+  const buyer = ctx.recipientRole === 'buyer' ? (recip ?? 'there') : (mine || 'there')
+  const publisher = ctx.recipientRole === 'publisher' ? (recip ?? 'the publisher') : (mine || 'the publisher')
+  return text.split('%buyer%').join(buyer).split('%publisher%').join(publisher).split('%product%').join(ctx.product ?? '')
 }
 
 /** Compose overlay over the current page (so you return to the same card/scroll on close). One recipient, or
- *  many (a personalized mail-merge: %alias% per recipient, %product% = the collection — one encrypted tx each).
+ *  many (a personalized mail-merge: %buyer% per recipient, %product% = the collection — one encrypted tx each).
  *  Reuses the same encrypted-send path as the Messages tab. */
-function openCompose(recipients: string[], opts: { who: string; product?: string }): void {
+function openCompose(recipients: string[], opts: { who: string } & ComposeCtx): void {
   if (recipients.length === 0) return
   const multi = recipients.length > 1
   const overlay = document.createElement('div')
@@ -1347,7 +1353,7 @@ function openCompose(recipients: string[], opts: { who: string; product?: string
     `<div class="modal-head"><span>✉ Message ${escapeHtml(opts.who)}</span><button class="secondary compose-close">✕ Close</button></div>` +
     `<div class="compose-to${multi ? ' compose-many' : ''}">${recipients.map(r => nameChip(r)).join(multi ? ' ' : '')}</div>` +
     '<textarea class="compose-text" rows="4" placeholder="Write a message…"></textarea>' +
-    `<p class="compose-hint muted" style="font-size:11px">Personalize with <code>%alias%</code> (recipient’s name)${opts.product != null ? ' · <code>%product%</code>' : ''}</p>` +
+    `<p class="compose-hint muted" style="font-size:11px">Personalize with <code>%buyer%</code> · <code>%publisher%</code>${opts.product != null ? ' · <code>%product%</code>' : ''}</p>` +
     '<div class="compose-preview muted" style="font-size:11px"></div>' +
     '<label class="compose-row"><span>📎 Attach a file</span> <input type="file" class="compose-file" /></label>' +
     '<label class="compose-row"><span><input type="checkbox" class="compose-encrypt" checked /> Encrypt</span> <span class="muted" style="font-size:11px">only they can read it</span></label>' +
@@ -1401,10 +1407,12 @@ function openCompose(recipients: string[], opts: { who: string; product?: string
 }
 
 /** Message one key (NFT-card publisher chip / single buyer row). */
-function composeTo(pubKeyHex: string, who: string, product?: string): void { openCompose([pubKeyHex], { who, product }) }
+function composeTo(pubKeyHex: string, who: string, ctx: ComposeCtx): void { openCompose([pubKeyHex], { who, ...ctx }) }
 
 /** "Message publisher" from an NFT card. */
-function onMessagePublisher(pubKeyHex: string, product?: string): void { composeTo(pubKeyHex, 'the publisher', product) }
+function onMessagePublisher(pubKeyHex: string, product?: string): void {
+  composeTo(pubKeyHex, 'the publisher', { product, recipientRole: 'publisher' })
+}
 
 /** A small "by @publisher [avatar] ✉ Message" row for an edition card; null for non-editions. */
 function publisherRowEl(t: StoredToken, myHash: string): HTMLElement | null {
@@ -2081,7 +2089,7 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
       const who = document.createElement('div'); who.className = 'buyer-who'
       who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">×${b.count}</span>` : ''}`
       const msg = document.createElement('button'); msg.className = 'secondary'; msg.textContent = '✉ Message'
-      msg.onclick = () => composeTo(b.pubKeyHex, 'this buyer', title) // stacks over the list — message several in a row
+      msg.onclick = () => composeTo(b.pubKeyHex, 'this buyer', { product: title, recipientRole: 'buyer' }) // stacks over the list
       row.append(cb, who, msg)
       listEl.append(row)
     }
@@ -2092,7 +2100,7 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
     listEl.querySelectorAll('.buyer-sel').forEach((cb, i) => { (cb as HTMLInputElement).checked = selected.has(lastBuyers[i].pubKeyHex) })
     updateSelUI()
   }
-  msgSelBtn.onclick = () => { if (selected.size) openCompose([...selected], { who: `${selected.size} buyers`, product: title }) }
+  msgSelBtn.onclick = () => { if (selected.size) openCompose([...selected], { who: `${selected.size} buyers`, product: title, recipientRole: 'buyer' }) }
   const scan = async (): Promise<void> => {
     refreshBtn.disabled = true; listEl.innerHTML = ''; statusEl.textContent = 'Scanning your sales…'
     try {
