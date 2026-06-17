@@ -789,19 +789,32 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
 // ─── Free-gift vouchers (publisher pre-funds claims; recipients claim for ~a miner fee) ──────────
 
 /**
- * Publisher: mint `count` funded "voucher" keys in ONE transaction, each holding `fundEachSats`. Returns
- * the funding txid + the voucher WIFs (the app turns each into a `&g=` claim link). Because the recipient
- * claims by replicating the publisher's own edition, the price + fees they "pay" flow straight back to the
- * publisher (they are the holder) — so the publisher's real cost ≈ the miner fee × count.
+ * Deterministic voucher key from the publisher's private key + collection + index. Because it uses the
+ * publisher's PRIVATE key, only they can regenerate the batch — so gift links (and any unclaimed funds) are
+ * always recoverable from the publisher's WIF + chain, with no separate backup. (The WIF is meant to be
+ * handed out in the link anyway; the one-way hash never leaks the publisher's key.)
+ */
+export function deriveVoucherKey(publisherKey: PrivateKey, tx1RefHex: string, index: number): PrivateKey {
+  const idx = [index & 0xff, (index >> 8) & 0xff, (index >> 16) & 0xff, (index >> 24) & 0xff]
+  const seed = [...(publisherKey.toArray('be', 32) as number[]), ...Utils.toArray(tx1RefHex, 'hex'), ...idx]
+  return new PrivateKey(Hash.sha256(seed))
+}
+
+/**
+ * Publisher: mint `count` funded voucher outputs in ONE tx, each holding `fundEachSats`, using DETERMINISTIC
+ * keys derived at `startIndex..startIndex+count-1` (so they're recoverable from the publisher's key). Returns
+ * the funding txid + the voucher WIFs (the app turns each into a `&g=` claim link).
  */
 export async function createGiftVouchers(provider: WalletProvider, publisherKey: PrivateKey, params: {
+  tx1RefHex: string
+  startIndex: number
   count: number
   fundEachSats: number
   feePerKb?: number
 }): Promise<{ fundingTxId: string; voucherWifs: string[] }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
   const count = Math.max(1, Math.floor(params.count))
-  const keys = Array.from({ length: count }, () => PrivateKey.fromRandom())
+  const keys = Array.from({ length: count }, (_, i) => deriveVoucherKey(publisherKey, params.tx1RefHex, params.startIndex + i))
   const estFee = Math.ceil(((250 + count * 35) * feePerKb) / 1000)
   const target = count * params.fundEachSats + estFee + 500
   const selected = selectFunding(await getSafeUtxos(provider), target)
@@ -824,6 +837,45 @@ export async function createGiftVouchers(provider: WalletProvider, publisherKey:
   provider.registerPendingTx(txId, selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
     (tx.outputs[changeVout]?.satoshis ?? 0) > 0 ? { outputIndex: changeVout, satoshis: tx.outputs[changeVout].satoshis ?? 0 } : undefined)
   return { fundingTxId: txId, voucherWifs: keys.map(k => k.toWif()) }
+}
+
+export interface GiftVoucherScan {
+  /** First never-funded index — where the next batch starts. */
+  nextIndex: number
+  /** Funded + unspent vouchers = live, unclaimed links (with their WIF, to rebuild the link). */
+  live: Array<{ index: number; wif: string }>
+  /** Funded but already spent = claimed. */
+  claimedCount: number
+}
+
+/**
+ * Recover a collection's gift vouchers from the publisher's key alone: regenerate the deterministic keys and
+ * gap-scan the chain. Funded-and-unspent = a live unclaimed link; funded-and-spent = claimed; never funded =
+ * the end of the batch. No local state needed — pure recover-from-WIF + chain.
+ */
+export async function scanGiftVouchers(
+  provider: WalletProvider, publisherKey: PrivateKey, tx1RefHex: string, opts?: { gapLimit?: number; max?: number },
+): Promise<GiftVoucherScan> {
+  const gapLimit = opts?.gapLimit ?? 5
+  const max = opts?.max ?? 1000
+  const live: Array<{ index: number; wif: string }> = []
+  let claimedCount = 0
+  let nextIndex = 0
+  let consecutiveEmpty = 0
+  for (let i = 0; i < max && consecutiveEmpty < gapLimit; i++) {
+    const k = deriveVoucherKey(publisherKey, tx1RefHex, i)
+    const script = p2pkhScript(Hash.hash160(k.toPublicKey().encode(true) as number[]))
+    let funded = false
+    try { funded = (await provider.getAddressHistory(k.toAddress())).length > 0 } catch { /* best-effort */ }
+    if (!funded) { consecutiveEmpty++; continue }
+    consecutiveEmpty = 0
+    nextIndex = i + 1
+    let unspent: Utxo[] = []
+    try { unspent = await provider.getUnspentByScriptHash(wocScriptHash(script)) } catch { /* best-effort */ }
+    if (unspent.length > 0) live.push({ index: i, wif: k.toWif() })
+    else claimedCount++
+  }
+  return { nextIndex, live, claimedCount }
 }
 
 /**

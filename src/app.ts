@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -852,7 +852,10 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
       const gift = document.createElement('button')
       gift.textContent = '🎁 Gift'; gift.className = 'secondary'
       gift.onclick = () => void onGiftCopies(t)
-      actions.append(bc, gift)
+      const links = document.createElement('button')
+      links.textContent = '📥 Gift links'; links.className = 'secondary'
+      links.onclick = () => void onViewGiftLinks(t)
+      actions.append(bc, gift, links)
     }
   } else {
     const send = document.createElement('button')
@@ -1733,12 +1736,34 @@ async function onGiftCopies(t: StoredToken): Promise<void> {
   if (!confirm(`Fund ${count} gift link(s) at ~${fundEach.toLocaleString()} sats each (~${total.toLocaleString()} sats from your wallet). Proceed?`)) return
   setStatus(`Creating ${count} funded gift link(s)…`)
   try {
-    const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { count, fundEachSats: fundEach })
+    // Deterministic keys: scan for the next free index so a new batch doesn't collide with existing vouchers.
+    const { nextIndex } = await scanGiftVouchers(provider, key, t.collectionId)
+    const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach })
     const links = voucherWifs.map(wif => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`)
-    setStatus(`✅ ${count} gift link(s) funded (tx ${short(fundingTxId)}). Hand them out from the popup.`, 'ok')
+    setStatus(`✅ ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, 'ok')
     showGiftLinksModal(t.collectionName ?? 'Free gift', links)
   } catch (e) {
     setStatus(`Gift creation failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Recover this collection's UNCLAIMED gift links from your key + chain (deterministic vouchers), and re-show
+ *  them — so you never lose access to links you didn't save. */
+async function onViewGiftLinks(t: StoredToken): Promise<void> {
+  setStatus('Recovering your gift links from chain…')
+  try {
+    const scan = await scanGiftVouchers(provider, key, t.collectionId)
+    const links = scan.live.map(v => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`)
+    if (links.length === 0) {
+      setStatus(scan.claimedCount > 0
+        ? `No unclaimed gift links left — all ${scan.claimedCount} have been claimed.`
+        : 'No gift links found for this collection yet.', 'info')
+      return
+    }
+    showGiftLinksModal(t.collectionName ?? 'Gift links', links)
+    setStatus(`Recovered ${links.length} unclaimed gift link(s)${scan.claimedCount > 0 ? ` (${scan.claimedCount} already claimed)` : ''}.`, 'ok')
+  } catch (e) {
+    setStatus(`Recover gift links failed: ${(e as Error).message}`, 'error')
   }
 }
 
