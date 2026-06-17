@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -188,17 +188,6 @@ function storeEdition(o: { txId: string; outputIndex: number; lockHex: string },
     ...(note?.text ? { sellerNote: note.text } : {}),
     ...(note?.bonusValue ? { bonusKind: note.bonusKind, bonusValue: note.bonusValue } : {}),
   })
-}
-
-async function onV2Probe(): Promise<void> {
-  if (!confirm('Broadcast a tiny version-2 (Chronicle) self-send to confirm the network accepts v2 txs? Costs only the miner fee.')) return
-  setStatus('Broadcasting v2 probe…')
-  try {
-    const txId = await broadcastV2Probe(provider, key)
-    setStatus(`✅ v2 tx accepted by broadcast: ${short(txId)}. Confirm it on WhatsOnChain.`, 'ok')
-  } catch (e) {
-    setStatus(`v2 probe rejected: ${(e as Error).message}`, 'error')
-  }
 }
 
 async function onMintEdition(): Promise<void> {
@@ -1890,7 +1879,6 @@ function init(): void {
 
   $('btnRefresh').onclick = () => void refreshBalance()
   $('btnMint').onclick = () => void onMint()
-  $('btnV2Probe').onclick = () => void onV2Probe()
   $('btnMintEdition').onclick = () => void onMintEdition()
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
