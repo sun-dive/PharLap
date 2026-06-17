@@ -1328,17 +1328,52 @@ function resolvePublisherIdentitiesThen(tokens: StoredToken[], rerender: () => v
   })
 }
 
-/** Preload the compose box with a key (encrypted) and jump to the Messages tab. */
+/** Message a key without leaving the current page: a compose overlay layered over My NFTs (so you return to
+ *  the exact same card/scroll on close). Reuses the same encrypted-send path as the Messages tab. */
 function composeTo(pubKeyHex: string, who: string): void {
-  ;($('msgTo') as HTMLInputElement).value = pubKeyHex
-  ;($('msgEncrypt') as HTMLInputElement).checked = true
-  updateMsgToName()
-  activateTab('messages')
-  ;($('msgText') as HTMLTextAreaElement).focus()
-  setStatus(`Messaging ${who} ${displayName(pubKeyHex).name}.`)
+  const overlay = document.createElement('div')
+  overlay.className = 'modal'
+  overlay.innerHTML =
+    '<div class="modal-box compose-box">' +
+    `<div class="modal-head"><span>✉ Message ${escapeHtml(who)}</span><button class="secondary compose-close">✕ Close</button></div>` +
+    `<div class="compose-to">${nameChip(pubKeyHex)}</div>` +
+    '<textarea class="compose-text" rows="4" placeholder="Write a message…"></textarea>' +
+    '<label class="compose-row"><span>📎 Attach a file</span> <input type="file" class="compose-file" /></label>' +
+    '<label class="compose-row"><span><input type="checkbox" class="compose-encrypt" checked /> Encrypt</span> <span class="muted" style="font-size:11px">only they can read it</span></label>' +
+    '<div class="row" style="margin-top:10px"><button class="compose-send">Send</button></div>' +
+    '<p class="compose-status muted" style="font-size:12px;margin-top:8px"></p>' +
+    '</div>'
+  const close = (): void => overlay.remove()
+  overlay.addEventListener('click', e => { if (e.target === overlay) close() })
+  overlay.querySelector('.compose-close')?.addEventListener('click', close)
+  const textEl = overlay.querySelector('.compose-text') as HTMLTextAreaElement
+  const fileEl = overlay.querySelector('.compose-file') as HTMLInputElement
+  const encEl = overlay.querySelector('.compose-encrypt') as HTMLInputElement
+  const sendBtn = overlay.querySelector('.compose-send') as HTMLButtonElement
+  const statusEl = overlay.querySelector('.compose-status') as HTMLElement
+  sendBtn.onclick = () => void (async () => {
+    const text = textEl.value
+    const file = await readFile(fileEl)
+    const parts: Part[] = []
+    if (text.trim()) parts.push({ kind: 'text', text })
+    if (file) parts.push({ kind: 'file', mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes })
+    if (parts.length === 0) { statusEl.textContent = 'Write a message or attach a file first.'; return }
+    sendBtn.disabled = true
+    statusEl.textContent = `Sending ${encEl.checked ? 'encrypted' : 'public'} message…`
+    try {
+      const r = await sendMessage(provider, key, { toPubKeyHex: pubKeyHex, parts, encrypt: encEl.checked, senderAlias: getMyAlias() })
+      statusEl.textContent = `✅ Sent. Tx ${short(r.txId)}.`
+      setTimeout(close, 1200)
+    } catch (e) {
+      statusEl.textContent = `Send failed: ${(e as Error).message}`
+      sendBtn.disabled = false
+    }
+  })()
+  document.body.append(overlay)
+  textEl.focus()
 }
 
-/** "Message publisher": preload the compose box with the publisher's key and jump to the Messages tab. */
+/** "Message publisher" from an NFT card. */
 function onMessagePublisher(pubKeyHex: string): void { composeTo(pubKeyHex, 'the publisher') }
 
 /** A small "by @publisher [avatar] ✉ Message" row for an edition card; null for non-editions. */
@@ -1996,7 +2031,7 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
       const who = document.createElement('div'); who.className = 'buyer-who'
       who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">×${b.count}</span>` : ''}`
       const msg = document.createElement('button'); msg.className = 'secondary'; msg.textContent = '✉ Message'
-      msg.onclick = () => { close(); composeTo(b.pubKeyHex, 'buyer') }
+      msg.onclick = () => composeTo(b.pubKeyHex, 'this buyer') // stacks over the buyers list — message several in a row
       row.append(who, msg)
       listEl.append(row)
     }

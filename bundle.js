@@ -21765,13 +21765,42 @@ It's posted to your own address and spends a small network fee. Proceed?`
     });
   }
   function composeTo(pubKeyHex2, who) {
-    ;
-    $("msgTo").value = pubKeyHex2;
-    $("msgEncrypt").checked = true;
-    updateMsgToName();
-    activateTab("messages");
-    $("msgText").focus();
-    setStatus(`Messaging ${who} ${displayName(pubKeyHex2).name}.`);
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = `<div class="modal-box compose-box"><div class="modal-head"><span>\u2709 Message ${escapeHtml(who)}</span><button class="secondary compose-close">\u2715 Close</button></div><div class="compose-to">${nameChip(pubKeyHex2)}</div><textarea class="compose-text" rows="4" placeholder="Write a message\u2026"></textarea><label class="compose-row"><span>\u{1F4CE} Attach a file</span> <input type="file" class="compose-file" /></label><label class="compose-row"><span><input type="checkbox" class="compose-encrypt" checked /> Encrypt</span> <span class="muted" style="font-size:11px">only they can read it</span></label><div class="row" style="margin-top:10px"><button class="compose-send">Send</button></div><p class="compose-status muted" style="font-size:12px;margin-top:8px"></p></div>`;
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector(".compose-close")?.addEventListener("click", close);
+    const textEl = overlay.querySelector(".compose-text");
+    const fileEl = overlay.querySelector(".compose-file");
+    const encEl = overlay.querySelector(".compose-encrypt");
+    const sendBtn = overlay.querySelector(".compose-send");
+    const statusEl = overlay.querySelector(".compose-status");
+    sendBtn.onclick = () => void (async () => {
+      const text = textEl.value;
+      const file = await readFile(fileEl);
+      const parts = [];
+      if (text.trim()) parts.push({ kind: "text", text });
+      if (file) parts.push({ kind: "file", mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes });
+      if (parts.length === 0) {
+        statusEl.textContent = "Write a message or attach a file first.";
+        return;
+      }
+      sendBtn.disabled = true;
+      statusEl.textContent = `Sending ${encEl.checked ? "encrypted" : "public"} message\u2026`;
+      try {
+        const r2 = await sendMessage(provider, key, { toPubKeyHex: pubKeyHex2, parts, encrypt: encEl.checked, senderAlias: getMyAlias() });
+        statusEl.textContent = `\u2705 Sent. Tx ${short(r2.txId)}.`;
+        setTimeout(close, 1200);
+      } catch (e) {
+        statusEl.textContent = `Send failed: ${e.message}`;
+        sendBtn.disabled = false;
+      }
+    })();
+    document.body.append(overlay);
+    textEl.focus();
   }
   function onMessagePublisher(pubKeyHex2) {
     composeTo(pubKeyHex2, "the publisher");
@@ -22470,10 +22499,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
         const msg = document.createElement("button");
         msg.className = "secondary";
         msg.textContent = "\u2709 Message";
-        msg.onclick = () => {
-          close();
-          composeTo(b.pubKeyHex, "buyer");
-        };
+        msg.onclick = () => composeTo(b.pubKeyHex, "this buyer");
         row.append(who, msg);
         listEl.append(row);
       }
