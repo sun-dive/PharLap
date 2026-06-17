@@ -22813,6 +22813,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     const sendBtn = thread.querySelector(".disc-send");
     const textEl = thread.querySelector(".disc-text");
     const statusEl = thread.querySelector(".disc-status");
+    sendBtn.disabled = false;
     feedEl.innerHTML = '<p class="muted">Loading corridor\u2026</p>';
     let result;
     try {

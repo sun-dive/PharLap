@@ -2171,6 +2171,7 @@ async function loadDiscThread(t: StoredToken): Promise<void> {
   const sendBtn = thread.querySelector('.disc-send') as HTMLButtonElement
   const textEl = thread.querySelector('.disc-text') as HTMLTextAreaElement
   const statusEl = thread.querySelector('.disc-status') as HTMLElement
+  sendBtn.disabled = false // re-enable on every (re)load — a prior successful post left it disabled
   feedEl.innerHTML = '<p class="muted">Loading corridor…</p>'
   let result: { nodes: CorridorNode[]; posts: Array<DiscPost & { node: CorridorNode }> }
   try { result = await readCorridor(provider, t.txId, t.outputIndex, t.collectionId) }
