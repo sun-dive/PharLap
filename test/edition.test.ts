@@ -6,7 +6,7 @@ import {
 } from '@bsv/sdk'
 import { pushTxPreimage } from '../src/pushtx.ts'
 import {
-  buildEditionLock, editionReplicateUnlockChunks, editionTransferUnlockChunks,
+  buildEditionLock, editionReplicateUnlockChunks, editionTransferUnlockChunks, editionBurnUnlockChunks,
   EDITION_SCOPE, serializeOutput, p2pkhScript, parseEditionScript,
 } from '../src/covenant.ts'
 
@@ -129,4 +129,40 @@ test('edition TRANSFER: rejects an output that drops the covenant (wrong new-own
   // out0 keeps the holder's pubkey instead of the new owner the unlock declares → hashOutputs mismatch.
   const k = PrivateKey.fromRandom()
   assert.throws(() => runTransfer({ out0Pub: pub(k) }))
+})
+
+// Helper to run an owner-signed BURN (reclaim the bond, destroy the token). The owner sweeps the bonded
+// sats to any output(s) of their choosing; the covenant enforces NO outputs, only the owner's signature.
+const BOND = 2100
+function runBurn(opts: { signer?: PrivateKey } = {}): boolean {
+  const { holder, lock } = makeEdition()
+  const signer = opts.signer ?? holder
+  const reclaimScript = new P2PKH().lock(holder.toAddress()).toBinary()
+  const src = new Transaction(); src.addOutput({ lockingScript: lock, satoshis: BOND })
+  const sp = new Transaction(); sp.version = 2
+  sp.addInput({ sourceTransaction: src, sourceOutputIndex: 0, sequence: 0xffffffff })
+  sp.addOutput({ lockingScript: LockingScript.fromBinary(reclaimScript), satoshis: BOND - 100 }) // bond minus fee
+  const fmt = (scope: number) => pushTxPreimage({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, sourceSatoshis: BOND, transactionVersion: 2,
+    inputIndex: 0, subscript: lock, outputs: sp.outputs, inputSequence: 0xffffffff, lockTime: sp.lockTime, scope,
+  })
+  const introspectionPreimage = fmt(EDITION_SCOPE)
+  const ownerScope = TransactionSignature.SIGHASH_ALL | TransactionSignature.SIGHASH_FORKID
+  const raw = signer.sign(Hash.sha256(fmt(ownerScope)))
+  const ownerSig = new TransactionSignature(raw.r, raw.s, ownerScope).toChecksigFormat()
+  const unlock = editionBurnUnlockChunks({ ownerSig, preimage: introspectionPreimage })
+  const interp = new Spend({
+    sourceTXID: src.id('hex'), sourceOutputIndex: 0, lockingScript: lock, sourceSatoshis: BOND,
+    transactionVersion: 2, otherInputs: [], inputIndex: 0, outputs: sp.outputs,
+    inputSequence: 0xffffffff, lockTime: sp.lockTime, unlockingScript: new UnlockingScript(unlock),
+  })
+  return interp.validate()
+}
+
+test('edition BURN: owner reclaims the bond and destroys the token (no covenant output re-created)', () => {
+  assert.equal(runBurn(), true)
+})
+
+test('edition BURN: rejects a non-owner signature (only the current owner can burn)', () => {
+  assert.throws(() => runBurn({ signer: PrivateKey.fromRandom() }))
 })

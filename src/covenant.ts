@@ -240,6 +240,27 @@ export function transferTailOps(p: { tokenSats?: number }): ScriptChunk[] {
   ]
 }
 
+/**
+ * Burn tail (owner-signed, NO output enforcement). Stack on entry (after the dispatch drops the selector):
+ * [ ownerSig, pre, ownerPub, suffix ], alt = [ hashOutputs ]. Authenticates the current owner EXACTLY like
+ * transfer (the ownerPub/ownerSig stack depths are identical — newOwnerPub/change just sit below ownerSig),
+ * then succeeds. The owner's SIGHASH-ALL signature already commits to their chosen outputs, so they sweep the
+ * bonded sats anywhere and the token is destroyed (no covenant output is re-created). Only the current owner
+ * can produce a valid ownerSig against the script-embedded ownerPub, so only they can burn.
+ */
+export function burnTailOps(): ScriptChunk[] {
+  return [
+    // authenticate current owner: <ownerSig> <ownerPub> OP_CHECKSIGVERIFY  (same auth as transferTailOps)
+    pushData([1]), op(OP.OP_PICK),                 // copy ownerPub
+    pushData([4]), op(OP.OP_PICK),                 // copy ownerSig
+    op(OP.OP_SWAP), op(OP.OP_CHECKSIGVERIFY),
+    // burn: enforce nothing — the owner authorised their outputs by signing. Clean up + succeed.
+    op(OP.OP_2DROP), op(OP.OP_2DROP),              // drop suffix, ownerPub, pre, ownerSig
+    op(OP.OP_FROMALTSTACK), op(OP.OP_DROP),        // discard hashOutputs (unused by burn)
+    op(OP.OP_1),
+  ]
+}
+
 /** Standalone replicate covenant (L4 test/reference): prefix + replicate tail. Entry [change, buyerPub, preimage]. */
 export function replicateBranchOps(p: ReplicateParams): ScriptChunk[] {
   return [...covenantPrefixOps(p.fieldPubkeyOffset, p.c ?? pushTxConstants()), ...replicateTailOps(p)]
@@ -402,7 +423,7 @@ function editionFieldChunksV2(f: EditionFields): ScriptChunk[] {
  * Full edition-token locking script ops:
  *   <5 data fields> OP_2DROP OP_2DROP OP_DROP    (carry token metadata on-chain, then clear the stack)
  *   <shared covenant prefix>                     (verify preimage; extract hashOutputs + scriptCode pieces)
- *   <selector> OP_IF <transfer tail> OP_ELSE <replicate tail> OP_ENDIF
+ *   <selector> 3-way dispatch: 2 → burn, 1 → transfer, 0 → replicate
  * Use `buildEditionLock` instead of calling this directly — it computes `fieldPubkeyOffset` for you.
  */
 export function editionLockOps(p: EditionParams): ScriptChunk[] {
@@ -412,10 +433,15 @@ export function editionLockOps(p: EditionParams): ScriptChunk[] {
     op(OP.OP_2DROP), op(OP.OP_2DROP), op(OP.OP_DROP), // 5 fields
     ...covenantPrefixOps(p.fieldPubkeyOffset, c),
     pushData([3]), op(OP.OP_ROLL),                          // bring the branch selector to the top
+    op(OP.OP_DUP), op(OP.OP_2), op(OP.OP_NUMEQUAL), op(OP.OP_IF), // selector == 2 → burn
+    op(OP.OP_DROP),                                          // drop the selector
+    ...burnTailOps(),
+    op(OP.OP_ELSE),                                          // selector 1 → transfer, 0 → replicate
     op(OP.OP_IF),
     ...transferTailOps({ tokenSats: p.tokenSats }),
     op(OP.OP_ELSE),
     ...replicateTailOps(p),
+    op(OP.OP_ENDIF),
     op(OP.OP_ENDIF),
   ]
 }
@@ -432,6 +458,13 @@ export function buildEditionLock(p: Omit<EditionParams, 'fieldPubkeyOffset'>): L
   const probeLen = new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: 1 })).toBinary().length
   const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5
   return new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: varIntSize + O }))
+}
+
+/** Whether an edition lock has the burn branch (3-way dispatch). A v1 edition's only OP_NUMEQUAL is in the
+ *  burn dispatch, so its presence cleanly distinguishes burn-capable (bonded) editions from older ones. */
+export function editionSupportsBurn(lockBytes: number[]): boolean {
+  const chunks = LockingScript.fromBinary(lockBytes).chunks
+  return chunks != null && chunks.some(c => c.op === OP.OP_NUMEQUAL)
 }
 
 /** v2 edition lock ops: identical shape to v1 but the replicate branch enforces the percentage split. */
@@ -675,6 +708,12 @@ export function editionTransferUnlockChunks(p: {
   newOwnerPubKey: number[]; ownerSig: number[]; change: number[]; preimage: number[]
 }): ScriptChunk[] {
   return [pushData(p.change), pushData(p.newOwnerPubKey), pushData(p.ownerSig), op(OP.OP_1), pushData(p.preimage)]
+}
+
+/** Unlock for an owner-signed burn (selector 2): [ ownerSig, OP_2, preimage ]. The owner sweeps the bonded
+ *  sats via outputs of their choosing (committed by the SIGHASH-ALL ownerSig); the token is destroyed. */
+export function editionBurnUnlockChunks(p: { ownerSig: number[]; preimage: number[] }): ScriptChunk[] {
+  return [pushData(p.ownerSig), op(OP.OP_2), pushData(p.preimage)]
 }
 
 /**
