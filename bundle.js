@@ -20592,6 +20592,7 @@ Proceed?`
     }
     setStatus(`Sending ${encrypt ? "encrypted" : "public"} message\u2026`);
     try {
+      console.log("[alias-debug] SENDING with senderAlias =", JSON.stringify(getMyAlias()));
       const r2 = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt, senderAlias: getMyAlias() });
       $("msgText").value = "";
       setStatus(`Message sent. Tx ${short(r2.txId)}.`, "ok");
@@ -20642,6 +20643,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     setStatus("Checking for messages\u2026");
     try {
       const msgs = await scanIncomingMessages(provider, key);
+      console.log("[alias-debug] scanned messages:", msgs.map((m) => ({ from: m.senderPubKeyHex.slice(0, 12), senderAlias: m.senderAlias, height: m.height })));
       for (const m of msgs) if (m.senderAlias) rememberAlias(m.senderPubKeyHex, m.senderAlias);
       renderInbox(msgs);
       resolveAvatarsThen(msgs.map((m) => m.senderPubKeyHex), () => renderInbox(lastInbox));
@@ -21277,10 +21279,12 @@ It's posted to your own address and spends a small network fee. Proceed?`
   function rememberAlias(pubKeyHex2, alias) {
     if (alias === "") return;
     const k = pubKeyHex2.toLowerCase();
+    console.log("[alias-debug] rememberAlias", { key: k.slice(0, 12), incoming: alias, savedContact: contacts[k], pinned: pinned[k] === 1, seen: seenAliases[k] });
     if (contacts[k] != null) {
       if (!pinned[k] && contacts[k] !== alias) {
         contacts[k] = alias;
         persist("p:contacts", contacts);
+        console.log("[alias-debug] \u2192 followed rename to", alias);
       }
       return;
     }
