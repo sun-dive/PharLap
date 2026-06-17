@@ -20426,20 +20426,22 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function u32le(n) {
     return [n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255];
   }
-  function nodeFeedHash160(collectionId, birthTxId, birthVout) {
-    const seed = [
+  function nodeSeed(collectionId, birthTxId, birthVout) {
+    return [
       ...utils_exports.toArray("PHARLAP-DISC-NODE-v1", "utf8"),
       ...utils_exports.toArray(collectionId, "hex"),
       ...utils_exports.toArray(birthTxId, "hex"),
       ...u32le(birthVout)
     ];
-    return Hash_exports.hash160(seed);
+  }
+  function nodeFeedHash160(collectionId, birthTxId, birthVout) {
+    return Hash_exports.hash160(nodeSeed(collectionId, birthTxId, birthVout));
   }
   function rootFeedHash160(collectionId) {
     return Hash_exports.hash160([...utils_exports.toArray("PHARLAP-DISC-ROOT-v1", "utf8"), ...utils_exports.toArray(collectionId, "hex")]);
   }
-  function nodeRef(birthTxId, birthVout) {
-    return `${birthTxId}:${birthVout}`;
+  function nodeRef(collectionId, birthTxId, birthVout) {
+    return utils_exports.toHex(Hash_exports.sha256(nodeSeed(collectionId, birthTxId, birthVout)));
   }
   async function walkNodeAncestors(provider2, startTxId, startVout, collectionId, maxHops = MAX_WALK_HOPS) {
     const nodes = [];
@@ -20559,7 +20561,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     ancestors.forEach((n, i) => out.push({
       ...n,
       feedHash160: nodeFeedHash160(collectionId, n.birthTxId, n.birthVout),
-      ref: nodeRef(n.birthTxId, n.birthVout),
+      ref: nodeRef(collectionId, n.birthTxId, n.birthVout),
       isRoot: false,
       isSelf: i === ancestors.length - 1
     }));

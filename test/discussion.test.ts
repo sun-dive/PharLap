@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, Hash } from '@bsv/sdk'
 import { buildEditionGenesisTx, buildReplicateTx, type EditionUtxo, type EditionTerms } from '../src/editionBuilder.ts'
-import { walkNodeAncestors, nodeFeedHash160, rootFeedHash160 } from '../src/discussion.ts'
+import { walkNodeAncestors, nodeFeedHash160, rootFeedHash160, nodeRef } from '../src/discussion.ts'
 import type { FundingInput } from '../src/collectionBuilder.ts'
 
 const TX1REF = 'cd'.repeat(32)
@@ -61,4 +61,8 @@ test('feed hashes are deterministic + separated by node / collection / root', ()
   assert.notDeepEqual(nodeFeedHash160(c, t, 1), nodeFeedHash160('11'.repeat(32), t, 1)) // per-collection
   assert.notDeepEqual(rootFeedHash160(c), nodeFeedHash160(c, c, 0))            // root distinct from a node
   assert.equal(nodeFeedHash160(c, t, 1).length, 20)
+  // nodeRef must be a 32-byte hex value (RECORD_MESSAGE requires a 32-byte ref — regression for "Invalid hex string").
+  assert.match(nodeRef(c, t, 1), /^[0-9a-f]{64}$/)
+  assert.equal(nodeRef(c, t, 1), nodeRef(c, t, 1))         // deterministic
+  assert.notEqual(nodeRef(c, t, 1), nodeRef(c, t, 0))      // per-node
 })

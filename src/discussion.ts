@@ -38,11 +38,14 @@ const MAX_POST_BYTES = 1000
 
 function u32le(n: number): number[] { return [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff] }
 
+function nodeSeed(collectionId: string, birthTxId: string, birthVout: number): number[] {
+  return [...Utils.toArray('PHARLAP-DISC-NODE-v1', 'utf8'),
+    ...Utils.toArray(collectionId, 'hex'), ...Utils.toArray(birthTxId, 'hex'), ...u32le(birthVout)]
+}
+
 /** Derive a node feed's hash160 (the "topic key" of its P2PKH feed address) from the node identity. */
 export function nodeFeedHash160(collectionId: string, birthTxId: string, birthVout: number): number[] {
-  const seed = [...Utils.toArray('PHARLAP-DISC-NODE-v1', 'utf8'),
-    ...Utils.toArray(collectionId, 'hex'), ...Utils.toArray(birthTxId, 'hex'), ...u32le(birthVout)]
-  return Hash.hash160(seed)
+  return Hash.hash160(nodeSeed(collectionId, birthTxId, birthVout))
 }
 
 /** Derive the collection ROOT feed's hash160 — the common ancestor every holder's corridor includes
@@ -51,8 +54,11 @@ export function rootFeedHash160(collectionId: string): number[] {
   return Hash.hash160([...Utils.toArray('PHARLAP-DISC-ROOT-v1', 'utf8'), ...Utils.toArray(collectionId, 'hex')])
 }
 
-/** Stable string id (the post `ref`) for a node — its birth outpoint, or the collectionId for the root. */
-export function nodeRef(birthTxId: string, birthVout: number): string { return `${birthTxId}:${birthVout}` }
+/** The post `ref` for a node — a 32-byte hex value (RECORD_MESSAGE requires a 32-byte ref). Derived from the
+ *  node identity so it's stable + verifiable. The collection ROOT uses the collectionId directly (already 32B). */
+export function nodeRef(collectionId: string, birthTxId: string, birthVout: number): string {
+  return Utils.toHex(Hash.sha256(nodeSeed(collectionId, birthTxId, birthVout)))
+}
 
 export interface DiscNode {
   /** Node identity = birth outpoint. */
@@ -190,7 +196,7 @@ export async function resolveCorridor(
   }]
   ancestors.forEach((n, i) => out.push({
     ...n, feedHash160: nodeFeedHash160(collectionId, n.birthTxId, n.birthVout),
-    ref: nodeRef(n.birthTxId, n.birthVout), isRoot: false, isSelf: i === ancestors.length - 1,
+    ref: nodeRef(collectionId, n.birthTxId, n.birthVout), isRoot: false, isSelf: i === ancestors.length - 1,
   }))
   return out
 }
