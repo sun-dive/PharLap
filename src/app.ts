@@ -208,7 +208,7 @@ async function onMintEdition(): Promise<void> {
       tokenName: name, terms, mintCount: count, file, encrypt, description, cover,
       confirmSpend: total => confirm(
         `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ''}?\n\n` +
-        `This spends ${total.toLocaleString()} sats from your wallet — mostly a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.\n\n` +
+        `This spends ${total.toLocaleString()} sats from your wallet — including a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.\n\n` +
         `Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.\n\nProceed?`),
     })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
