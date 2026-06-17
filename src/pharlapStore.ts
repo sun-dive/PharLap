@@ -25,6 +25,8 @@ export interface StoredToken {
   publisherPubKeyHashHex?: string
   publisherFeeSats?: number
   holderFeeSats?: number
+  /** The edition's bond = its UTXO value (sats), reclaimed by burning. Drives burn/replicate/gift figures. */
+  tokenSats?: number
   /** Seller's promo note captured at purchase (the note that was current when this copy was bought). */
   sellerNote?: string
   /** Optional buyer bonus captured with the note: an external link or a redeemable code. */

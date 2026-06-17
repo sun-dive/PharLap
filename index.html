@@ -346,6 +346,9 @@
         <div><label>Publisher fee (sats)</label><input id="edPublisherFee" type="number" min="0" value="5000" /></div>
         <div><label>Holder fee (sats)</label><input id="edHolderFee" type="number" min="0" value="1000" /></div>
       </div>
+      <label>Bond per edition (sats) — refundable, reclaimed by burning a copy</label>
+      <input id="edBond" type="number" min="1" value="2100" />
+      <p class="muted" style="font-size:12px;margin:2px 0 0">Each edition rides on this many sats; the owner reclaims them by burning. Higher = stronger price floor (and pricier gifts); set low (e.g. 1) for free-content drops.</p>
       <label>Editions to mint now</label>
       <input id="edCount" type="number" min="1" value="1" />
       <label>Embed a file (optional — viewable by holders)</label>
