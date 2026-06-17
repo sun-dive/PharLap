@@ -153,15 +153,20 @@ async function onMint(): Promise<void> {
 }
 
 // ─── editions (experimental covenant) ──────────────────────────────
-/** The refundable bond every new edition rides on (= the token UTXO value). Recoverable by burning. */
+/** Default refundable bond (sats) each edition rides on; the publisher overrides it per collection at mint. */
 const EDITION_BOND_SATS = 2100
+
+/** The bond chosen in the mint form (≥ 1 sat dust floor). */
+function chosenBond(): number {
+  return Math.max(1, parseInt(val('edBond') || String(EDITION_BOND_SATS), 10))
+}
 
 function ownTerms(): EditionTerms {
   return {
     publisherPubKeyHash: Hash.hash160(key.toPublicKey().encode(true) as number[]),
     publisherFeeSats: Math.max(0, parseInt(val('edPublisherFee') || '0', 10)),
     holderFeeSats: Math.max(0, parseInt(val('edHolderFee') || '0', 10)),
-    tokenSats: EDITION_BOND_SATS,
+    tokenSats: chosenBond(),
   }
 }
 
@@ -170,7 +175,7 @@ function termsFromToken(t: StoredToken): EditionTerms {
     publisherPubKeyHash: Utils.toArray(t.publisherPubKeyHashHex ?? '', 'hex'),
     publisherFeeSats: t.publisherFeeSats ?? 0,
     holderFeeSats: t.holderFeeSats ?? 0,
-    tokenSats: 1,
+    tokenSats: t.tokenSats ?? 1,
   }
 }
 
@@ -179,6 +184,7 @@ function storeEdition(o: { txId: string; outputIndex: number; lockHex: string },
     txId: o.txId, outputIndex: o.outputIndex, collectionId, stateData: '', collectionName: name,
     kind: 'edition', lockHex: o.lockHex, publisherPubKeyHashHex: Utils.toHex(terms.publisherPubKeyHash),
     publisherFeeSats: terms.publisherFeeSats, holderFeeSats: terms.holderFeeSats,
+    ...(terms.tokenSats != null ? { tokenSats: terms.tokenSats } : {}),
     ...(note?.text ? { sellerNote: note.text } : {}),
     ...(note?.bonusValue ? { bonusKind: note.bonusKind, bonusValue: note.bonusValue } : {}),
   })
@@ -213,7 +219,7 @@ async function onMintEdition(): Promise<void> {
       tokenName: name, terms, mintCount: count, file, encrypt, description, cover,
       confirmSpend: total => confirm(
         `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ''}?\n\n` +
-        `This spends ${total.toLocaleString()} sats from your wallet — mostly a refundable ${EDITION_BOND_SATS.toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.\n\n` +
+        `This spends ${total.toLocaleString()} sats from your wallet — mostly a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.\n\n` +
         `Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.\n\nProceed?`),
     })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
@@ -304,7 +310,7 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
 async function onBurn(t: StoredToken): Promise<void> {
   if (!t.lockHex) { setStatus('Missing edition script; cannot burn.', 'error'); return }
   if (!confirm(
-    `Burn your edition of “${t.collectionName ?? 'this collection'}” and reclaim its ~${EDITION_BOND_SATS.toLocaleString()}-sat bond ` +
+    `Burn your edition of “${t.collectionName ?? 'this collection'}” and reclaim its ~${(t.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond ` +
     `(minus a small network fee) to your wallet?\n\n⚠ This DESTROYS the token permanently — it cannot be undone. Proceed?`)) return
   setStatus('Burning edition (reclaiming the bond)…')
   try {
@@ -1707,21 +1713,24 @@ async function onBroadcast(t: StoredToken): Promise<void> {
 
 /** Publisher: create N pre-funded free-gift links for a collection (each single-use). */
 async function onGiftCopies(t: StoredToken): Promise<void> {
-  // Per-voucher funding = the claim's price/fees (which return to you as holder) + miner fee + a small starter.
+  // Per-voucher funding = the recipient's replica BOND + the claim's price/fees (which return to you as
+  // holder) + miner fee + a small starter. The bond stays with the recipient (their reclaimable copy), so
+  // your real cost ≈ the bond + miner fee per claim.
   let claimCost = 0
   try {
     const ed = parseEditionAny(LockingScript.fromHex(t.lockHex ?? ''))
     if (ed) claimCost = ed.isV2 ? ed.priceSats : (ed.terms.publisherFeeSats + ed.terms.holderFeeSats)
   } catch { /* leave 0 */ }
-  const fundEach = claimCost + 700 /* miner buffer */ + 800 /* recipient starter */
+  const bond = t.tokenSats ?? EDITION_BOND_SATS // unknown → assume the default (over-funding a voucher is harmless; under-funding fails the claim)
+  const fundEach = bond + claimCost + 700 /* miner buffer */ + 800 /* recipient starter */
   const countStr = prompt(
     `Create free-gift links for “${t.collectionName ?? 'this collection'}”.\n\n` +
-    `How many?  Each is pre-funded with ~${fundEach} sats — but the price + fees come back to you as the holder, ` +
-    `so your real cost is ≈ the miner fee per claim.`, '10')
+    `How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price + fees come back to you, but the ` +
+    `${bond.toLocaleString()}-sat bond stays with the recipient (their reclaimable copy) — so your real cost ≈ the bond + miner fee per claim.`, '10')
   if (countStr == null) return
   const count = Math.max(1, Math.min(500, parseInt(countStr, 10) || 0))
   const total = count * fundEach
-  if (!confirm(`Fund ${count} gift link(s) at ~${fundEach} sats each (~${total} sats from your wallet; most returns on claim). Proceed?`)) return
+  if (!confirm(`Fund ${count} gift link(s) at ~${fundEach.toLocaleString()} sats each (~${total.toLocaleString()} sats from your wallet). Proceed?`)) return
   setStatus(`Creating ${count} funded gift link(s)…`)
   try {
     const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { count, fundEachSats: fundEach })

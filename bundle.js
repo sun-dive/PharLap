@@ -20463,12 +20463,15 @@ Proceed?`
     }
   }
   var EDITION_BOND_SATS = 2100;
+  function chosenBond() {
+    return Math.max(1, parseInt(val("edBond") || String(EDITION_BOND_SATS), 10));
+  }
   function ownTerms() {
     return {
       publisherPubKeyHash: Hash_exports.hash160(key.toPublicKey().encode(true)),
       publisherFeeSats: Math.max(0, parseInt(val("edPublisherFee") || "0", 10)),
       holderFeeSats: Math.max(0, parseInt(val("edHolderFee") || "0", 10)),
-      tokenSats: EDITION_BOND_SATS
+      tokenSats: chosenBond()
     };
   }
   function termsFromToken(t) {
@@ -20476,7 +20479,7 @@ Proceed?`
       publisherPubKeyHash: utils_exports.toArray(t.publisherPubKeyHashHex ?? "", "hex"),
       publisherFeeSats: t.publisherFeeSats ?? 0,
       holderFeeSats: t.holderFeeSats ?? 0,
-      tokenSats: 1
+      tokenSats: t.tokenSats ?? 1
     };
   }
   function storeEdition(o, collectionId, name, terms, note) {
@@ -20491,6 +20494,7 @@ Proceed?`
       publisherPubKeyHashHex: utils_exports.toHex(terms.publisherPubKeyHash),
       publisherFeeSats: terms.publisherFeeSats,
       holderFeeSats: terms.holderFeeSats,
+      ...terms.tokenSats != null ? { tokenSats: terms.tokenSats } : {},
       ...note?.text ? { sellerNote: note.text } : {},
       ...note?.bonusValue ? { bonusKind: note.bonusKind, bonusValue: note.bonusValue } : {}
     });
@@ -20534,7 +20538,7 @@ Proceed?`
         confirmSpend: (total) => confirm(
           `Mint ${count} edition${count > 1 ? "s" : ""} of \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ""}?
 
-This spends ${total.toLocaleString()} sats from your wallet \u2014 mostly a refundable ${EDITION_BOND_SATS.toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.
+This spends ${total.toLocaleString()} sats from your wallet \u2014 mostly a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.
 
 Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.
 
@@ -20663,7 +20667,7 @@ Proceed?`
       return;
     }
     if (!confirm(
-      `Burn your edition of \u201C${t.collectionName ?? "this collection"}\u201D and reclaim its ~${EDITION_BOND_SATS.toLocaleString()}-sat bond (minus a small network fee) to your wallet?
+      `Burn your edition of \u201C${t.collectionName ?? "this collection"}\u201D and reclaim its ~${(t.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond (minus a small network fee) to your wallet?
 
 \u26A0 This DESTROYS the token permanently \u2014 it cannot be undone. Proceed?`
     )) return;
@@ -22139,17 +22143,18 @@ Public, one transaction, reaches every current holder. Message:`);
       if (ed) claimCost = ed.isV2 ? ed.priceSats : ed.terms.publisherFeeSats + ed.terms.holderFeeSats;
     } catch {
     }
-    const fundEach = claimCost + 700 + 800;
+    const bond = t.tokenSats ?? EDITION_BOND_SATS;
+    const fundEach = bond + claimCost + 700 + 800;
     const countStr = prompt(
       `Create free-gift links for \u201C${t.collectionName ?? "this collection"}\u201D.
 
-How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees come back to you as the holder, so your real cost is \u2248 the miner fee per claim.`,
+How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price + fees come back to you, but the ${bond.toLocaleString()}-sat bond stays with the recipient (their reclaimable copy) \u2014 so your real cost \u2248 the bond + miner fee per claim.`,
       "10"
     );
     if (countStr == null) return;
     const count = Math.max(1, Math.min(500, parseInt(countStr, 10) || 0));
     const total = count * fundEach;
-    if (!confirm(`Fund ${count} gift link(s) at ~${fundEach} sats each (~${total} sats from your wallet; most returns on claim). Proceed?`)) return;
+    if (!confirm(`Fund ${count} gift link(s) at ~${fundEach.toLocaleString()} sats each (~${total.toLocaleString()} sats from your wallet). Proceed?`)) return;
     setStatus(`Creating ${count} funded gift link(s)\u2026`);
     try {
       const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { count, fundEachSats: fundEach });
