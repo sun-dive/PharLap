@@ -6,3 +6,7 @@ node_modules/
 # Internal design docs — kept local; excluded from the public `publish` branch / origin/main.
 PLAN.md
 docs/DEVIATIONS_FROM_MPT.md
+
+# build artifacts
+smart-nfts-app.zip
+*.zip
