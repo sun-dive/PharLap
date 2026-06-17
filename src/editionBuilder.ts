@@ -23,7 +23,7 @@ import {
 } from '@bsv/sdk'
 import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
-  editionReplicateUnlockChunks, editionTransferUnlockChunks, EDITION_SCOPE, parseEditionScript,
+  editionReplicateUnlockChunks, editionTransferUnlockChunks, editionBurnUnlockChunks, EDITION_SCOPE, parseEditionScript,
   buildHolderEditionScript, parseEditionScriptV2, parseEditionAny, buildEditionLockV2, u64le,
 } from './covenant.ts'
 import {
@@ -230,6 +230,29 @@ export function transferUnlockTemplate(opts: {
   }
 }
 
+/** Burn unlock: the owner signs (SIGHASH_ALL) the tx that sweeps the bonded sats; no outputs are enforced. */
+export function burnUnlockTemplate(opts: { ownerKey: PrivateKey; lockingScript: LockingScript; sourceSatoshis: number }) {
+  return {
+    sign: async (tx: Transaction, inputIndex: number): Promise<UnlockingScript> => {
+      const input = tx.inputs[inputIndex]
+      const sourceTXID = input.sourceTXID ?? input.sourceTransaction?.id('hex')
+      if (sourceTXID == null) throw new Error('burn unlock: input is missing sourceTXID/sourceTransaction')
+      const fmt = (scope: number) => TransactionSignature.format({
+        sourceTXID, sourceOutputIndex: input.sourceOutputIndex, sourceSatoshis: opts.sourceSatoshis,
+        transactionVersion: tx.version, otherInputs: otherInputsOf(tx, inputIndex), inputIndex,
+        outputs: tx.outputs, inputSequence: input.sequence ?? 0xffffffff,
+        subscript: opts.lockingScript, lockTime: tx.lockTime, scope,
+      })
+      const introspection = fmt(EDITION_SCOPE)
+      const ownerScope = TransactionSignature.SIGHASH_ALL | TransactionSignature.SIGHASH_FORKID
+      const raw = opts.ownerKey.sign(Hash.sha256(fmt(ownerScope)))
+      const ownerSig = new TransactionSignature(raw.r, raw.s, ownerScope).toChecksigFormat()
+      return new UnlockingScript(editionBurnUnlockChunks({ ownerSig, preimage: introspection }))
+    },
+    estimateLength: async (): Promise<number> => TRANSFER_UNLOCK_LEN, // ~transfer minus the new-owner bytes
+  }
+}
+
 // ─── REPLICATE ──────────────────────────────────────────────────────
 
 /** A spendable edition UTXO (the output being replicated/transferred). */
@@ -268,7 +291,9 @@ export async function buildReplicateTx(opts: {
   note?: SellerNote
   feePerKb?: number
 }): Promise<ReplicateResult> {
-  const tokenSats = opts.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
+  // The bond rides forward consensus-enforced (VALUE1 = the edition UTXO value) onto out0 (token→holder)
+  // and out1 (replica→buyer). Read it from the UTXO so old (1-sat) and new (bonded) collections both work.
+  const bond = opts.edition.satoshis
   const lock = LockingScript.fromBinary(opts.edition.lockBytes)
   const holderPub = editionOwnerPubKey(opts.edition.lockBytes)
   const buyerPub = opts.ownerPubKey ?? pubKeyBytes(opts.buyerKey)
@@ -290,18 +315,18 @@ export async function buildReplicateTx(opts: {
   }
 
   // Enforced outputs (order fixed by the covenant), then buyer change.
-  tx.addOutput({ lockingScript: lock, satoshis: tokenSats })                                                  // [0] token → holder (verbatim)
-  tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats }) // [1] replica → buyer
+  tx.addOutput({ lockingScript: lock, satoshis: bond })                                                  // [0] token → holder (verbatim, bond preserved)
+  tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: bond }) // [1] replica → buyer (bond)
   tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(opts.terms.publisherPubKeyHash)), satoshis: opts.terms.publisherFeeSats }) // [2] publisher fee
   tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash.hash160(holderPub))), satoshis: opts.terms.holderFeeSats })       // [3] holder fee
   // [4] (optional) seller-note echo, locked to the buyer — a spender-supplied trailing output the covenant
-  // appends verbatim (no covenant change). Carries the note + bonus to the buyer + to their future buyers.
+  // appends verbatim (no covenant change). A small carrier (NOT bonded). Carries the note + bonus forward.
   if (opts.note && tx1RefHex != null && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
     tx.addOutput({
       lockingScript: buildNoteScript(Utils.toHex(buyerPub), {
         collectionRef: tx1RefHex, text: opts.note.text, bonusKind: opts.note.bonusKind, bonusValue: opts.note.bonusValue,
       }),
-      satoshis: tokenSats,
+      satoshis: PHARLAP_OUTPUT_SATS,
     })
   }
   const changeVout = tx.outputs.length
@@ -400,7 +425,8 @@ export async function buildEditionTransferTx(opts: {
   tokenSats?: number
   feePerKb?: number
 }): Promise<TransferResult> {
-  const tokenSats = opts.tokenSats ?? PHARLAP_OUTPUT_SATS
+  // out0 re-creates the token with the bond preserved (covenant-enforced VALUE1 = the UTXO value).
+  const bond = opts.edition.satoshis
   const lock = LockingScript.fromBinary(opts.edition.lockBytes)
   const tx1RefHex = parseEditionScript(lock)?.tx1RefHex
   const tx = new Transaction()
@@ -419,7 +445,7 @@ export async function buildEditionTransferTx(opts: {
     })
   }
 
-  tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, opts.newOwnerPubKey)), satoshis: tokenSats }) // [0] token → new owner
+  tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, opts.newOwnerPubKey)), satoshis: bond }) // [0] token → new owner (bond preserved)
   // [1] 1-sat P2PKH notification to the new owner's address — the discovery breadcrumb (the edition
   // covenant output itself is not WoC-address-indexed). Part of the covenant's free "change" region.
   const notifyAddress = PublicKey.fromString(Utils.toHex(opts.newOwnerPubKey)).toAddress()
@@ -430,7 +456,7 @@ export async function buildEditionTransferTx(opts: {
       lockingScript: buildNoteScript(Utils.toHex(opts.newOwnerPubKey), {
         collectionRef: tx1RefHex, text: opts.note.text, bonusKind: opts.note.bonusKind, bonusValue: opts.note.bonusValue,
       }),
-      satoshis: tokenSats,
+      satoshis: PHARLAP_OUTPUT_SATS,
     })
   }
   const changeVout = tx.outputs.length
@@ -590,17 +616,17 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
   confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
 }): Promise<{ txId: string; replicaOutpoint: { txId: string; outputIndex: number }; lockHex: string }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
-  const tokenSats = params.terms.tokenSats ?? PHARLAP_OUTPUT_SATS
   const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
   const sourceTx = await provider.getSourceTransaction(params.editionTxId)
+  const bond = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS // the edition's enforced bond
   const edition: EditionUtxo = {
-    txId: params.editionTxId, outputIndex: params.editionOutputIndex,
-    satoshis: sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? tokenSats, lockBytes, sourceTx,
+    txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis: bond, lockBytes, sourceTx,
   }
-  // Buyer funds: token + replica sats, both fees, the optional note output, miner fee, margin.
-  const noteSats = params.note ? tokenSats : 0
+  // Buyer funds: the replica's bond (out1), both fees, the optional note carrier, miner fee, margin. The
+  // holder's returned token (out0) rides forward from the spent edition input.
+  const noteSats = params.note ? PHARLAP_OUTPUT_SATS : 0
   const estFee = Math.ceil((1500 * feePerKb) / 1000)
-  const target = 2 * tokenSats + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1000
+  const target = 2 * bond + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1000
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding = await toFundingInputs(provider, selected)
 
@@ -861,20 +887,20 @@ export async function transferEdition(provider: WalletProvider, ownerKey: Privat
   feePerKb?: number
 }): Promise<{ txId: string; tokenOutpoint: { txId: string; outputIndex: number }; lockHex: string }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
-  const tokenSats = params.tokenSats ?? PHARLAP_OUTPUT_SATS
   const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
   const sourceTx = await provider.getSourceTransaction(params.editionTxId)
+  const bond = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS
   const edition: EditionUtxo = {
-    txId: params.editionTxId, outputIndex: params.editionOutputIndex,
-    satoshis: sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? tokenSats, lockBytes, sourceTx,
+    txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis: bond, lockBytes, sourceTx,
   }
-  const noteSats = params.note ? tokenSats : 0
+  // The bond rides forward from the spent input onto out0, so funding only covers the note carrier + fee + margin.
+  const noteSats = params.note ? PHARLAP_OUTPUT_SATS : 0
   const estFee = Math.ceil((1500 * feePerKb) / 1000)
-  const selected = selectFunding(await getSafeUtxos(provider), tokenSats + noteSats + estFee + 1000)
+  const selected = selectFunding(await getSafeUtxos(provider), noteSats + estFee + 1000)
   const funding = await toFundingInputs(provider, selected)
 
   const xfer = await buildEditionTransferTx({
-    edition, ownerKey, newOwnerPubKey: params.newOwnerPubKey, funding, note: params.note, tokenSats, feePerKb,
+    edition, ownerKey, newOwnerPubKey: params.newOwnerPubKey, funding, note: params.note, feePerKb,
   })
   await provider.broadcast(xfer.tx.toHex())
   provider.registerPendingTx(xfer.txId,
@@ -885,6 +911,48 @@ export async function transferEdition(provider: WalletProvider, ownerKey: Privat
     txId: xfer.txId, tokenOutpoint: { txId: xfer.txId, outputIndex: xfer.tokenVout },
     lockHex: Utils.toHex(xfer.tx.outputs[xfer.tokenVout].lockingScript.toBinary()),
   }
+}
+
+// ─── BURN (reclaim the bond, destroy the token) ─────────────────────
+
+/** Build an owner-signed burn tx: spend the bonded edition UTXO via the burn branch, sweeping its sats
+ *  (minus the network fee) to the owner's address. The covenant re-creates NO output — the token is gone. */
+export async function buildEditionBurnTx(opts: {
+  edition: EditionUtxo
+  ownerKey: PrivateKey
+  reclaimAddress?: string
+  feePerKb?: number
+}): Promise<{ tx: Transaction; txId: string; reclaimVout: number; reclaimSats: number }> {
+  const lock = LockingScript.fromBinary(opts.edition.lockBytes)
+  const reclaimAddress = opts.reclaimAddress ?? opts.ownerKey.toAddress()
+  const tx = new Transaction(); tx.version = 2
+  tx.addInput({
+    sourceTransaction: opts.edition.sourceTx, sourceOutputIndex: opts.edition.outputIndex, sequence: 0xffffffff,
+    unlockingScriptTemplate: burnUnlockTemplate({ ownerKey: opts.ownerKey, lockingScript: lock, sourceSatoshis: opts.edition.satoshis }),
+  })
+  tx.addOutput({ lockingScript: new P2PKH().lock(reclaimAddress), change: true }) // the bond minus fee, to the owner
+  await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB))
+  await tx.sign()
+  return { tx, txId: tx.id('hex'), reclaimVout: 0, reclaimSats: tx.outputs[0]?.satoshis ?? 0 }
+}
+
+/** Burn (destroy) an edition you own and reclaim its bonded sats. Owner-signed; works only on burn-capable
+ *  (bonded) editions — use `editionSupportsBurn` to check before offering it. */
+export async function burnEdition(provider: WalletProvider, ownerKey: PrivateKey, params: {
+  editionTxId: string
+  editionOutputIndex: number
+  editionLockHex: string
+  feePerKb?: number
+}): Promise<{ txId: string; reclaimSats: number }> {
+  const lockBytes = Utils.toArray(params.editionLockHex, 'hex')
+  const sourceTx = await provider.getSourceTransaction(params.editionTxId)
+  const satoshis = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? 0
+  const edition: EditionUtxo = { txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis, lockBytes, sourceTx }
+  const r = await buildEditionBurnTx({ edition, ownerKey, feePerKb: params.feePerKb })
+  await provider.broadcast(r.tx.toHex())
+  provider.registerPendingTx(r.txId, [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex }],
+    r.reclaimSats > 0 ? { outputIndex: r.reclaimVout, satoshis: r.reclaimSats } : undefined)
+  return { txId: r.txId, reclaimSats: r.reclaimSats }
 }
 
 /**

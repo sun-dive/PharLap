@@ -17804,6 +17804,27 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       op2(OP_default.OP_EQUAL)
     ];
   }
+  function burnTailOps() {
+    return [
+      // authenticate current owner: <ownerSig> <ownerPub> OP_CHECKSIGVERIFY  (same auth as transferTailOps)
+      pushData([1]),
+      op2(OP_default.OP_PICK),
+      // copy ownerPub
+      pushData([4]),
+      op2(OP_default.OP_PICK),
+      // copy ownerSig
+      op2(OP_default.OP_SWAP),
+      op2(OP_default.OP_CHECKSIGVERIFY),
+      // burn: enforce nothing — the owner authorised their outputs by signing. Clean up + succeed.
+      op2(OP_default.OP_2DROP),
+      op2(OP_default.OP_2DROP),
+      // drop suffix, ownerPub, pre, ownerSig
+      op2(OP_default.OP_FROMALTSTACK),
+      op2(OP_default.OP_DROP),
+      // discard hashOutputs (unused by burn)
+      op2(OP_default.OP_1)
+    ];
+  }
   var EDITION_SCOPE = 193;
   var RECORD_EDITION = 5;
   function serializedPushLen(data) {
@@ -17833,10 +17854,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       pushData([3]),
       op2(OP_default.OP_ROLL),
       // bring the branch selector to the top
+      op2(OP_default.OP_DUP),
+      op2(OP_default.OP_2),
+      op2(OP_default.OP_NUMEQUAL),
+      op2(OP_default.OP_IF),
+      // selector == 2 → burn
+      op2(OP_default.OP_DROP),
+      // drop the selector
+      ...burnTailOps(),
+      op2(OP_default.OP_ELSE),
+      // selector 1 → transfer, 0 → replicate
       op2(OP_default.OP_IF),
       ...transferTailOps({ tokenSats: p.tokenSats }),
       op2(OP_default.OP_ELSE),
       ...replicateTailOps(p),
+      op2(OP_default.OP_ENDIF),
       op2(OP_default.OP_ENDIF)
     ];
   }
@@ -17846,6 +17878,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const probeLen = new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: 1 })).toBinary().length;
     const varIntSize = probeLen < 253 ? 1 : probeLen < 65536 ? 3 : 5;
     return new LockingScript(editionLockOps({ ...p, fieldPubkeyOffset: varIntSize + O }));
+  }
+  function editionSupportsBurn(lockBytes) {
+    const chunks = LockingScript.fromBinary(lockBytes).chunks;
+    return chunks != null && chunks.some((c) => c.op === OP_default.OP_NUMEQUAL);
   }
   var EDITION_VERSION_V2 = 4;
   var EDITION_OWNER_SCRIPT_OFFSET = 40;
@@ -17984,6 +18020,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function editionTransferUnlockChunks(p) {
     return [pushData(p.change), pushData(p.newOwnerPubKey), pushData(p.ownerSig), op2(OP_default.OP_1), pushData(p.preimage)];
+  }
+  function editionBurnUnlockChunks(p) {
+    return [pushData(p.ownerSig), op2(OP_default.OP_2), pushData(p.preimage)];
   }
 
   // src/compress.ts
@@ -18226,8 +18265,37 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       estimateLength: async () => TRANSFER_UNLOCK_LEN
     };
   }
+  function burnUnlockTemplate(opts) {
+    return {
+      sign: async (tx, inputIndex) => {
+        const input = tx.inputs[inputIndex];
+        const sourceTXID = input.sourceTXID ?? input.sourceTransaction?.id("hex");
+        if (sourceTXID == null) throw new Error("burn unlock: input is missing sourceTXID/sourceTransaction");
+        const fmt = (scope) => TransactionSignature.format({
+          sourceTXID,
+          sourceOutputIndex: input.sourceOutputIndex,
+          sourceSatoshis: opts.sourceSatoshis,
+          transactionVersion: tx.version,
+          otherInputs: otherInputsOf(tx, inputIndex),
+          inputIndex,
+          outputs: tx.outputs,
+          inputSequence: input.sequence ?? 4294967295,
+          subscript: opts.lockingScript,
+          lockTime: tx.lockTime,
+          scope
+        });
+        const introspection = fmt(EDITION_SCOPE);
+        const ownerScope = TransactionSignature.SIGHASH_ALL | TransactionSignature.SIGHASH_FORKID;
+        const raw = opts.ownerKey.sign(Hash_exports.sha256(fmt(ownerScope)));
+        const ownerSig = new TransactionSignature(raw.r, raw.s, ownerScope).toChecksigFormat();
+        return new UnlockingScript(editionBurnUnlockChunks({ ownerSig, preimage: introspection }));
+      },
+      estimateLength: async () => TRANSFER_UNLOCK_LEN
+      // ~transfer minus the new-owner bytes
+    };
+  }
   async function buildReplicateTx(opts) {
-    const tokenSats = opts.terms.tokenSats ?? PHARLAP_OUTPUT_SATS;
+    const bond = opts.edition.satoshis;
     const lock2 = LockingScript.fromBinary(opts.edition.lockBytes);
     const holderPub = editionOwnerPubKey(opts.edition.lockBytes);
     const buyerPub = opts.ownerPubKey ?? pubKeyBytes(opts.buyerKey);
@@ -18247,8 +18315,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         unlockingScriptTemplate: new P2PKH().unlock(opts.buyerKey)
       });
     }
-    tx.addOutput({ lockingScript: lock2, satoshis: tokenSats });
-    tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats });
+    tx.addOutput({ lockingScript: lock2, satoshis: bond });
+    tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: bond });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(opts.terms.publisherPubKeyHash)), satoshis: opts.terms.publisherFeeSats });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash_exports.hash160(holderPub))), satoshis: opts.terms.holderFeeSats });
     if (opts.note && tx1RefHex != null && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
@@ -18259,7 +18327,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           bonusKind: opts.note.bonusKind,
           bonusValue: opts.note.bonusValue
         }),
-        satoshis: tokenSats
+        satoshis: PHARLAP_OUTPUT_SATS
       });
     }
     const changeVout = tx.outputs.length;
@@ -18324,7 +18392,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     };
   }
   async function buildEditionTransferTx(opts) {
-    const tokenSats = opts.tokenSats ?? PHARLAP_OUTPUT_SATS;
+    const bond = opts.edition.satoshis;
     const lock2 = LockingScript.fromBinary(opts.edition.lockBytes);
     const tx1RefHex = parseEditionScript(lock2)?.tx1RefHex;
     const tx = new Transaction();
@@ -18347,7 +18415,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         unlockingScriptTemplate: new P2PKH().unlock(opts.ownerKey)
       });
     }
-    tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, opts.newOwnerPubKey)), satoshis: tokenSats });
+    tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, opts.newOwnerPubKey)), satoshis: bond });
     const notifyAddress = PublicKey.fromString(utils_exports.toHex(opts.newOwnerPubKey)).toAddress();
     tx.addOutput({ lockingScript: new P2PKH().lock(notifyAddress), satoshis: 1 });
     if (opts.note && tx1RefHex != null && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
@@ -18358,7 +18426,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           bonusKind: opts.note.bonusKind,
           bonusValue: opts.note.bonusValue
         }),
-        satoshis: tokenSats
+        satoshis: PHARLAP_OUTPUT_SATS
       });
     }
     const changeVout = tx.outputs.length;
@@ -18471,19 +18539,19 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   async function replicateEdition(provider2, buyerKey, params) {
     const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
-    const tokenSats = params.terms.tokenSats ?? PHARLAP_OUTPUT_SATS;
     const lockBytes = utils_exports.toArray(params.editionLockHex, "hex");
     const sourceTx = await provider2.getSourceTransaction(params.editionTxId);
+    const bond = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS;
     const edition = {
       txId: params.editionTxId,
       outputIndex: params.editionOutputIndex,
-      satoshis: sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? tokenSats,
+      satoshis: bond,
       lockBytes,
       sourceTx
     };
-    const noteSats = params.note ? tokenSats : 0;
+    const noteSats = params.note ? PHARLAP_OUTPUT_SATS : 0;
     const estFee = Math.ceil(1500 * feePerKb / 1e3);
-    const target = 2 * tokenSats + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1e3;
+    const target = 2 * bond + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1e3;
     const selected = selectFunding(await getSafeUtxos(provider2), target);
     const funding = await toFundingInputs(provider2, selected);
     const rep = await buildReplicateTx({ edition, terms: params.terms, buyerKey, funding, note: params.note, feePerKb });
@@ -18617,19 +18685,19 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   async function transferEdition(provider2, ownerKey, params) {
     const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
-    const tokenSats = params.tokenSats ?? PHARLAP_OUTPUT_SATS;
     const lockBytes = utils_exports.toArray(params.editionLockHex, "hex");
     const sourceTx = await provider2.getSourceTransaction(params.editionTxId);
+    const bond = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS;
     const edition = {
       txId: params.editionTxId,
       outputIndex: params.editionOutputIndex,
-      satoshis: sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? tokenSats,
+      satoshis: bond,
       lockBytes,
       sourceTx
     };
-    const noteSats = params.note ? tokenSats : 0;
+    const noteSats = params.note ? PHARLAP_OUTPUT_SATS : 0;
     const estFee = Math.ceil(1500 * feePerKb / 1e3);
-    const selected = selectFunding(await getSafeUtxos(provider2), tokenSats + noteSats + estFee + 1e3);
+    const selected = selectFunding(await getSafeUtxos(provider2), noteSats + estFee + 1e3);
     const funding = await toFundingInputs(provider2, selected);
     const xfer = await buildEditionTransferTx({
       edition,
@@ -18637,7 +18705,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       newOwnerPubKey: params.newOwnerPubKey,
       funding,
       note: params.note,
-      tokenSats,
       feePerKb
     });
     await provider2.broadcast(xfer.tx.toHex());
@@ -18654,6 +18721,36 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       tokenOutpoint: { txId: xfer.txId, outputIndex: xfer.tokenVout },
       lockHex: utils_exports.toHex(xfer.tx.outputs[xfer.tokenVout].lockingScript.toBinary())
     };
+  }
+  async function buildEditionBurnTx(opts) {
+    const lock2 = LockingScript.fromBinary(opts.edition.lockBytes);
+    const reclaimAddress = opts.reclaimAddress ?? opts.ownerKey.toAddress();
+    const tx = new Transaction();
+    tx.version = 2;
+    tx.addInput({
+      sourceTransaction: opts.edition.sourceTx,
+      sourceOutputIndex: opts.edition.outputIndex,
+      sequence: 4294967295,
+      unlockingScriptTemplate: burnUnlockTemplate({ ownerKey: opts.ownerKey, lockingScript: lock2, sourceSatoshis: opts.edition.satoshis })
+    });
+    tx.addOutput({ lockingScript: new P2PKH().lock(reclaimAddress), change: true });
+    await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB));
+    await tx.sign();
+    return { tx, txId: tx.id("hex"), reclaimVout: 0, reclaimSats: tx.outputs[0]?.satoshis ?? 0 };
+  }
+  async function burnEdition(provider2, ownerKey, params) {
+    const lockBytes = utils_exports.toArray(params.editionLockHex, "hex");
+    const sourceTx = await provider2.getSourceTransaction(params.editionTxId);
+    const satoshis = sourceTx.outputs[params.editionOutputIndex]?.satoshis ?? 0;
+    const edition = { txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis, lockBytes, sourceTx };
+    const r2 = await buildEditionBurnTx({ edition, ownerKey, feePerKb: params.feePerKb });
+    await provider2.broadcast(r2.tx.toHex());
+    provider2.registerPendingTx(
+      r2.txId,
+      [{ txId: params.editionTxId, outputIndex: params.editionOutputIndex }],
+      r2.reclaimSats > 0 ? { outputIndex: r2.reclaimVout, satoshis: r2.reclaimSats } : void 0
+    );
+    return { txId: r2.txId, reclaimSats: r2.reclaimSats };
   }
   async function broadcastV2Probe(provider2, key2, feePerKb) {
     const selected = selectFunding(await getSafeUtxos(provider2), 1e3);
@@ -20365,12 +20462,13 @@ Proceed?`
       setStatus(`Mint failed: ${e.message}`, "error");
     }
   }
+  var EDITION_BOND_SATS = 2100;
   function ownTerms() {
     return {
       publisherPubKeyHash: Hash_exports.hash160(key.toPublicKey().encode(true)),
       publisherFeeSats: Math.max(0, parseInt(val("edPublisherFee") || "0", 10)),
       holderFeeSats: Math.max(0, parseInt(val("edHolderFee") || "0", 10)),
-      tokenSats: 1
+      tokenSats: EDITION_BOND_SATS
     };
   }
   function termsFromToken(t) {
@@ -20436,7 +20534,7 @@ Proceed?`
         confirmSpend: (total) => confirm(
           `Mint ${count} edition${count > 1 ? "s" : ""} of \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ""}?
 
-This spends ${total.toLocaleString()} sats from your wallet (network fee + dust for ${count} edition${count > 1 ? "s" : ""}).
+This spends ${total.toLocaleString()} sats from your wallet \u2014 mostly a refundable ${EDITION_BOND_SATS.toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.
 
 Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.
 
@@ -20556,6 +20654,26 @@ Proceed?`
       setStatus(`\u2705 Transferred. Tx ${short(r2.txId)} \u2014 covenant re-created for the new owner.`, "ok");
     } catch (e) {
       setStatus(`Transfer failed: ${e.message}`, "error");
+    }
+  }
+  async function onBurn(t) {
+    if (!t.lockHex) {
+      setStatus("Missing edition script; cannot burn.", "error");
+      return;
+    }
+    if (!confirm(
+      `Burn your edition of \u201C${t.collectionName ?? "this collection"}\u201D and reclaim its ~${EDITION_BOND_SATS.toLocaleString()}-sat bond (minus a small network fee) to your wallet?
+
+\u26A0 This DESTROYS the token permanently \u2014 it cannot be undone. Proceed?`
+    )) return;
+    setStatus("Burning edition (reclaiming the bond)\u2026");
+    try {
+      const r2 = await burnEdition(provider, key, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex });
+      store2.markSent(t.txId, t.outputIndex);
+      renderTokens();
+      setStatus(`\u{1F525} Burned. Reclaimed ${r2.reclaimSats.toLocaleString()} sats to your wallet. Tx ${short(r2.txId)}.`, "ok");
+    } catch (e) {
+      setStatus(`Burn failed: ${e.message}`, "error");
     }
   }
   async function onSend(txId, outputIndex) {
@@ -21064,6 +21182,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
       sales.className = "secondary";
       sales.onclick = () => onOpenSalesPage(t);
       actions.append(replicate, xfer, view, sales, verify2);
+      if (t.lockHex != null && editionSupportsBurn(utils_exports.toArray(t.lockHex, "hex"))) {
+        const burn = document.createElement("button");
+        burn.textContent = "\u{1F525} Burn";
+        burn.className = "secondary";
+        burn.onclick = () => void onBurn(t);
+        actions.append(burn);
+      }
       if (iAmPublisher) {
         const bc = document.createElement("button");
         bc.textContent = "\u{1F4E3} Broadcast";
