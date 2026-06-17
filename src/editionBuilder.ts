@@ -1149,3 +1149,57 @@ export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: 
   }
   return found
 }
+
+export interface BuyerRecord {
+  /** The buyer's full public key (hex) — owner of the replica that was minted to them. */
+  pubKeyHex: string
+  /** How many copies this buyer replicated (separate sales to the same key). */
+  count: number
+  /** Block heights of their first and most-recent purchase (0 = unconfirmed/unknown). */
+  firstHeight: number
+  lastHeight: number
+}
+
+/**
+ * List the buyers of a collection you publish — everyone a replica was minted TO, **at point of sale**.
+ * Every replication pays your publisher fee to your address, so each sale lands in your address history;
+ * the buyer's full pubkey is the owner of the replica output (`out[1]`). A replication puts an edition there;
+ * a transfer puts a 1-sat P2PKH notification, so reading `out[1]` as an edition naturally selects sales only.
+ *
+ * HONEST LIMIT: this captures buyers at the moment they replicated, NOT onward transfers (those are
+ * owner-signed, free, and never touch your address) — so it is "buyers", not guaranteed "current holders".
+ * Your own genesis/self copies are excluded (their owner hashes to your publisher key).
+ */
+export async function scanCollectionBuyers(
+  provider: WalletProvider,
+  params: { collectionId: string; publisherPubKeyHashHex: string; maxTxs?: number; onProgress?: (done: number, total: number) => void },
+): Promise<{ buyers: BuyerRecord[]; scanned: number; capped: boolean }> {
+  const want = params.publisherPubKeyHashHex.toLowerCase()
+  let history: { txId: string; blockHeight: number }[] = []
+  try { history = await provider.getAddressHistory() } catch { /* best-effort — return what we can */ }
+  const cap = params.maxTxs ?? 400
+  const capped = history.length > cap
+  const slice = capped ? history.slice(history.length - cap) : history // most-recent `cap` txs
+  const byBuyer = new Map<string, BuyerRecord>()
+  let done = 0
+  for (const { txId, blockHeight } of slice) {
+    params.onProgress?.(done, slice.length); done++
+    let tx: Transaction
+    try { tx = await provider.getSourceTransaction(txId) } catch { continue }
+    const replica = tx.outputs[1]
+    if (replica == null) continue
+    const ed = parseEditionAny(replica.lockingScript)
+    if (ed == null || ed.tx1RefHex !== params.collectionId) continue
+    if (Utils.toHex(ed.terms.publisherPubKeyHash).toLowerCase() !== want) continue
+    const buyerBytes = Utils.toArray(ed.ownerPubKeyHex, 'hex')
+    if (Utils.toHex(Hash.hash160(buyerBytes)).toLowerCase() === want) continue // skip your own genesis/self copies
+    const k = ed.ownerPubKeyHex.toLowerCase()
+    const h = blockHeight || 0
+    const rec = byBuyer.get(k)
+    if (rec != null) { rec.count++; if (h) { rec.lastHeight = Math.max(rec.lastHeight, h); rec.firstHeight = rec.firstHeight ? Math.min(rec.firstHeight, h) : h } }
+    else byBuyer.set(k, { pubKeyHex: ed.ownerPubKeyHex, count: 1, firstHeight: h, lastHeight: h })
+  }
+  params.onProgress?.(slice.length, slice.length)
+  const buyers = [...byBuyer.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity)) // newest first
+  return { buyers, scanned: slice.length, capped }
+}

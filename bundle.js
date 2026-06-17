@@ -18887,6 +18887,49 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     return found;
   }
+  async function scanCollectionBuyers(provider2, params) {
+    const want = params.publisherPubKeyHashHex.toLowerCase();
+    let history2 = [];
+    try {
+      history2 = await provider2.getAddressHistory();
+    } catch {
+    }
+    const cap = params.maxTxs ?? 400;
+    const capped = history2.length > cap;
+    const slice = capped ? history2.slice(history2.length - cap) : history2;
+    const byBuyer = /* @__PURE__ */ new Map();
+    let done = 0;
+    for (const { txId, blockHeight } of slice) {
+      params.onProgress?.(done, slice.length);
+      done++;
+      let tx;
+      try {
+        tx = await provider2.getSourceTransaction(txId);
+      } catch {
+        continue;
+      }
+      const replica = tx.outputs[1];
+      if (replica == null) continue;
+      const ed = parseEditionAny(replica.lockingScript);
+      if (ed == null || ed.tx1RefHex !== params.collectionId) continue;
+      if (utils_exports.toHex(ed.terms.publisherPubKeyHash).toLowerCase() !== want) continue;
+      const buyerBytes = utils_exports.toArray(ed.ownerPubKeyHex, "hex");
+      if (utils_exports.toHex(Hash_exports.hash160(buyerBytes)).toLowerCase() === want) continue;
+      const k = ed.ownerPubKeyHex.toLowerCase();
+      const h = blockHeight || 0;
+      const rec = byBuyer.get(k);
+      if (rec != null) {
+        rec.count++;
+        if (h) {
+          rec.lastHeight = Math.max(rec.lastHeight, h);
+          rec.firstHeight = rec.firstHeight ? Math.min(rec.firstHeight, h) : h;
+        }
+      } else byBuyer.set(k, { pubKeyHex: ed.ownerPubKeyHex, count: 1, firstHeight: h, lastHeight: h });
+    }
+    params.onProgress?.(slice.length, slice.length);
+    const buyers = [...byBuyer.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity));
+    return { buyers, scanned: slice.length, capped };
+  }
 
   // src/transfer.ts
   async function buildTransferTx(opts) {
@@ -21305,7 +21348,11 @@ It's posted to your own address and spends a small network fee. Proceed?`
         links.textContent = "\u{1F4E5} Gift links";
         links.className = "secondary";
         links.onclick = () => void onViewGiftLinks(t);
-        actions.append(bc, gift, links);
+        const buyers = document.createElement("button");
+        buyers.textContent = "\u{1F465} Buyers";
+        buyers.className = "secondary";
+        buyers.onclick = () => void onViewBuyers(t);
+        actions.append(bc, gift, links, buyers);
       }
     } else {
       const send = document.createElement("button");
@@ -21717,14 +21764,17 @@ It's posted to your own address and spends a small network fee. Proceed?`
       rerender();
     });
   }
-  function onMessagePublisher(pubKeyHex2) {
+  function composeTo(pubKeyHex2, who) {
     ;
     $("msgTo").value = pubKeyHex2;
     $("msgEncrypt").checked = true;
     updateMsgToName();
     activateTab("messages");
     $("msgText").focus();
-    setStatus(`Messaging the publisher ${displayName(pubKeyHex2).name}.`);
+    setStatus(`Messaging ${who} ${displayName(pubKeyHex2).name}.`);
+  }
+  function onMessagePublisher(pubKeyHex2) {
+    composeTo(pubKeyHex2, "the publisher");
   }
   function publisherRowEl(t, myHash) {
     if (t.publisherPubKeyHashHex == null) return null;
@@ -22389,6 +22439,60 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
       showQrModal("Scan to claim a free copy", links[parseInt(b.dataset.i ?? "0", 10)]);
     }));
     document.body.append(overlay);
+  }
+  async function onViewBuyers(t) {
+    if (t.publisherPubKeyHashHex == null) return;
+    const title = t.collectionName ?? "Collection";
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = `<div class="modal-box gift-modal-box"><div class="modal-head"><span>\u{1F465} Buyers of ${escapeHtml(title)}</span><button class="secondary buyers-close">\u2715 Close</button></div><p class="buyers-status muted" style="font-size:12px">Scanning your sales\u2026</p><div class="buyers-list"></div><p class="muted" style="font-size:11px;margin-top:10px">Buyers at point of sale (when they replicated a copy). Onward transfers aren\u2019t visible to you, so this isn\u2019t a current-owner list.</p></div>`;
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector(".buyers-close")?.addEventListener("click", close);
+    document.body.append(overlay);
+    const statusEl = overlay.querySelector(".buyers-status");
+    const listEl = overlay.querySelector(".buyers-list");
+    const render = (res) => {
+      if (res.buyers.length === 0) {
+        statusEl.textContent = `No buyers yet \u2014 no one has replicated a copy (scanned ${res.scanned} tx${res.scanned === 1 ? "" : "s"}).`;
+        return;
+      }
+      statusEl.textContent = `${res.buyers.length} buyer${res.buyers.length > 1 ? "s" : ""}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}`;
+      listEl.innerHTML = "";
+      for (const b of res.buyers) {
+        const row = document.createElement("div");
+        row.className = "buyer-row";
+        const who = document.createElement("div");
+        who.className = "buyer-who";
+        who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">\xD7${b.count}</span>` : ""}`;
+        const msg = document.createElement("button");
+        msg.className = "secondary";
+        msg.textContent = "\u2709 Message";
+        msg.onclick = () => {
+          close();
+          composeTo(b.pubKeyHex, "buyer");
+        };
+        row.append(who, msg);
+        listEl.append(row);
+      }
+    };
+    try {
+      const res = await scanCollectionBuyers(provider, {
+        collectionId: t.collectionId,
+        publisherPubKeyHashHex: t.publisherPubKeyHashHex,
+        onProgress: (done, total) => {
+          statusEl.textContent = `Scanning your sales\u2026 ${done}/${total}`;
+        }
+      });
+      render(res);
+      if (res.buyers.length) resolveAvatarsThen(res.buyers.map((b) => b.pubKeyHex), () => {
+        if (document.body.contains(overlay)) render(res);
+      });
+    } catch (e) {
+      statusEl.textContent = `Scan failed: ${e.message}`;
+    }
   }
   async function onCheckUpdates() {
     const host = $("updatesFeed");

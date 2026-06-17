@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, wocScriptHash, type EditionTerms } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, scanCollectionBuyers, wocScriptHash, type EditionTerms, type BuyerRecord } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -934,7 +934,10 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
       const links = document.createElement('button')
       links.textContent = '📥 Gift links'; links.className = 'secondary'
       links.onclick = () => void onViewGiftLinks(t)
-      actions.append(bc, gift, links)
+      const buyers = document.createElement('button')
+      buyers.textContent = '👥 Buyers'; buyers.className = 'secondary'
+      buyers.onclick = () => void onViewBuyers(t)
+      actions.append(bc, gift, links, buyers)
     }
   } else {
     const send = document.createElement('button')
@@ -1325,15 +1328,18 @@ function resolvePublisherIdentitiesThen(tokens: StoredToken[], rerender: () => v
   })
 }
 
-/** "Message publisher": preload the compose box with the publisher's key and jump to the Messages tab. */
-function onMessagePublisher(pubKeyHex: string): void {
+/** Preload the compose box with a key (encrypted) and jump to the Messages tab. */
+function composeTo(pubKeyHex: string, who: string): void {
   ;($('msgTo') as HTMLInputElement).value = pubKeyHex
   ;($('msgEncrypt') as HTMLInputElement).checked = true
   updateMsgToName()
   activateTab('messages')
   ;($('msgText') as HTMLTextAreaElement).focus()
-  setStatus(`Messaging the publisher ${displayName(pubKeyHex).name}.`)
+  setStatus(`Messaging ${who} ${displayName(pubKeyHex).name}.`)
 }
+
+/** "Message publisher": preload the compose box with the publisher's key and jump to the Messages tab. */
+function onMessagePublisher(pubKeyHex: string): void { composeTo(pubKeyHex, 'the publisher') }
 
 /** A small "by @publisher [avatar] ✉ Message" row for an edition card; null for non-editions. */
 function publisherRowEl(t: StoredToken, myHash: string): HTMLElement | null {
@@ -1956,6 +1962,56 @@ function showGiftLinksModal(title: string, links: string[]): void {
     showQrModal('Scan to claim a free copy', links[parseInt((b as HTMLElement).dataset.i ?? '0', 10)])
   }))
   document.body.append(overlay)
+}
+
+/** Publisher: scan your address history for sales of this collection and list the buyers (each DM-able). */
+async function onViewBuyers(t: StoredToken): Promise<void> {
+  if (t.publisherPubKeyHashHex == null) return
+  const title = t.collectionName ?? 'Collection'
+  const overlay = document.createElement('div')
+  overlay.className = 'modal'
+  overlay.innerHTML =
+    '<div class="modal-box gift-modal-box">' +
+    `<div class="modal-head"><span>👥 Buyers of ${escapeHtml(title)}</span><button class="secondary buyers-close">✕ Close</button></div>` +
+    '<p class="buyers-status muted" style="font-size:12px">Scanning your sales…</p>' +
+    '<div class="buyers-list"></div>' +
+    '<p class="muted" style="font-size:11px;margin-top:10px">Buyers at point of sale (when they replicated a copy). Onward transfers aren’t visible to you, so this isn’t a current-owner list.</p>' +
+    '</div>'
+  const close = (): void => overlay.remove()
+  overlay.addEventListener('click', e => { if (e.target === overlay) close() })
+  overlay.querySelector('.buyers-close')?.addEventListener('click', close)
+  document.body.append(overlay)
+
+  const statusEl = overlay.querySelector('.buyers-status') as HTMLElement
+  const listEl = overlay.querySelector('.buyers-list') as HTMLElement
+  const render = (res: { buyers: BuyerRecord[]; scanned: number; capped: boolean }): void => {
+    if (res.buyers.length === 0) {
+      statusEl.textContent = `No buyers yet — no one has replicated a copy (scanned ${res.scanned} tx${res.scanned === 1 ? '' : 's'}).`
+      return
+    }
+    statusEl.textContent = `${res.buyers.length} buyer${res.buyers.length > 1 ? 's' : ''}${res.capped ? ` · most recent ${res.scanned} txs` : ''}`
+    listEl.innerHTML = ''
+    for (const b of res.buyers) {
+      const row = document.createElement('div'); row.className = 'buyer-row'
+      const who = document.createElement('div'); who.className = 'buyer-who'
+      who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">×${b.count}</span>` : ''}`
+      const msg = document.createElement('button'); msg.className = 'secondary'; msg.textContent = '✉ Message'
+      msg.onclick = () => { close(); composeTo(b.pubKeyHex, 'buyer') }
+      row.append(who, msg)
+      listEl.append(row)
+    }
+  }
+  try {
+    const res = await scanCollectionBuyers(provider, {
+      collectionId: t.collectionId,
+      publisherPubKeyHashHex: t.publisherPubKeyHashHex,
+      onProgress: (done, total) => { statusEl.textContent = `Scanning your sales… ${done}/${total}` },
+    })
+    render(res)
+    if (res.buyers.length) resolveAvatarsThen(res.buyers.map(b => b.pubKeyHex), () => { if (document.body.contains(overlay)) render(res) })
+  } catch (e) {
+    statusEl.textContent = `Scan failed: ${(e as Error).message}`
+  }
 }
 
 /** Holder: pull announcements from the publishers of every collection you hold → newest-first feed. */
