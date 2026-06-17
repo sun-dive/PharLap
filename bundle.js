@@ -20545,7 +20545,7 @@ Proceed?`
         confirmSpend: (total) => confirm(
           `Mint ${count} edition${count > 1 ? "s" : ""} of \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ""}?
 
-This spends ${total.toLocaleString()} sats from your wallet \u2014 mostly a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.
+This spends ${total.toLocaleString()} sats from your wallet \u2014 including a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.
 
 Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.
 
