@@ -22123,8 +22123,8 @@ How many?  Each is pre-funded with ~${fundEach} sats \u2014 but the price + fees
   }
   function init() {
     store2 = new PharLapStore();
-    useKey(loadKey());
     loadAliases();
+    useKey(loadKey());
     try {
       if (localStorage.getItem("p:nftview") === "grid") nftView = "grid";
     } catch {
