@@ -21773,10 +21773,16 @@ It's posted to your own address and spends a small network fee. Proceed?`
       rerender();
     });
   }
-  function composeTo(pubKeyHex2, who) {
+  function fillWildcards(text, pubKeyHex2, ctx) {
+    const alias = displayName(pubKeyHex2).alias ?? "there";
+    return text.split("%alias%").join(alias).split("%product%").join(ctx.product ?? "");
+  }
+  function openCompose(recipients, opts) {
+    if (recipients.length === 0) return;
+    const multi = recipients.length > 1;
     const overlay = document.createElement("div");
     overlay.className = "modal";
-    overlay.innerHTML = `<div class="modal-box compose-box"><div class="modal-head"><span>\u2709 Message ${escapeHtml(who)}</span><button class="secondary compose-close">\u2715 Close</button></div><div class="compose-to">${nameChip(pubKeyHex2)}</div><textarea class="compose-text" rows="4" placeholder="Write a message\u2026"></textarea><label class="compose-row"><span>\u{1F4CE} Attach a file</span> <input type="file" class="compose-file" /></label><label class="compose-row"><span><input type="checkbox" class="compose-encrypt" checked /> Encrypt</span> <span class="muted" style="font-size:11px">only they can read it</span></label><div class="row" style="margin-top:10px"><button class="compose-send">Send</button></div><p class="compose-status muted" style="font-size:12px;margin-top:8px"></p></div>`;
+    overlay.innerHTML = `<div class="modal-box compose-box"><div class="modal-head"><span>\u2709 Message ${escapeHtml(opts.who)}</span><button class="secondary compose-close">\u2715 Close</button></div><div class="compose-to${multi ? " compose-many" : ""}">${recipients.map((r2) => nameChip(r2)).join(multi ? " " : "")}</div><textarea class="compose-text" rows="4" placeholder="Write a message\u2026"></textarea><p class="compose-hint muted" style="font-size:11px">Personalize with <code>%alias%</code> (recipient\u2019s name)${opts.product != null ? " \xB7 <code>%product%</code>" : ""}</p><div class="compose-preview muted" style="font-size:11px"></div><label class="compose-row"><span>\u{1F4CE} Attach a file</span> <input type="file" class="compose-file" /></label><label class="compose-row"><span><input type="checkbox" class="compose-encrypt" checked /> Encrypt</span> <span class="muted" style="font-size:11px">only they can read it</span></label><div class="row" style="margin-top:10px"><button class="compose-send">${multi ? `Send to ${recipients.length}` : "Send"}</button></div><p class="compose-status muted" style="font-size:12px;margin-top:8px"></p></div>`;
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close();
@@ -21787,32 +21793,53 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const encEl = overlay.querySelector(".compose-encrypt");
     const sendBtn = overlay.querySelector(".compose-send");
     const statusEl = overlay.querySelector(".compose-status");
+    const previewEl = overlay.querySelector(".compose-preview");
+    const updatePreview = () => {
+      const filled = fillWildcards(textEl.value, recipients[0], opts);
+      previewEl.textContent = filled !== textEl.value ? `Preview \u2192 ${displayName(recipients[0]).name}: ${filled}` : "";
+    };
+    textEl.addEventListener("input", updatePreview);
     sendBtn.onclick = () => void (async () => {
       const text = textEl.value;
       const file = await readFile(fileEl);
-      const parts = [];
-      if (text.trim()) parts.push({ kind: "text", text });
-      if (file) parts.push({ kind: "file", mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes });
-      if (parts.length === 0) {
+      if (!text.trim() && file == null) {
         statusEl.textContent = "Write a message or attach a file first.";
         return;
       }
+      if (multi && !confirm(
+        `Send this message to ${recipients.length} recipients?
+
+That's ${recipients.length} separate encrypted transactions \u2014 one network fee each${file != null ? " (the file is sent to each)" : ""}. Proceed?`
+      )) return;
       sendBtn.disabled = true;
-      statusEl.textContent = `Sending ${encEl.checked ? "encrypted" : "public"} message\u2026`;
-      try {
-        const r2 = await sendMessage(provider, key, { toPubKeyHex: pubKeyHex2, parts, encrypt: encEl.checked, senderAlias: getMyAlias() });
-        statusEl.textContent = `\u2705 Sent. Tx ${short(r2.txId)}.`;
-        setTimeout(close, 1200);
-      } catch (e) {
-        statusEl.textContent = `Send failed: ${e.message}`;
-        sendBtn.disabled = false;
+      let ok = 0, failed = 0;
+      for (let i = 0; i < recipients.length; i++) {
+        const r2 = recipients[i];
+        statusEl.textContent = multi ? `Sending ${i + 1}/${recipients.length}\u2026` : "Sending\u2026";
+        const parts = [];
+        const filled = fillWildcards(text, r2, opts);
+        if (filled.trim()) parts.push({ kind: "text", text: filled });
+        if (file) parts.push({ kind: "file", mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes });
+        if (parts.length === 0) continue;
+        try {
+          await sendMessage(provider, key, { toPubKeyHex: r2, parts, encrypt: encEl.checked, senderAlias: getMyAlias() });
+          ok++;
+        } catch {
+          failed++;
+        }
       }
+      statusEl.textContent = failed === 0 ? `\u2705 Sent${multi ? ` to ${ok}` : ""}.` : `Sent ${ok}, ${failed} failed${multi ? " \u2014 close and retry the rest" : ""}.`;
+      if (failed === 0) setTimeout(close, multi ? 1600 : 1200);
+      else sendBtn.disabled = false;
     })();
     document.body.append(overlay);
     textEl.focus();
   }
-  function onMessagePublisher(pubKeyHex2) {
-    composeTo(pubKeyHex2, "the publisher");
+  function composeTo(pubKeyHex2, who, product) {
+    openCompose([pubKeyHex2], { who, product });
+  }
+  function onMessagePublisher(pubKeyHex2, product) {
+    composeTo(pubKeyHex2, "the publisher", product);
   }
   function publisherRowEl(t, myHash) {
     if (t.publisherPubKeyHashHex == null) return null;
@@ -21833,7 +21860,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     msg.textContent = "\u2709 Message";
     msg.onclick = (e) => {
       e.stopPropagation();
-      onMessagePublisher(pk);
+      onMessagePublisher(pk, t.collectionName);
     };
     row.append(msg);
     return row;
@@ -22483,7 +22510,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     const title = t.collectionName ?? "Collection";
     const overlay = document.createElement("div");
     overlay.className = "modal";
-    overlay.innerHTML = `<div class="modal-box gift-modal-box"><div class="modal-head"><span>\u{1F465} Buyers of ${escapeHtml(title)}</span><span class="row" style="gap:6px"><button class="secondary buyers-refresh">\u{1F504} Refresh</button><button class="secondary buyers-close">\u2715 Close</button></span></div><p class="buyers-status muted" style="font-size:12px">Scanning your sales\u2026</p><div class="buyers-list"></div><p class="muted" style="font-size:11px;margin-top:10px">Buyers at point of sale (when they replicated a copy). Onward transfers aren\u2019t visible to you, so this isn\u2019t a current-owner list.</p></div>`;
+    overlay.innerHTML = `<div class="modal-box gift-modal-box"><div class="modal-head"><span>\u{1F465} Buyers of ${escapeHtml(title)}</span><span class="row" style="gap:6px"><button class="secondary buyers-refresh">\u{1F504} Refresh</button><button class="secondary buyers-close">\u2715 Close</button></span></div><p class="buyers-status muted" style="font-size:12px">Scanning your sales\u2026</p><div class="buyers-toolbar" hidden><label class="buyers-selall"><input type="checkbox" class="buyers-all" /> Select all</label><button class="buyers-msg-sel" disabled>\u2709 Message selected (0)</button></div><div class="buyers-list"></div><p class="muted" style="font-size:11px;margin-top:10px">Buyers at point of sale (when they replicated a copy). Onward transfers aren\u2019t visible to you, so this isn\u2019t a current-owner list.</p></div>`;
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close();
@@ -22493,26 +22520,60 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     const statusEl = overlay.querySelector(".buyers-status");
     const listEl = overlay.querySelector(".buyers-list");
     const refreshBtn = overlay.querySelector(".buyers-refresh");
+    const toolbarEl = overlay.querySelector(".buyers-toolbar");
+    const allEl = overlay.querySelector(".buyers-all");
+    const msgSelBtn = overlay.querySelector(".buyers-msg-sel");
+    const selected = /* @__PURE__ */ new Set();
+    let lastBuyers = [];
+    const updateSelUI = () => {
+      msgSelBtn.disabled = selected.size === 0;
+      msgSelBtn.textContent = `\u2709 Message selected (${selected.size})`;
+      allEl.checked = lastBuyers.length > 0 && lastBuyers.every((b) => selected.has(b.pubKeyHex));
+    };
     const render = (res) => {
+      lastBuyers = res.buyers;
       if (res.buyers.length === 0) {
         statusEl.textContent = `No buyers yet \u2014 no one has replicated a copy (scanned ${res.scanned} tx${res.scanned === 1 ? "" : "s"}).`;
+        toolbarEl.hidden = true;
         return;
       }
       statusEl.textContent = `${res.buyers.length} buyer${res.buyers.length > 1 ? "s" : ""}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}`;
+      toolbarEl.hidden = false;
       listEl.innerHTML = "";
       for (const b of res.buyers) {
         const row = document.createElement("div");
         row.className = "buyer-row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "buyer-sel";
+        cb.checked = selected.has(b.pubKeyHex);
+        cb.onchange = () => {
+          if (cb.checked) selected.add(b.pubKeyHex);
+          else selected.delete(b.pubKeyHex);
+          updateSelUI();
+        };
         const who = document.createElement("div");
         who.className = "buyer-who";
         who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">\xD7${b.count}</span>` : ""}`;
         const msg = document.createElement("button");
         msg.className = "secondary";
         msg.textContent = "\u2709 Message";
-        msg.onclick = () => composeTo(b.pubKeyHex, "this buyer");
-        row.append(who, msg);
+        msg.onclick = () => composeTo(b.pubKeyHex, "this buyer", title);
+        row.append(cb, who, msg);
         listEl.append(row);
       }
+      updateSelUI();
+    };
+    allEl.onchange = () => {
+      if (allEl.checked) lastBuyers.forEach((b) => selected.add(b.pubKeyHex));
+      else selected.clear();
+      listEl.querySelectorAll(".buyer-sel").forEach((cb, i) => {
+        cb.checked = selected.has(lastBuyers[i].pubKeyHex);
+      });
+      updateSelUI();
+    };
+    msgSelBtn.onclick = () => {
+      if (selected.size) openCompose([...selected], { who: `${selected.size} buyers`, product: title });
     };
     const scan = async () => {
       refreshBtn.disabled = true;
