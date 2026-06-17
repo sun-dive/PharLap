@@ -18615,10 +18615,15 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       resellerCut: rep.resellerCut
     };
   }
+  function deriveVoucherKey(publisherKey, tx1RefHex, index) {
+    const idx = [index & 255, index >> 8 & 255, index >> 16 & 255, index >> 24 & 255];
+    const seed = [...publisherKey.toArray("be", 32), ...utils_exports.toArray(tx1RefHex, "hex"), ...idx];
+    return new PrivateKey(Hash_exports.sha256(seed));
+  }
   async function createGiftVouchers(provider2, publisherKey, params) {
     const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
     const count = Math.max(1, Math.floor(params.count));
-    const keys = Array.from({ length: count }, () => PrivateKey.fromRandom());
+    const keys = Array.from({ length: count }, (_, i) => deriveVoucherKey(publisherKey, params.tx1RefHex, params.startIndex + i));
     const estFee = Math.ceil((250 + count * 35) * feePerKb / 1e3);
     const target = count * params.fundEachSats + estFee + 500;
     const selected = selectFunding(await getSafeUtxos(provider2), target);
@@ -18643,6 +18648,37 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       (tx.outputs[changeVout]?.satoshis ?? 0) > 0 ? { outputIndex: changeVout, satoshis: tx.outputs[changeVout].satoshis ?? 0 } : void 0
     );
     return { fundingTxId: txId, voucherWifs: keys.map((k) => k.toWif()) };
+  }
+  async function scanGiftVouchers(provider2, publisherKey, tx1RefHex, opts) {
+    const gapLimit = opts?.gapLimit ?? 5;
+    const max = opts?.max ?? 1e3;
+    const live = [];
+    let claimedCount = 0;
+    let nextIndex = 0;
+    let consecutiveEmpty = 0;
+    for (let i = 0; i < max && consecutiveEmpty < gapLimit; i++) {
+      const k = deriveVoucherKey(publisherKey, tx1RefHex, i);
+      const script = p2pkhScript(Hash_exports.hash160(k.toPublicKey().encode(true)));
+      let funded = false;
+      try {
+        funded = (await provider2.getAddressHistory(k.toAddress())).length > 0;
+      } catch {
+      }
+      if (!funded) {
+        consecutiveEmpty++;
+        continue;
+      }
+      consecutiveEmpty = 0;
+      nextIndex = i + 1;
+      let unspent = [];
+      try {
+        unspent = await provider2.getUnspentByScriptHash(wocScriptHash(script));
+      } catch {
+      }
+      if (unspent.length > 0) live.push({ index: i, wif: k.toWif() });
+      else claimedCount++;
+    }
+    return { nextIndex, live, claimedCount };
   }
   async function claimGiftEdition(provider2, ownerKey, params) {
     const giftKey = PrivateKey.fromWif(params.giftWif);
@@ -21203,7 +21239,11 @@ It's posted to your own address and spends a small network fee. Proceed?`
         gift.textContent = "\u{1F381} Gift";
         gift.className = "secondary";
         gift.onclick = () => void onGiftCopies(t);
-        actions.append(bc, gift);
+        const links = document.createElement("button");
+        links.textContent = "\u{1F4E5} Gift links";
+        links.className = "secondary";
+        links.onclick = () => void onViewGiftLinks(t);
+        actions.append(bc, gift, links);
       }
     } else {
       const send = document.createElement("button");
@@ -22157,12 +22197,28 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     if (!confirm(`Fund ${count} gift link(s) at ~${fundEach.toLocaleString()} sats each (~${total.toLocaleString()} sats from your wallet). Proceed?`)) return;
     setStatus(`Creating ${count} funded gift link(s)\u2026`);
     try {
-      const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { count, fundEachSats: fundEach });
+      const { nextIndex } = await scanGiftVouchers(provider, key, t.collectionId);
+      const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach });
       const links = voucherWifs.map((wif) => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`);
-      setStatus(`\u2705 ${count} gift link(s) funded (tx ${short(fundingTxId)}). Hand them out from the popup.`, "ok");
+      setStatus(`\u2705 ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, "ok");
       showGiftLinksModal(t.collectionName ?? "Free gift", links);
     } catch (e) {
       setStatus(`Gift creation failed: ${e.message}`, "error");
+    }
+  }
+  async function onViewGiftLinks(t) {
+    setStatus("Recovering your gift links from chain\u2026");
+    try {
+      const scan = await scanGiftVouchers(provider, key, t.collectionId);
+      const links = scan.live.map((v) => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`);
+      if (links.length === 0) {
+        setStatus(scan.claimedCount > 0 ? `No unclaimed gift links left \u2014 all ${scan.claimedCount} have been claimed.` : "No gift links found for this collection yet.", "info");
+        return;
+      }
+      showGiftLinksModal(t.collectionName ?? "Gift links", links);
+      setStatus(`Recovered ${links.length} unclaimed gift link(s)${scan.claimedCount > 0 ? ` (${scan.claimedCount} already claimed)` : ""}.`, "ok");
+    } catch (e) {
+      setStatus(`Recover gift links failed: ${e.message}`, "error");
     }
   }
   function showGiftLinksModal(title, links) {
