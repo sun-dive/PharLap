@@ -18889,18 +18889,27 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   async function scanCollectionBuyers(provider2, params) {
     const want = params.publisherPubKeyHashHex.toLowerCase();
-    let history2 = [];
+    const cap = params.maxTxs ?? 400;
+    const candidates = /* @__PURE__ */ new Map();
+    let capped = false;
     try {
-      history2 = await provider2.getAddressHistory();
+      let hist = await provider2.getAddressHistory();
+      if (hist.length > cap) {
+        capped = true;
+        hist = hist.slice(hist.length - cap);
+      }
+      for (const h of hist) candidates.set(h.txId, h.blockHeight || 0);
     } catch {
     }
-    const cap = params.maxTxs ?? 400;
-    const capped = history2.length > cap;
-    const slice = capped ? history2.slice(history2.length - cap) : history2;
+    try {
+      for (const u of await provider2.getUtxos()) if (!candidates.has(u.txId)) candidates.set(u.txId, 0);
+    } catch {
+    }
+    const entries = [...candidates.entries()];
     const byBuyer = /* @__PURE__ */ new Map();
     let done = 0;
-    for (const { txId, blockHeight } of slice) {
-      params.onProgress?.(done, slice.length);
+    for (const [txId, blockHeight] of entries) {
+      params.onProgress?.(done, entries.length);
       done++;
       let tx;
       try {
@@ -18926,9 +18935,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         }
       } else byBuyer.set(k, { pubKeyHex: ed.ownerPubKeyHex, count: 1, firstHeight: h, lastHeight: h });
     }
-    params.onProgress?.(slice.length, slice.length);
+    params.onProgress?.(entries.length, entries.length);
     const buyers = [...byBuyer.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity));
-    return { buyers, scanned: slice.length, capped };
+    return { buyers, scanned: entries.length, capped };
   }
 
   // src/transfer.ts

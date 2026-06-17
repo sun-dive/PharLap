@@ -75,10 +75,11 @@ test('scanCollectionBuyers: finds replica buyers, dedupes by key, excludes the p
   const { genesis, utxo } = await genesisEdition()
   const buyer1 = PrivateKey.fromRandom()
   const buyer2 = PrivateKey.fromRandom()
-  // buyer1 replicates twice (from the holder's copy), buyer2 once.
+  // buyer1 replicates twice, buyer2 once. Distinct funding ⇒ distinct txids (two real purchases are two
+  // different transactions; the scan dedupes by txid, so identical rebuilds would correctly collapse to one).
   const rep1a = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer1, funding: [faucet(buyer1, 200000)] })
-  const rep1b = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer1, funding: [faucet(buyer1, 200000)] })
-  const rep2 = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer2, funding: [faucet(buyer2, 200000)] })
+  const rep1b = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer1, funding: [faucet(buyer1, 200001)] })
+  const rep2 = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer2, funding: [faucet(buyer2, 200002)] })
   const byId: Record<string, Transaction> = {
     [genesis.txId]: genesis.tx, [rep1a.txId]: rep1a.tx, [rep1b.txId]: rep1b.tx, [rep2.txId]: rep2.tx,
   }
@@ -88,6 +89,7 @@ test('scanCollectionBuyers: finds replica buyers, dedupes by key, excludes the p
       { txId: genesis.txId, blockHeight: 100 }, { txId: rep1a.txId, blockHeight: 101 },
       { txId: rep2.txId, blockHeight: 102 }, { txId: rep1b.txId, blockHeight: 103 },
     ],
+    getUtxos: async () => [], // unioned in by the scan (mempool-aware path); empty here adds no candidates
     getSourceTransaction: async (id: string) => byId[id] ?? (() => { throw new Error(`no tx ${id}`) })(),
   } as unknown as Parameters<typeof scanCollectionBuyers>[0]
 
@@ -98,6 +100,20 @@ test('scanCollectionBuyers: finds replica buyers, dedupes by key, excludes the p
   assert.equal(b1?.count, 2) // buyer1 replicated twice
   assert.equal(b2?.count, 1)
   assert.equal(res.buyers.every(b => b.pubKeyHex !== publisher.toPublicKey().toString()), true) // never the publisher
+})
+
+test('scanCollectionBuyers: finds an UNCONFIRMED sale present only in getUtxos (not yet in history)', async () => {
+  const { utxo } = await genesisEdition()
+  const buyer = PrivateKey.fromRandom()
+  const rep = await buildReplicateTx({ edition: utxo, terms, buyerKey: buyer, funding: [faucet(buyer, 200000)] })
+  const provider = {
+    getAddressHistory: async () => [], // confirmed-only, and the sale hasn't confirmed yet → absent here
+    getUtxos: async () => [{ txId: rep.txId, outputIndex: 2, satoshis: terms.publisherFeeSats, script: '' }], // the publisher-fee UTXO
+    getSourceTransaction: async (id: string) => (id === rep.txId ? rep.tx : (() => { throw new Error(`no tx ${id}`) })()),
+  } as unknown as Parameters<typeof scanCollectionBuyers>[0]
+  const res = await scanCollectionBuyers(provider, { collectionId: TX1REF, publisherPubKeyHashHex: Utils.toHex(Hash.hash160(pub(publisher))) })
+  assert.equal(res.buyers.length, 1)
+  assert.equal(res.buyers[0].pubKeyHex, buyer.toPublicKey().toString())
 })
 
 test('replicate with a seller-note echoes a NOTE output to the buyer, covenant still valid', async () => {
