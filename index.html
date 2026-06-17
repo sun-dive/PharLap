@@ -112,7 +112,7 @@
     .buyers-selall { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
     .compose-many { display:flex; flex-wrap:wrap; gap:6px 10px; max-height:96px; overflow:auto; }
     .compose-hint code { background:var(--line); padding:0 4px; border-radius:4px; }
-    /* 💬 Discussions */
+    /* 💬 Threads (lineage discussions) */
     .disc-room { display:flex; align-items:center; gap:10px; width:100%; text-align:left; background:#161b22; border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; cursor:pointer; }
     .disc-room:hover { border-color:var(--accent2); }
     .disc-room-name { font-weight:600; flex:1 1 auto; min-width:0; }
@@ -282,8 +282,8 @@
            button to surface it again. -->
       <button class="tab" data-tab="editions" role="tab">Publish</button>
       <button class="tab" data-tab="tokens" role="tab">My NFTs</button>
-      <button class="tab" data-tab="discussions" role="tab">Discussions</button>
-      <button class="tab" data-tab="messages" role="tab">Messages</button>
+      <button class="tab" data-tab="discussions" role="tab">Threads</button>
+      <button class="tab" data-tab="messages" role="tab">DMs</button>
       <button class="tab" data-tab="updates" role="tab">Updates</button>
       <button class="tab" data-tab="help" role="tab">Help</button>
     </nav>
@@ -311,7 +311,7 @@
         </button>
         <button class="home-card" data-goto="messages">
           <div class="home-art" style="--g1:#8957e5;--g2:#48247a">✉️</div>
-          <div class="home-card-body"><h3>Messages</h3><p>Send encrypted notes or files, on-chain.</p></div>
+          <div class="home-card-body"><h3>DMs</h3><p>Send encrypted notes or files, on-chain.</p></div>
         </button>
       </div>
       <p class="home-foot muted">New here? Open <button class="linklike" data-goto="help">Help</button> for a step-by-step guide.</p>
@@ -538,7 +538,7 @@
       <ul>
         <li><b>As a holder:</b> click <b>Check for updates</b> to pull the latest announcements from every collection you own. Nothing is pushed — you choose when to look, and stay anonymous to the publisher.</li>
         <li><b>As a publisher:</b> open a collection you published in <b>My NFTs</b> and click <b>📣 Broadcast</b> — one message reaches <i>every</i> current holder, however far your editions have resold, for the cost of a single transaction.</li>
-        <li>Announcements are <b>public</b> (anyone can read them). For anything private, use <b>Messages</b> or holders-only <b>encrypted content</b>.</li>
+        <li>Announcements are <b>public</b> (anyone can read them). For anything private, use <b>DMs</b> or holders-only <b>encrypted content</b>.</li>
       </ul>
 
       <h3>How selling works</h3>
