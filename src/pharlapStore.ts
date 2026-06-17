@@ -23,6 +23,9 @@ export interface StoredToken {
   lockHex?: string
   /** Edition terms (for rebuilding replicate/transfer txs). */
   publisherPubKeyHashHex?: string
+  /** The publisher's full 33-byte public key (hex), recovered from TX1's funding input — needed to show
+   *  the publisher's avatar/alias and to message them. Cached lazily; hash-verified against publisherPubKeyHashHex. */
+  publisherPubKeyHex?: string
   publisherFeeSats?: number
   holderFeeSats?: number
   /** The edition's bond = its UTXO value (sats), reclaimed by burning. Drives burn/replicate/gift figures. */
@@ -102,8 +105,13 @@ export class PharLapStore {
     kind?: 'edition'
     lockHex?: string
     publisherPubKeyHashHex?: string
+    publisherPubKeyHex?: string
     publisherFeeSats?: number
     holderFeeSats?: number
+    tokenSats?: number
+    sellerNote?: string
+    bonusKind?: 'link' | 'code'
+    bonusValue?: string
   }): boolean {
     const tokens = this.list()
     const k = outpointKey(token)
@@ -119,11 +127,25 @@ export class PharLapStore {
       kind: token.kind,
       lockHex: token.lockHex,
       publisherPubKeyHashHex: token.publisherPubKeyHashHex,
+      publisherPubKeyHex: token.publisherPubKeyHex,
       publisherFeeSats: token.publisherFeeSats,
       holderFeeSats: token.holderFeeSats,
+      // Previously dropped on the floor: these were passed by storeEdition but never persisted, so the bond
+      // amount / seller note / bonus were lost on reload. Persist them.
+      tokenSats: token.tokenSats,
+      sellerNote: token.sellerNote,
+      bonusKind: token.bonusKind,
+      bonusValue: token.bonusValue,
     })
     this.write(tokens)
     return true
+  }
+
+  /** Cache the publisher's recovered full pubkey on every held copy of a collection (set lazily after a
+   *  TX1 input lookup). Keyed by collectionId since all editions of a collection share one publisher. */
+  setPublisherPubKey(collectionId: string, publisherPubKeyHex: string): void {
+    const tokens = this.list().map(t => (t.collectionId === collectionId ? { ...t, publisherPubKeyHex } : t))
+    this.write(tokens)
   }
 
   /** Update the cached collection name of a stored token (e.g. once resolved from TX1). */
