@@ -21773,16 +21773,19 @@ It's posted to your own address and spends a small network fee. Proceed?`
       rerender();
     });
   }
-  function fillWildcards(text, pubKeyHex2, ctx) {
-    const alias = displayName(pubKeyHex2).alias ?? "there";
-    return text.split("%alias%").join(alias).split("%product%").join(ctx.product ?? "");
+  function fillWildcards(text, recipientKey, ctx) {
+    const mine = getMyAlias();
+    const recip = displayName(recipientKey).alias;
+    const buyer = ctx.recipientRole === "buyer" ? recip ?? "there" : mine || "there";
+    const publisher = ctx.recipientRole === "publisher" ? recip ?? "the publisher" : mine || "the publisher";
+    return text.split("%buyer%").join(buyer).split("%publisher%").join(publisher).split("%product%").join(ctx.product ?? "");
   }
   function openCompose(recipients, opts) {
     if (recipients.length === 0) return;
     const multi = recipients.length > 1;
     const overlay = document.createElement("div");
     overlay.className = "modal";
-    overlay.innerHTML = `<div class="modal-box compose-box"><div class="modal-head"><span>\u2709 Message ${escapeHtml(opts.who)}</span><button class="secondary compose-close">\u2715 Close</button></div><div class="compose-to${multi ? " compose-many" : ""}">${recipients.map((r2) => nameChip(r2)).join(multi ? " " : "")}</div><textarea class="compose-text" rows="4" placeholder="Write a message\u2026"></textarea><p class="compose-hint muted" style="font-size:11px">Personalize with <code>%alias%</code> (recipient\u2019s name)${opts.product != null ? " \xB7 <code>%product%</code>" : ""}</p><div class="compose-preview muted" style="font-size:11px"></div><label class="compose-row"><span>\u{1F4CE} Attach a file</span> <input type="file" class="compose-file" /></label><label class="compose-row"><span><input type="checkbox" class="compose-encrypt" checked /> Encrypt</span> <span class="muted" style="font-size:11px">only they can read it</span></label><div class="row" style="margin-top:10px"><button class="compose-send">${multi ? `Send to ${recipients.length}` : "Send"}</button></div><p class="compose-status muted" style="font-size:12px;margin-top:8px"></p></div>`;
+    overlay.innerHTML = `<div class="modal-box compose-box"><div class="modal-head"><span>\u2709 Message ${escapeHtml(opts.who)}</span><button class="secondary compose-close">\u2715 Close</button></div><div class="compose-to${multi ? " compose-many" : ""}">${recipients.map((r2) => nameChip(r2)).join(multi ? " " : "")}</div><textarea class="compose-text" rows="4" placeholder="Write a message\u2026"></textarea><p class="compose-hint muted" style="font-size:11px">Personalize with <code>%buyer%</code> \xB7 <code>%publisher%</code>${opts.product != null ? " \xB7 <code>%product%</code>" : ""}</p><div class="compose-preview muted" style="font-size:11px"></div><label class="compose-row"><span>\u{1F4CE} Attach a file</span> <input type="file" class="compose-file" /></label><label class="compose-row"><span><input type="checkbox" class="compose-encrypt" checked /> Encrypt</span> <span class="muted" style="font-size:11px">only they can read it</span></label><div class="row" style="margin-top:10px"><button class="compose-send">${multi ? `Send to ${recipients.length}` : "Send"}</button></div><p class="compose-status muted" style="font-size:12px;margin-top:8px"></p></div>`;
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close();
@@ -21835,11 +21838,11 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     document.body.append(overlay);
     textEl.focus();
   }
-  function composeTo(pubKeyHex2, who, product) {
-    openCompose([pubKeyHex2], { who, product });
+  function composeTo(pubKeyHex2, who, ctx) {
+    openCompose([pubKeyHex2], { who, ...ctx });
   }
   function onMessagePublisher(pubKeyHex2, product) {
-    composeTo(pubKeyHex2, "the publisher", product);
+    composeTo(pubKeyHex2, "the publisher", { product, recipientRole: "publisher" });
   }
   function publisherRowEl(t, myHash) {
     if (t.publisherPubKeyHashHex == null) return null;
@@ -22558,7 +22561,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
         const msg = document.createElement("button");
         msg.className = "secondary";
         msg.textContent = "\u2709 Message";
-        msg.onclick = () => composeTo(b.pubKeyHex, "this buyer", title);
+        msg.onclick = () => composeTo(b.pubKeyHex, "this buyer", { product: title, recipientRole: "buyer" });
         row.append(cb, who, msg);
         listEl.append(row);
       }
@@ -22573,7 +22576,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
       updateSelUI();
     };
     msgSelBtn.onclick = () => {
-      if (selected.size) openCompose([...selected], { who: `${selected.size} buyers`, product: title });
+      if (selected.size) openCompose([...selected], { who: `${selected.size} buyers`, product: title, recipientRole: "buyer" });
     };
     const scan = async () => {
       refreshBtn.disabled = true;
