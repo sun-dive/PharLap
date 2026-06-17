@@ -309,12 +309,17 @@ async function onBurn(t: StoredToken): Promise<void> {
     setStatus(`🔥 Burned. Reclaimed ${r.reclaimSats.toLocaleString()} sats to your wallet. Tx ${short(r.txId)}.`, 'ok')
   } catch (e) {
     const msg = (e as Error).message
-    // "Missing inputs" / a raw-tx fetch 404 = the edition's creating tx hasn't confirmed (or been indexed) yet,
-    // so the network can't see the UTXO being spent. Explain the wait rather than show the bare node error.
-    const unconfirmed = /missing inputs/i.test(msg) || /raw TX fetch failed/i.test(msg)
-    setStatus(unconfirmed
-      ? 'Burn failed: this edition isn’t confirmed on-chain yet. Wait for its transaction to confirm (usually a few minutes), then try again.'
-      : `Burn failed: ${msg}`, 'error')
+    console.error(`[burn] failed for ${t.txId}:${t.outputIndex} —`, msg)
+    // The node's "Missing inputs" (bad-txns-inputs-missingorspent) means the edition's UTXO is either not yet
+    // visible (unconfirmed/unpropagated) OR already spent. A raw-tx fetch 404 = the parent tx isn't indexed yet.
+    // Don't claim "unconfirmed" — it may have been moved or already burned and the local cache is stale.
+    if (/missing inputs|missingorspent/i.test(msg)) {
+      setStatus('Burn failed: the network can’t spend this edition’s UTXO — it’s either not confirmed/propagated yet, or it has already been spent (moved or burned). If you just minted it, wait a few minutes and retry; otherwise tap Refresh to resync your holdings.', 'error')
+    } else if (/raw TX fetch failed/i.test(msg)) {
+      setStatus('Burn failed: this edition’s transaction isn’t on-chain yet. Wait for it to confirm (usually a few minutes), then try again.', 'error')
+    } else {
+      setStatus(`Burn failed: ${msg}`, 'error')
+    }
   }
 }
 
