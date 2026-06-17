@@ -133,6 +133,7 @@
     .disc-badge.down { color:#d2a8ff; border-color:#8957e5; }
     .disc-badge.creator { color:#04140a; background:#f0c674; border-color:#f0c674; font-weight:600; }
     .disc-badge.senior { color:var(--accent); border-color:var(--accent); }
+    .cfg-backup { border-top:1px solid var(--line); padding-top:12px; margin-bottom:12px; }
     .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
     .token-tile { display:flex; flex-direction:column; gap:6px; padding:8px; background:#0d1117; border:1px solid var(--line);
                   border-radius:8px; cursor:pointer; text-align:left; color:var(--fg); font:inherit; }
@@ -673,6 +674,14 @@
       <div class="row" style="margin:6px 0 14px">
         <input id="contactName" placeholder="@name" style="flex:1" />
         <button id="contactAdd" class="secondary">Add</button>
+      </div>
+      <div class="cfg-backup">
+        <div class="row" style="gap:8px;align-items:center">
+          <button id="btnCfgBackup" class="secondary">☁ Back up</button>
+          <button id="btnCfgRestore" class="secondary">⤓ Restore</button>
+          <span id="cfgBackupNote" class="muted" style="font-size:12px;flex:1"></span>
+        </div>
+        <p class="muted" style="font-size:11px;margin:6px 0 0">An <b>encrypted</b> copy of your address book, alias &amp; prefs, posted to your own address — only your key can read it, and it restores on any device. (Deletes don't sync.)</p>
       </div>
       <div id="contactsBody"></div>
     </div>
