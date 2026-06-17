@@ -193,7 +193,11 @@ and keep working unchanged — each collection embeds its own covenant, so the t
 | **Get a copy** | Buy an edition in one click from a sales link (resolve → fund → replicate → reveal). |
 | **Seller note / bonus** | Attach a public promo note (+ optional link/code bonus) buyers receive at purchase. |
 | **Send / Transfer** | Move a token to another wallet (owner-signed, free). |
-| **Message** | Send an **encrypted, authenticated** on-chain message — text, a file, and/or a content key — to any pubkey. |
+| **DM** | Send an **encrypted, authenticated** on-chain message — text, a file, and/or a content key — to any pubkey. |
+| **Buyers** | (Publisher) list everyone who bought a copy of your collection, and message them — one, several, or all. |
+| **Message publisher** | From an NFT card, DM the collection's publisher (their key is recovered from chain). |
+| **Threads** | Open a collection's **members-only lineage discussion** — read your corridor, post to your line, reply up, or (publisher) announce to everyone. |
+| **Alias / Profile** | Name your key (`@you`) and publish an on-chain avatar; others resolve your name + face by pubkey. |
 | **Check incoming / recover** | Discover tokens / editions / messages sent to you, and rebuild your holdings from chain. |
 | **Restore from WIF** | Recover your wallet **and** purchases on any browser/device from your private key. |
 | **Verify** | Confirm a token/edition is structurally valid and which collection it belongs to. |
@@ -205,13 +209,40 @@ token out of that transaction.
 
 ---
 
-## Messaging
+## Identity: aliases, avatars & profiles
+
+A public key is the real identity, but raw keys are unreadable — so PHAR LAP layers a friendly identity on
+top, everywhere a key appears:
+
+- **Self-asserted aliases.** Name your own key `@you`; the alias rides in the message/post envelope, bound
+  to your pubkey. There's **no global uniqueness** (no registry), so an alias is a *display label*, not a
+  username — two keys can both claim `@john`; the **pubkey is the truth** (hover any name to see + copy it).
+  A name you haven't saved shows with an **⚠ unverified** cue until you save it to contacts.
+- **Identicons.** Every key gets a deterministic icon derived from the pubkey — free, universal, and
+  **un-spoofable**: a faked `@name` renders a *different* pattern, so impersonation is visible at a glance.
+- **On-chain profiles.** Optionally publish an alias + a small avatar **once** (a record on your own
+  address); others resolve your name and face by pubkey and cache it. The identicon is the instant
+  placeholder, and a key-derived ring is the security anchor.
+- **Address book.** Save, rename, and confirm contacts; your labels always win over self-asserted names.
+
+This one identity layer is shared by DMs, the storefront, the Updates feed, and Threads.
+
+## DMs (encrypted messaging)
 
 Send an **encrypted, authenticated** message to any pubkey — a single typed payload that can carry text,
 a file (bonus content), and/or a content key all at once. Encryption is real per-recipient ECIES (only
 the recipient decrypts, and they can verify *who* sent it); delivery is on-chain like a token transfer
 and discovered through the same 1-sat notification breadcrumb. It is the same record shape as a token,
 and it is the delivery layer the encrypted-content feature builds on.
+
+Two conveniences for outreach (built for publishers, useful to anyone):
+
+- **Compose overlay.** Messaging from a card or a buyer row opens a compose pop-up *over* the current page,
+  so you never lose your place.
+- **Send to many, personalized.** Pick several recipients (e.g. selected buyers) and send one message as a
+  **mail-merge** — one encrypted transaction each, with wildcards substituted per recipient: `%buyer%`,
+  `%publisher%`, `%product%`. (It's genuinely N transactions, so the cost scales with the list; for a true
+  "everyone who holds it" announcement, a publisher **Broadcast** or a **Threads** post to "everyone" is cheaper.)
 
 ## Encrypted content (Tier 1)
 
@@ -267,6 +298,51 @@ The bonus value is **public on the chain** (it's part of the note), so gating is
 for links and shareable coupons; don't put a one-time secret there. On-chain (encrypted) and *time-locked*
 bonuses are designed for later.
 
+## Know your buyers (publisher)
+
+Because every replication pays the publisher fee to the publisher's address, **each sale lands in the
+publisher's own transaction history** — and the buyer's public key is the owner of the replica it minted.
+So a publisher can press **👥 Buyers** on a collection and get a list of everyone who bought a copy (with
+avatar/alias and a purchase count), then **DM one, several, or all** of them (see the mail-merge above). The
+scan is mempool-aware, so a brand-new sale shows up before it even confirms.
+
+Honest limit: this is **buyers at point of sale**. Onward *transfers* are owner-signed, free, and notify
+only the new owner, so the publisher never sees them — the list is "who bought," not a guaranteed
+current-owner roster. (And there's no separate "you made a sale" ping: the fee landing in your wallet *is*
+the notification — which is why a 1-sat minimum fee matters.)
+
+## Threads — members-only lineage discussions
+
+Every collection has a built-in **discussion forum scoped to its lineage tree**. Think of the replication
+tree as an upline/downline network: when you buy a copy, you sit at a **node** below whoever you bought
+from, back to the creator at the root. Threads lets you talk along that vertical line.
+
+**What you see (your "corridor"):** posts from the **creator** and everyone **up your lineage** to the
+mint, your **own** posts, and — passively — posts from anyone **down your lineage** (your sub-tree). You do
+**not** see siblings/cousins on other branches. The creator, at the root, sees the whole tree.
+
+**What you can post:**
+
+- **Your line** — your downstream sees it.
+- **Reply to an upline** — reaches that holder (and their sub-tree).
+- **Everyone** *(publisher only)* — an announcement every holder sees.
+
+**Un-spoofable badges.** Because membership is derived from the real lineage (not self-claimed), each
+author carries a verifiable badge: **👑 creator** (their key controls the collection's covenant — a faker
+gets *no* crown), **🌱 original holder** (owns a genesis copy), or **✓ holder** (a verified holder in your
+upline). Names still use the alias/identicon layer, so impersonation is visible.
+
+**How it works (no new covenant):** a post is a public, self-locked message keyed to your node, discovered
+via a tiny breadcrumb at the node's *derived* feed address — so exactly the people on your line can find it,
+and nobody else. Reading walks your lineage **upward only** (cheap — one parent per hop); downward
+visibility is achieved by pushing a breadcrumb *up* to each ancestor when you post, never by traversing the
+(branching, expensive) sub-tree. It's the same message + notification machinery the rest of the wallet uses,
+pointed at lineage-derived addresses.
+
+The honest edges: reading is public-authenticated (anyone can read; holders get the verified badges), and
+downstream authors who aren't on your direct path aren't yet given a holder badge (only the creator is
+verified everywhere). Replies/threading and deeper downstream verification are designed follow-ups.
+
 ## Compact by default
 
 Everything PHAR LAP writes on-chain is kept as small as it safely can be:
@@ -320,7 +396,15 @@ Validated on **BSV mainnet**:
 - ✅ **Provenance** — public embedded files committed by plaintext hash, verified as a **timestamped
   exact replica** on view
 - ✅ **Smart compression** of embedded files + messages (gzip, keep-only-if-smaller, compress-before-encrypt)
-- ✅ **Encrypted, authenticated messaging** (text / file / content key)
+- ✅ **Encrypted, authenticated messaging** (text / file / content key) + **personalized bulk send**
+  (multi-recipient mail-merge with `%buyer%`/`%publisher%`/`%product%` wildcards)
+- ✅ **Identity layer** — self-asserted aliases, deterministic identicons, on-chain profiles (alias + avatar),
+  address book
+- ✅ **Publisher tools** — publisher avatar/alias on cards + sort-by-publisher, **buyer list + DM** (incl.
+  unconfirmed sales)
+- ✅ **Threads** — members-only lineage discussions: read your corridor (upline + creator), post to your
+  line / reply up / announce-to-everyone, **downstream visibility** via push-up breadcrumbs, and
+  **un-spoofable creator / holder / seniority badges**
 - ✅ **Tier-1 encrypted content** (holder-only embedded files, decrypt-on-view)
 - ✅ **Shareable sales pages + one-click "Get a copy"** (storefront, cover/description, deterministic
   tip resolution, fund-and-replicate, reveal)
@@ -330,4 +414,6 @@ Validated on **BSV mainnet**:
 
 Still experimental — treat it as a working prototype, and use small amounts. Stronger encrypted-content
 tiers (live per-recipient key delivery; a server with per-buyer watermarking), on-chain / time-locked
-bonuses, and edition deep-verify (full lineage proof) are designed but not yet built.
+bonuses, edition deep-verify (full lineage proof), Threads replies/threading + deeper downstream-holder
+verification, and an encrypted **config backup** (alias/contacts/prefs recoverable from the WIF alone) are
+designed but not yet built.
