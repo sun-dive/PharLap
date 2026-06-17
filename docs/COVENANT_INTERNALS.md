@@ -53,7 +53,9 @@ signature DER. So an in-script signature with an excess `0x00` pad, or a non-min
 "The signature format is invalid."
 
 **Mainnet reality (validated 2026-06-11):** version-2 txs are *mined* (a replicate confirmed at block
-953007); the ~767-byte covenant output and ~1 KB OP_PUSH_TX unlock are within miner policy.
+953007); the covenant output and ~1 KB OP_PUSH_TX unlock are within miner policy. The bonded-burn
+(3-way-dispatch) covenant, ~783 bytes, was subsequently validated mainnet end-to-end (mint → replicate →
+transfer → burn-reclaim).
 
 ---
 
@@ -62,10 +64,11 @@ signature DER. So an in-script signature with an excess `0x00` pad, or a non-min
 ```
 pushtx.ts        covenant.ts                         editionBuilder.ts
 ─────────        ──────────                          ────────────────
-deriveSigOps ──▶ covenantPrefixOps ──▶ editionLockOps ──▶ buildEditionLock ──▶ buildReplicate/Transfer/GenesisTx
-pushTxVerifyOps    │  replicateTailOps   (OP_IF branch)      (computes offset)      replicate/transferUnlockTemplate
-pushTxConstants    │  transferTailOps                         parseEditionScript    create/replicate/transferEdition
-pushTxPreimage     └─ extract*Ops, p2pkhScript, serializeOutput                     scanIncomingEditions
+deriveSigOps ──▶ covenantPrefixOps ──▶ editionLockOps ──▶ buildEditionLock ──▶ buildReplicate/Transfer/Burn/GenesisTx
+pushTxVerifyOps    │  replicateTailOps   (3-way dispatch)     (computes offset)      replicate/transfer/burnUnlockTemplate
+pushTxConstants    │  transferTailOps                         parseEditionScript    create/replicate/transfer/burnEdition
+pushTxPreimage     │  burnTailOps                             editionSupportsBurn   scanIncomingEditions
+                   └─ extract*Ops, p2pkhScript, serializeOutput
 ```
 
 `pushtx.ts` is generic (any covenant could reuse it). `covenant.ts` builds the edition script from it.
@@ -210,27 +213,41 @@ valid and the field is mutated in place** (only ~13 extra script bytes vs the ve
 ### 4.5 The edition token script — `editionLockOps` / `buildEditionLock`
 
 ```
-<P=0x50> <ver=0x03> <RECORD_EDITION=0x05> <tx1Ref:32> <ownerPubKey:33> <stateData>   (6 data fields)
-OP_2DROP OP_2DROP OP_2DROP                                                            (drop all 6)
+<P=0x50> <ver=0x03> <RECORD_EDITION=0x05> <tx1Ref:32> <ownerPubKey:33>   (5 data fields, v1)
+OP_2DROP OP_2DROP OP_DROP                                                (drop all 5)
 covenantPrefixOps(F)              ── verify preimage; hashOutputs→alt; scriptCode→[pre, ownerPub, suffix]
 push 3, OP_ROLL                   ── bring the branch selector to the top
-OP_IF   transferTailOps  OP_ELSE  replicateTailOps  OP_ENDIF
+OP_DUP OP_2 OP_NUMEQUAL OP_IF     ── selector == 2 → BURN
+  OP_DROP  burnTailOps
+OP_ELSE                           ── selector 1 → transfer, 0 → replicate
+  OP_IF  transferTailOps  OP_ELSE  replicateTailOps  OP_ENDIF
+OP_ENDIF
 ```
+
+The **v1** edition carries five fixed-length fields (no `stateData`); the **v2** percentage-pricing variant
+(`editionFieldChunksV2`) appends `price` and `stateData` *after* the owner pubkey, so the owner offset is
+unchanged. Both go through the same 3-way dispatch.
 
 Key constants and layout facts:
 - **`EDITION_OWNER_SCRIPT_OFFSET = 40`** — the owner pubkey's byte offset *within the script*:
   `P(2) + ver(2) + record(2) + tx1Ref(33) + pushOpcode(1) = 40`. (Each 1-byte field is a 2-byte push;
-  tx1Ref is a 33-byte push.) The owner pubkey sits **before** the variable-length `stateData` precisely so
-  this offset is **constant** for every edition of a collection.
+  tx1Ref is a 33-byte push.) The owner pubkey is the **last fixed field** (and in v2 sits **before** the
+  variable-length `price`/`stateData`), so this offset is **constant** for every edition of a collection.
 - **`fieldPubkeyOffset F`** (used inside the script to split `scriptCode`) = `varIntSize(scriptLen) + 40`
   — the offset within the `scriptCode` *field* (which is prefixed by its varint). `buildEditionLock`
   computes it with a **two-pass** trick: build once with a placeholder `F=1` (same 2-byte push width as the
-  real `F≈43`) to measure the script length, derive `varIntSize` (3 for a ~767-byte script), rebuild with
-  `F = varIntSize + 40`. The script is ~767 bytes so the varint is always the 3-byte form.
-- **`EDITION_SCOPE = 0xc1`** = `ANYONECANPAY | ALL | FORKID`. Used for the covenant's OP_PUSH_TX in *both*
+  real `F≈43`) to measure the script length, derive `varIntSize` (3 for a ~783-byte script), rebuild with
+  `F = varIntSize + 40`. The script is ~783 bytes so the varint is always the 3-byte form.
+- **`EDITION_SCOPE = 0xc1`** = `ANYONECANPAY | ALL | FORKID`. Used for the covenant's OP_PUSH_TX in *all*
   branches, so buyers can add funding inputs without invalidating the holder's outpoint commitment. (The
   introspection only reads `hashOutputs`, which is committed regardless of ANYONECANPAY.)
 - **`RECORD_EDITION = 0x05`** (0x01–0x04 are TEMPLATE/TOKEN/FILE/MESSAGE from `tokenCodec`).
+- **The bond.** Each edition rides on a refundable bond = the token UTXO's satoshi value, fixed per
+  collection at mint. It is baked into the body as `VALUE1 = u64le(tokenSats)` and reproduced verbatim by
+  the replicate/transfer reconstruction (§4.7/§4.8), so the bond is **consensus-uniform across every edition**
+  of a collection — not a value the spender may choose. `burnTailOps` (§4.8a) is the only branch that lets
+  the owner reclaim it. Older collections minted before this work bake `VALUE1 = u64le(1)` (the 1-sat lock)
+  and carry the **two-branch** script; they keep working unchanged (each collection embeds its own covenant).
 
 ### 4.6 The shared prefix + branch dispatch
 
@@ -239,25 +256,32 @@ OP_PUSH_TX): `pushTxVerifyOps` → `OP_DUP` → `extractHashOutputsOps` → `OP_
 the alt stack) → `extractScriptCodeFieldOps` → split at `F` then at `33` → leaves `[…, pre, ownerPub,
 suffix]`.
 
-**Selector convention:** `OP_0` (empty/false) → `OP_ELSE` = **replicate**; `OP_1` (true) → `OP_IF` =
-**transfer**. After the prefix, the selector sits at **depth 3** in *both* unlock layouts (the prefix pushes
-exactly 3 items above where the preimage was), so `push 3, OP_ROLL` brings it to the top for `OP_IF`.
+**Selector convention (3-way):** a single number on the stack picks the branch — `2` → **burn**,
+`1` → **transfer**, `0` → **replicate**. After the prefix the selector sits at **depth 3** in *every* unlock
+layout (the prefix pushes exactly 3 items — `pre, ownerPub, suffix` — above where the preimage was), so
+`push 3, OP_ROLL` brings it to the top. Then `OP_DUP OP_2 OP_NUMEQUAL OP_IF` peels off burn first (dropping
+the selector); the `OP_ELSE` falls through to the original `OP_IF`(transfer)/`OP_ELSE`(replicate) test, which
+reads the selector as a boolean (`1` true → transfer, `0`/empty false → replicate). Burn drops the selector
+explicitly because it isn't a clean boolean; transfer/replicate consume it as the `OP_IF` condition.
 
 Unlock layouts (bottom → top):
 - **Replicate:** `[ change, buyerPub, OP_0, preimage ]`
 - **Transfer:**  `[ change, newOwnerPub, ownerSig, OP_1, preimage ]`
+- **Burn:**      `[ ownerSig, OP_2, preimage ]`  (no enforced-output operands — burn enforces none)
 
 ### 4.7 `replicateTailOps` — Addendum A enforcement
 
 Entry stack: `[ change, buyerPub, pre, ownerPub, suffix ]`, alt = `[ hashOutputs ]`. Reconstructs five
-outputs and compares:
+outputs and compares (`VALUE1 = u64le(tokenSats)` = the per-collection bond, a build-time constant):
 ```
-out0 = value ‖ pre ‖ ownerPub ‖ suffix        token returned to holder (verbatim)
-out1 = value ‖ pre ‖ buyerPub ‖ suffix        replica to buyer (owner swapped)
+out0 = VALUE1 ‖ pre ‖ ownerPub ‖ suffix       token returned to holder (verbatim, bond intact)
+out1 = VALUE1 ‖ pre ‖ buyerPub ‖ suffix       replica to buyer (owner swapped, equal fresh bond)
 out2 = serializeOutput(publisherFee, P2PKH(publisherHash))   publisher fee  (a CONSTANT in the script: OUT2)
 out3 = u64le(holderFee) ‖ 0x19 76 a9 14 ‖ HASH160(ownerPub) ‖ 88 ac   holder fee (built in-script)
 expected = out0 ‖ out1 ‖ out2 ‖ out3 ‖ change ;  assert HASH256(expected) == hashOutputs
 ```
+Because both token outputs hard-code the **same** `VALUE1`, a buyer cannot under-fund their replica's bond
+or shave the holder's returned bond — the spend simply won't hash-match.
 Implementation notes that bite if you edit it:
 - Uses **`OP_PICK`** to copy `pre`/`ownerPub`/`suffix`/`buyerPub` non-destructively while assembling. Every
   `push N, OP_PICK`/`OP_ROLL` index is a hand-traced **stack depth** — if you add/remove a stack item
@@ -273,18 +297,42 @@ Entry stack: `[ change, newOwnerPub, ownerSig, pre, ownerPub, suffix ]`, alt = `
 1. **Authenticate the owner:** copy `ownerPub` and `ownerSig` via `OP_PICK`, `OP_SWAP`,
    `OP_CHECKSIGVERIFY`. (This is a *second, real* signature — the OP_PUSH_TX one uses the fake key `Q`; it
    only proves the tx is genuine, not who authorised it.)
-2. **Enforce out0** = `value ‖ pre ‖ newOwnerPub ‖ suffix` (the covenant re-created for the new owner), then
-   `‖ change`. Assert `HASH256 == hashOutputs`.
+2. **Enforce out0** = `VALUE1 ‖ pre ‖ newOwnerPub ‖ suffix` (the covenant re-created for the new owner,
+   bond preserved via the same `VALUE1` constant), then `‖ change`. Assert `HASH256 == hashOutputs`.
 The transfer leftover is **5** pieces (`OP_2DROP OP_2DROP OP_DROP`), not 4 — a common off-by-one if you copy
 from the replicate tail.
 
+### 4.8a `burnTailOps` — owner-signed destroy + bond reclaim
+
+Entry stack: `[ ownerSig, pre, ownerPub, suffix ]`, alt = `[ hashOutputs ]` (the dispatch already dropped the
+`OP_2` selector). Burn is the **only** branch that enforces **no outputs** — and is therefore *simpler* than
+transfer, not riskier, provided the owner check is airtight:
+1. **Authenticate the owner exactly like transfer** — `push 1 OP_PICK` (copy `ownerPub`), `push 4 OP_PICK`
+   (copy `ownerSig`), `OP_SWAP OP_CHECKSIGVERIFY`. The pick depths are deliberately identical to transfer's
+   (`newOwnerPub`/`change` simply aren't present below `ownerSig`), so it reuses the *same audited auth
+   pattern*. Only the holder of the script-embedded `ownerPub` can produce a valid `ownerSig`.
+2. **Succeed, enforcing nothing.** `OP_2DROP OP_2DROP` clears `suffix, ownerPub, pre, ownerSig`;
+   `OP_FROMALTSTACK OP_DROP` discards the unused `hashOutputs`; `OP_1` leaves true.
+
+Why enforcing nothing is safe: the owner-auth signature uses `SIGHASH_ALL | FORKID` (§5.2), so it already
+commits to *every* output of the burn transaction. The owner has therefore authorised exactly where the
+reclaimed bond goes — the covenant doesn't need to (and shouldn't) re-create itself. This is "Structure A"
+(the burn unlock still carries the full preimage so the shared prefix runs unchanged); a cheaper
+"Structure B" that skips the preimage was analysed and deferred.
+
+`editionSupportsBurn(lockBytes)` distinguishes a burn-capable (3-way) lock from a legacy 2-way one by
+testing for the `OP_NUMEQUAL` that only the burn dispatch introduces — the wallet uses it to decide whether
+to offer a 🔥 Burn action.
+
 ### 4.9 `parseEditionScript(lockingScript)` — read an edition back
 
-Returns `{ tx1RefHex, ownerPubKeyHex, stateDataHex, terms }` or `null`. Reads the 6 data fields from
-`chunks[0..5]`, checks `OP_2DROP×3` at `chunks[6..8]`, and recovers the economic **terms straight from the
-covenant body** (so a recipient needs no out-of-band metadata): it scans for the `OUT2` constant (a 34-byte
-push) and `C3pre` (a 12-byte push), both identifiable by the P2PKH signature `0x19 0x76 0xa9 0x14` at byte
-offset 8 → `publisherFee`/`publisherPubKeyHash` from OUT2, `holderFee` from C3pre.
+Returns `{ tx1RefHex, ownerPubKeyHex, priceSats, stateDataHex, terms }` or `null`. Reads the **5** v1 data
+fields from `chunks[0..4]` (P, ver, RECORD_EDITION, tx1Ref:32, ownerPub:33), checks the drop sequence
+`OP_2DROP OP_2DROP OP_DROP` at `chunks[5..7]`, and recovers the economic **terms straight from the covenant
+body** (so a recipient needs no out-of-band metadata): it scans for the `OUT2` constant (a 34-byte push) and
+`C3pre` (a 12-byte push), both identifiable by the P2PKH signature `0x19 0x76 0xa9 0x14` at byte offset 8 →
+`publisherFee`/`publisherPubKeyHash` from OUT2, `holderFee` from C3pre. (The v2 percentage variant has its
+own parser, `parseEditionScriptV2`.)
 
 ---
 
@@ -304,11 +352,12 @@ The templates serialize the spender's "change region" (`tx.outputs.slice(enforce
 
 ### 5.2 The two signature scopes (don't conflate them)
 
-- The covenant's **OP_PUSH_TX** uses `EDITION_SCOPE = 0xc1` (ANYONECANPAY|ALL|FORKID) in both branches.
-- The transfer branch's **owner-auth** signature uses `ALL|FORKID = 0x41` (no ANYONECANPAY): the owner
-  builds the whole transaction, so it commits to all inputs/outputs. `transferUnlockTemplate` therefore
-  passes the **real other-inputs** to `TransactionSignature.format` for the owner sig (ANYONECANPAY would
-  ignore them, but ALL needs them). Signing mirrors `pushDrop.unlock`:
+- The covenant's **OP_PUSH_TX** uses `EDITION_SCOPE = 0xc1` (ANYONECANPAY|ALL|FORKID) in all branches.
+- The transfer **and burn** branches' **owner-auth** signature uses `ALL|FORKID = 0x41` (no ANYONECANPAY):
+  the owner builds the whole transaction, so it commits to all inputs/outputs. `transferUnlockTemplate` and
+  `burnUnlockTemplate` therefore pass the **real other-inputs** to `TransactionSignature.format` for the
+  owner sig (ANYONECANPAY would ignore them, but ALL needs them). For burn this is what makes "enforce no
+  outputs" safe — the owner's ALL-sig *is* the output authorisation. Signing mirrors `pushDrop.unlock`:
   `key.sign(Hash.sha256(preimage))` → `new TransactionSignature(r, s, scope).toChecksigFormat()`.
 
 ### 5.3 Transaction shapes (all version 2)
@@ -321,6 +370,15 @@ The templates serialize the spender's "change region" (`tx.outputs.slice(enforce
   `[0] token→newOwner (swapEditionOwner) [1] 1-sat P2PKH notification to newOwner's address [2] change]`.
   `enforcedOutputCount = 1`; the notification rides in the covenant's free change region (so enforcement is
   unaffected) and is the **discovery breadcrumb**.
+- **`buildEditionBurnTx`** — `[in0 = edition via burnUnlockTemplate]` → `[0] P2PKH change → owner`. The
+  single input *is* the bond; `tx.fee()` reduces the one change output to `bond − fee`, which the owner
+  reclaims. `enforcedOutputCount = 0` (the covenant enforces nothing; the owner's ALL-sig commits the
+  output). No funding input is added, so burn is only spendable once the edition's creating tx has confirmed
+  and propagated (the wallet caches broadcast hex to build the spend, but the network must still see the UTXO).
+
+The token outputs in genesis/replicate/transfer are funded with the **bond** (`opts.edition.satoshis`,
+read from the UTXO so old 1-sat and new bonded collections both round-trip); only the 1-sat notification
+carrier uses `PHARLAP_OUTPUT_SATS`.
 
 `swapEditionOwner(lockBytes, newPub)` / `editionOwnerPubKey(lockBytes)` are the JS mirrors of the in-script
 pubkey surgery, operating at `EDITION_OWNER_SCRIPT_OFFSET = 40`.
@@ -329,7 +387,11 @@ pubkey surgery, operating at `EDITION_OWNER_SCRIPT_OFFSET = 40`.
 
 - `createEdition` (TX1 template committing name + replicable rules + the covenant template with a *zeroed*
   tx1Ref/owner, plus optional hash-bound file; then TX2 mints editions), `replicateEdition`,
-  `transferEdition`, `broadcastV2Probe` (a trivial v2 P2PKH self-send to confirm the network relays v2).
+  `transferEdition`, `burnEdition` (owner-signed destroy → reclaims the bond; registers the spend as pending),
+  `broadcastV2Probe` (a trivial v2 P2PKH self-send to confirm the network relays v2 — still exported; its UI
+  button was retired). Gift links (`createGiftVouchers`/`scanGiftVouchers`) pre-fund claimable replicas with
+  **deterministic** voucher keys (`deriveVoucherKey` = `sha256(publisherPriv ‖ collectionId ‖ index)`), so a
+  publisher recovers unclaimed links from their WIF + chain alone.
 - `scanIncomingEditions(provider, pubKeyHex)` — candidate txs = **union of `getAddressHistory()` AND
   `getUtxos()`** (the latter is mempool-aware, so an *unconfirmed* transfer surfaces immediately via the
   1-sat notification UTXO). For each candidate tx, parse outputs with `parseEditionScript` and keep those
@@ -346,6 +408,13 @@ pubkey surgery, operating at `EDITION_OWNER_SCRIPT_OFFSET = 40`.
 - **Adding/removing an enforced output** (e.g. a second fee): update *three* places in lockstep —
   `replicateTailOps`/`transferTailOps` output construction, **every** `OP_PICK`/`OP_ROLL` depth after the
   change (hand-trace!), and the builder's `enforcedOutputCount`. Then Spend-validate.
+- **Touching the dispatch / adding a branch**: the selector arrives at depth 3 (`push 3, OP_ROLL`); burn is
+  peeled first with `OP_DUP OP_2 OP_NUMEQUAL OP_IF` (and must `OP_DROP` the selector, since it isn't a clean
+  boolean) before the transfer/replicate `OP_IF`/`OP_ELSE`. A new branch means a new numeric selector + its
+  own `OP_DUP OP_n OP_NUMEQUAL OP_IF` peel, and a matching unlock layout. Spend-validate every branch.
+- **Changing the bond**: it's `VALUE1 = u64le(tokenSats)` baked into `replicateTailOps`/`transferTailOps` and
+  funded from the UTXO by the builders — keep the in-script constant and the output satoshis identical, or the
+  hash-match fails. The bond is per-collection and not spender-choosable by design.
 - **Changing fees / the publisher address**: they live as constants (`OUT2`, `C3pre`) in the tail **and** are
   parsed by `parseEditionScript` via the `19 76 a9 14` signature — keep them P2PKH-serialized and parseable.
 - **Changing the sighash scope**: update `EDITION_SCOPE` and `pushTxConstants(scope)` consistently; the
@@ -363,7 +432,8 @@ pubkey surgery, operating at `EDITION_OWNER_SCRIPT_OFFSET = 40`.
 - `test/covenant.test.ts` — L1 output prefix, L2 quine, L3 pubkey swap, L4 full replicate (short-pay /
   redirect / covenant-drop all rejected).
 - `test/edition.test.ts` — the real edition lock: offset check, `parseEditionScript` round-trip, replicate,
-  transfer, forged-sig and covenant-drop rejections.
+  transfer, forged-sig and covenant-drop rejections, **burn** (owner can / non-owner can't), and **bonded**
+  paths (replicate/transfer preserve `VALUE1`; reject an under-bonded out0/replica).
 - `test/editionBuilder.test.ts` — builds genesis→replicate→transfer txs and **Spend-validates each covenant
   input** with the *real* other-inputs (so the owner's ALL-sig hashes correctly). This is the safety net
   before any broadcast.
@@ -380,11 +450,14 @@ script that runs each stage (reverse → hash→num → s-derive → DER assembl
   recovers its collection id/terms, but there is **no lineage walk** yet (proving it descends from the real
   TX1 genesis + that TX1 committed a matching covenant template). That's the natural next verify feature.
 - **Total mint count is not trustlessly knowable** (no indexer) — by design.
+- **The bond exit is burn-only.** Without the burn branch the covenant has no exit, so the token's sats are
+  locked forever (older 1-sat collections still are). Burn fixes that, but only the **current owner** can do
+  it, and only once the edition's tx has confirmed/propagated (no funding input to CPFP an unconfirmed parent).
 - **Replicate doesn't add a holder notification**, but the **holder-fee P2PKH output** lands in the holder's
   address history, so the holder still discovers their returned token via `scanIncomingEditions`.
 - **Overlay-based publishing doesn't propagate deletions** (see `publish.sh`); delete public files on the
   `publish` branch by hand.
-- Script size ≈ **767 bytes** (both branches); replicate unlock ≈ **1 KB** (mostly the preimage, which
+- Script size ≈ **783 bytes** (3-way dispatch); replicate unlock ≈ **1 KB** (mostly the preimage, which
   carries the full `scriptCode`). Within mainnet policy as of validation, but watch this if the script grows.
 - `OP_PICK`/`OP_ROLL` indices are the most fragile thing in the codebase — they encode exact stack depths.
   Treat the stack-state comments as load-bearing documentation and keep them correct.
@@ -397,18 +470,24 @@ script that runs each stage (reverse → hash→num → s-derive → DER assembl
 |---|---|
 | OP_PUSH_TX constants | `pushTxConstants()` in `pushtx.ts` (`a=0x11…`, `k=0x22…`) |
 | Introspection scope | `EDITION_SCOPE = 0xc1` (ANYONECANPAY\|ALL\|FORKID) |
-| Owner-auth scope (transfer) | `0x41` (ALL\|FORKID) |
+| Owner-auth scope (transfer + burn) | `0x41` (ALL\|FORKID) |
 | Owner pubkey offset (script) | `EDITION_OWNER_SCRIPT_OFFSET = 40` |
 | Field-split offset (in scriptCode) | `F = varIntSize(scriptLen) + 40` (≈ 43; two-pass in `buildEditionLock`) |
 | `hashOutputs` in preimage | bytes `[len−40, len−8)` |
 | `scriptCode` field in preimage | bytes `[104, len−52)` (incl. its varint) |
 | Record type | `RECORD_EDITION = 0x05` |
-| Replicate selector / outputs | `OP_0`; out `[0]`token `[1]`replica `[2]`publisherFee `[3]`holderFee `[4+]`change |
-| Transfer selector / outputs | `OP_1`; out `[0]`token→newOwner `[1]`notification `[2+]`change |
+| Dispatch | `push 3, OP_ROLL`; `OP_DUP OP_2 OP_NUMEQUAL OP_IF`(burn) `OP_ELSE OP_IF`(transfer) `OP_ELSE`(replicate) |
+| Replicate selector / outputs | `0`; out `[0]`token `[1]`replica `[2]`publisherFee `[3]`holderFee `[4+]`change |
+| Transfer selector / outputs | `1`; out `[0]`token→newOwner `[1]`notification `[2+]`change |
+| Burn selector / outputs | `2`; out `[0]` reclaimed bond → owner (no enforced outputs) |
+| Bond | `VALUE1 = u64le(tokenSats)`, per-collection, baked into replicate/transfer; reclaimed by burn |
+| Burn-capable check | `editionSupportsBurn(lockBytes)` (tests for the dispatch `OP_NUMEQUAL`) |
+| Script size | ≈ **783 bytes** (3-way dispatch) |
 | Must-stay-minimal | the in-script **signature DER** (Chronicle does NOT relax it) |
 | Validation oracle | `@bsv/sdk` `Spend` with `transactionVersion: 2` |
 
 ---
 
 *Authored 2026-06-11, immediately after the covenant was validated on BSV mainnet, to preserve the
-implementation reasoning for future modification/repurposing.*
+implementation reasoning for future modification/repurposing. Updated 2026-06-17 for the bonded-burn
+covenant (3-way dispatch + refundable per-collection bond) and the current 5-field v1 layout.*

@@ -33,6 +33,7 @@ It is built around three ideas that make it different from a typical token walle
 | Supply | Fixed at mint (1 or N) | Uncapped — anyone can mint a copy |
 | Transfer | Owner-signed, fee-free | Owner-signed, fee-free |
 | Cloning | — | Any holder is a paid cloning source |
+| Bond / burn | — | Rides on a refundable bond; owner can burn to reclaim it |
 | Enforced by | Wallet convention + SPV | **Miners** (covenant script) |
 | Use case | A numbered collectible / proof token | An e-book, article, song — sold by the copy |
 
@@ -88,16 +89,17 @@ A publisher mints an edition and announces it. The edition token sits in a holde
 A buyer clicks "Replicate" on an edition they found:
 
   INPUTS                            OUTPUTS  (fixed by the covenant — miners enforce them)
-  ┌─ holder's edition  (1 sat) ──┐  ┌─ [0] token returned to the holder      (same edition)
-  └─ buyer's funding ────────────┘  ├─ [1] a new replica for the buyer       (same collection)
+  ┌─ holder's edition (bond) ────┐  ┌─ [0] token returned to the holder   (same edition, bond intact)
+  └─ buyer's funding ────────────┘  ├─ [1] a new replica for the buyer    (same collection, fresh bond)
                                     ├─ [2] publisher fee   → publisher's address
                                     ├─ [3] holder fee    → holder's address
                                     └─ [4] change        → buyer
 
   • No holder signature is required — the holder's wallet does nothing.
   • The transaction is INVALID unless outputs [0]–[3] are exactly correct:
-    the holder's token comes back, the buyer's copy carries the same covenant,
-    and both fees are paid in full. Miners reject any cheat.
+    the holder's token comes back (carrying its bond unchanged), the buyer's copy
+    carries the same covenant and an equal fresh bond, and both fees are paid in
+    full. Miners reject any cheat.
 ```
 
 The result:
@@ -112,6 +114,45 @@ trustlessly knowable. But any individual copy is verifiable as a genuine edition
 
 ---
 
+## The bond, and burning to reclaim it
+
+Every edition rides on a **refundable bond** — the satoshis locked in the token's own UTXO. The publisher
+sets the amount per collection at mint time (default **2100 sats**, a nod to the 21-million cap); it is
+baked into the covenant and **enforced forever** for that collection. The bond is *not* a fee — nobody
+keeps it. It is recoverable deposit:
+
+- On **replication**, the holder's bond rides straight back to them on output [0], and the buyer posts an
+  **equal fresh bond** for their own new copy — both consensus-enforced, so a collection's bond is uniform
+  across every edition and can't be shaved.
+- On **transfer**, the bond moves with the token to the new owner.
+
+**Burning** is how you get it back. An owner can destroy a copy they hold and **sweep its bonded sats back
+into their wallet** (minus a small network fee). This solves what would otherwise be a permanent dust-lock:
+the covenant has no other exit, so without burn every edition's sats would be trapped forever.
+
+```
+The owner clicks "Burn" on a copy they hold:
+
+  INPUTS                            OUTPUTS  (the owner signs — they choose where it goes)
+  └─ owner's edition (bond) ─────┐  └─ [0] the reclaimed bond → owner's wallet
+                                 │
+  • Owner-signed: only the current owner can produce a valid signature against the
+    pubkey embedded in the script, so only they can burn their copy.
+  • The token is DESTROYED — no covenant output is re-created. Irreversible.
+```
+
+Why it matters: the bond gives every edition an **intrinsic price floor** (a copy is never worth less than
+its recoverable bond), discourages frivolous minting (each copy ties up real capital), and lets the UTXO be
+reclaimed instead of leaving permanent dust at scale. Because the amount is configurable, a publisher can
+set a tiny bond for free-content drops or a larger one for premium / gift editions.
+
+A wallet caveat that follows from self-custody: you can only burn (or transfer/replicate) a copy once its
+creating transaction has **confirmed and propagated** — until then the network can't see the UTXO to spend
+it. And because PushDrop tokens aren't address-indexed, a copy spent on another device can briefly linger in
+your local list; acting on it simply detects that it's already gone and quietly removes it.
+
+---
+
 ## How the covenant is enforced (in one breath)
 
 BSV scripts can't normally "see" the transaction spending them. PHAR LAP uses the classic **OP_PUSH_TX**
@@ -122,6 +163,21 @@ spend unless they match the rules above. The covenant even re-creates *its own s
 outputs, so the rules propagate to every replica. All of this is hand-rolled on `@bsv/sdk` — no
 external smart-contract toolchain — and runs under BSV's post-Chronicle (version-2) script rules.
 
+A single byte on the spender's stack selects **one of three branches** the covenant offers:
+
+| Selector | Branch | What it enforces |
+|---|---|---|
+| `0` | **Replicate** | The 5-output layout above — token back to holder, fresh-bonded replica to buyer, both fees paid. No owner signature. |
+| `1` | **Transfer** | Owner-signed move: re-creates the covenant for the new owner (bond intact), no fees. |
+| `2` | **Burn** | Owner-signed destroy: enforces *no* outputs — the owner's signature already commits to where the reclaimed bond goes. |
+
+Replicate and transfer reconstruct their required outputs inside the script and check them against the
+transaction's committed `hashOutputs`; burn skips that entirely, because an ordinary owner signature over
+the whole transaction is all the authority a destroy-and-reclaim needs. The shared transaction-verification
+prefix runs once before the branch split, so the three branches add only a few bytes over a single one.
+Older collections minted before the bond/burn work carry the earlier two-branch (replicate/transfer) script
+and keep working unchanged — each collection embeds its own covenant, so the two coexist.
+
 ---
 
 ## What you can do in the wallet
@@ -130,7 +186,9 @@ external smart-contract toolchain — and runs under BSV's post-Chronicle (versi
 |---|---|
 | **Mint collection** | Create a fixed-supply collection (+ optional file). |
 | **Mint edition collection** | Create an unlimited-mints collection with fixed publisher/holder fees (+ optional file, which can be **encrypted** for holders). |
-| **Replicate** | Permissionlessly mint your own copy of an edition (pays the fees). |
+| **Replicate** | Permissionlessly mint your own copy of an edition (pays the fees + posts a fresh bond). |
+| **Burn** | Destroy a copy you hold and reclaim its bonded sats to your wallet (owner-signed, irreversible). |
+| **Gift links** | Pre-fund claimable copies of your edition as shareable links; recoverable from your key alone. |
 | **Sales page / Share** | Open a collection's public storefront and copy a postable link to it. |
 | **Get a copy** | Buy an edition in one click from a sales link (resolve → fund → replicate → reveal). |
 | **Seller note / bonus** | Attach a public promo note (+ optional link/code bonus) buyers receive at purchase. |
@@ -140,7 +198,6 @@ external smart-contract toolchain — and runs under BSV's post-Chronicle (versi
 | **Restore from WIF** | Recover your wallet **and** purchases on any browser/device from your private key. |
 | **Verify** | Confirm a token/edition is structurally valid and which collection it belongs to. |
 | **View** | Open the embedded file — decompressing and **decrypting** it as needed — and verify it against the collection commitment (public files show a **✓ verified exact replica** proof). |
-| **Test v2 broadcast** | Sanity-check that the network accepts version-2 (Chronicle) transactions. |
 
 Receiving wallets find tokens through a small **1-sat P2PKH notification** to the recipient's address
 (the token output itself is a non-standard script and isn't address-indexed); the wallet then reads the
@@ -255,6 +312,11 @@ Validated on **BSV mainnet**:
 - ✅ Collection mint (single + multi), embedded-file binding, transfer, discovery, verification, viewer
 - ✅ **Edition covenant**: mint, **permissionless replicate** (confirmed in a block), owner-signed
   transfer, file embed/view, discovery
+- ✅ **Bonded-burn covenant**: configurable refundable bond per collection (default 2100 sats) + an
+  owner-signed **burn** branch that reclaims it; bond preserved through replicate/transfer
+  (mainnet-validated mint → replicate → transfer → burn-reclaim)
+- ✅ **Recoverable gift links**: pre-funded claimable copies with deterministic keys, recoverable from
+  the publisher's WIF + chain alone
 - ✅ **Provenance** — public embedded files committed by plaintext hash, verified as a **timestamped
   exact replica** on view
 - ✅ **Smart compression** of embedded files + messages (gzip, keep-only-if-smaller, compress-before-encrypt)
