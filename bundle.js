@@ -20487,8 +20487,10 @@ Proceed?`
   function ownTerms() {
     return {
       publisherPubKeyHash: Hash_exports.hash160(key.toPublicKey().encode(true)),
-      publisherFeeSats: Math.max(0, parseInt(val("edPublisherFee") || "0", 10)),
-      holderFeeSats: Math.max(0, parseInt(val("edHolderFee") || "0", 10)),
+      // Floor at 1 sat: a 0-sat fee output is dust (risks rejection) and leaves the publisher/holder with no
+      // sale signal — the fee payment landing in their address is the only purchase notification.
+      publisherFeeSats: Math.max(1, parseInt(val("edPublisherFee") || "1", 10)),
+      holderFeeSats: Math.max(1, parseInt(val("edHolderFee") || "1", 10)),
       tokenSats: chosenBond()
     };
   }
