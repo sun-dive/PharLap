@@ -1175,15 +1175,25 @@ export async function scanCollectionBuyers(
   params: { collectionId: string; publisherPubKeyHashHex: string; maxTxs?: number; onProgress?: (done: number, total: number) => void },
 ): Promise<{ buyers: BuyerRecord[]; scanned: number; capped: boolean }> {
   const want = params.publisherPubKeyHashHex.toLowerCase()
-  let history: { txId: string; blockHeight: number }[] = []
-  try { history = await provider.getAddressHistory() } catch { /* best-effort — return what we can */ }
   const cap = params.maxTxs ?? 400
-  const capped = history.length > cap
-  const slice = capped ? history.slice(history.length - cap) : history // most-recent `cap` txs
+  // Candidate txs = confirmed history (most-recent `cap`) UNIONED with the mempool-aware UTXO set. The union
+  // matters: getAddressHistory() is confirmed-only, so an UNCONFIRMED sale would be invisible until mined —
+  // but its publisher-fee output sits in our unspent set, so getUtxos() surfaces it immediately.
+  const candidates = new Map<string, number>() // txId -> blockHeight (0 = unconfirmed/unknown)
+  let capped = false
+  try {
+    let hist = await provider.getAddressHistory()
+    if (hist.length > cap) { capped = true; hist = hist.slice(hist.length - cap) }
+    for (const h of hist) candidates.set(h.txId, h.blockHeight || 0)
+  } catch { /* best-effort */ }
+  try {
+    for (const u of await provider.getUtxos()) if (!candidates.has(u.txId)) candidates.set(u.txId, 0)
+  } catch { /* best-effort */ }
+  const entries = [...candidates.entries()]
   const byBuyer = new Map<string, BuyerRecord>()
   let done = 0
-  for (const { txId, blockHeight } of slice) {
-    params.onProgress?.(done, slice.length); done++
+  for (const [txId, blockHeight] of entries) {
+    params.onProgress?.(done, entries.length); done++
     let tx: Transaction
     try { tx = await provider.getSourceTransaction(txId) } catch { continue }
     const replica = tx.outputs[1]
@@ -1199,7 +1209,7 @@ export async function scanCollectionBuyers(
     if (rec != null) { rec.count++; if (h) { rec.lastHeight = Math.max(rec.lastHeight, h); rec.firstHeight = rec.firstHeight ? Math.min(rec.firstHeight, h) : h } }
     else byBuyer.set(k, { pubKeyHex: ed.ownerPubKeyHex, count: 1, firstHeight: h, lastHeight: h })
   }
-  params.onProgress?.(slice.length, slice.length)
-  const buyers = [...byBuyer.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity)) // newest first
-  return { buyers, scanned: slice.length, capped }
+  params.onProgress?.(entries.length, entries.length)
+  const buyers = [...byBuyer.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity)) // newest/unconfirmed first
+  return { buyers, scanned: entries.length, capped }
 }
