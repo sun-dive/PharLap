@@ -2007,7 +2007,9 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
   overlay.className = 'modal'
   overlay.innerHTML =
     '<div class="modal-box gift-modal-box">' +
-    `<div class="modal-head"><span>👥 Buyers of ${escapeHtml(title)}</span><button class="secondary buyers-close">✕ Close</button></div>` +
+    `<div class="modal-head"><span>👥 Buyers of ${escapeHtml(title)}</span>` +
+    '<span class="row" style="gap:6px"><button class="secondary buyers-refresh">🔄 Refresh</button>' +
+    '<button class="secondary buyers-close">✕ Close</button></span></div>' +
     '<p class="buyers-status muted" style="font-size:12px">Scanning your sales…</p>' +
     '<div class="buyers-list"></div>' +
     '<p class="muted" style="font-size:11px;margin-top:10px">Buyers at point of sale (when they replicated a copy). Onward transfers aren’t visible to you, so this isn’t a current-owner list.</p>' +
@@ -2019,6 +2021,7 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
 
   const statusEl = overlay.querySelector('.buyers-status') as HTMLElement
   const listEl = overlay.querySelector('.buyers-list') as HTMLElement
+  const refreshBtn = overlay.querySelector('.buyers-refresh') as HTMLButtonElement
   const render = (res: { buyers: BuyerRecord[]; scanned: number; capped: boolean }): void => {
     if (res.buyers.length === 0) {
       statusEl.textContent = `No buyers yet — no one has replicated a copy (scanned ${res.scanned} tx${res.scanned === 1 ? '' : 's'}).`
@@ -2036,17 +2039,24 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
       listEl.append(row)
     }
   }
-  try {
-    const res = await scanCollectionBuyers(provider, {
-      collectionId: t.collectionId,
-      publisherPubKeyHashHex: t.publisherPubKeyHashHex,
-      onProgress: (done, total) => { statusEl.textContent = `Scanning your sales… ${done}/${total}` },
-    })
-    render(res)
-    if (res.buyers.length) resolveAvatarsThen(res.buyers.map(b => b.pubKeyHex), () => { if (document.body.contains(overlay)) render(res) })
-  } catch (e) {
-    statusEl.textContent = `Scan failed: ${(e as Error).message}`
+  const scan = async (): Promise<void> => {
+    refreshBtn.disabled = true; listEl.innerHTML = ''; statusEl.textContent = 'Scanning your sales…'
+    try {
+      const res = await scanCollectionBuyers(provider, {
+        collectionId: t.collectionId,
+        publisherPubKeyHashHex: t.publisherPubKeyHashHex!,
+        onProgress: (done, total) => { statusEl.textContent = `Scanning your sales… ${done}/${total}` },
+      })
+      render(res)
+      if (res.buyers.length) resolveAvatarsThen(res.buyers.map(b => b.pubKeyHex), () => { if (document.body.contains(overlay)) render(res) })
+    } catch (e) {
+      statusEl.textContent = `Scan failed: ${(e as Error).message}`
+    } finally {
+      refreshBtn.disabled = false
+    }
   }
+  refreshBtn.onclick = () => void scan()
+  await scan()
 }
 
 /** Holder: pull announcements from the publishers of every collection you hold → newest-first feed. */

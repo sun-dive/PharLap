@@ -22474,7 +22474,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     const title = t.collectionName ?? "Collection";
     const overlay = document.createElement("div");
     overlay.className = "modal";
-    overlay.innerHTML = `<div class="modal-box gift-modal-box"><div class="modal-head"><span>\u{1F465} Buyers of ${escapeHtml(title)}</span><button class="secondary buyers-close">\u2715 Close</button></div><p class="buyers-status muted" style="font-size:12px">Scanning your sales\u2026</p><div class="buyers-list"></div><p class="muted" style="font-size:11px;margin-top:10px">Buyers at point of sale (when they replicated a copy). Onward transfers aren\u2019t visible to you, so this isn\u2019t a current-owner list.</p></div>`;
+    overlay.innerHTML = `<div class="modal-box gift-modal-box"><div class="modal-head"><span>\u{1F465} Buyers of ${escapeHtml(title)}</span><span class="row" style="gap:6px"><button class="secondary buyers-refresh">\u{1F504} Refresh</button><button class="secondary buyers-close">\u2715 Close</button></span></div><p class="buyers-status muted" style="font-size:12px">Scanning your sales\u2026</p><div class="buyers-list"></div><p class="muted" style="font-size:11px;margin-top:10px">Buyers at point of sale (when they replicated a copy). Onward transfers aren\u2019t visible to you, so this isn\u2019t a current-owner list.</p></div>`;
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close();
@@ -22483,6 +22483,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     document.body.append(overlay);
     const statusEl = overlay.querySelector(".buyers-status");
     const listEl = overlay.querySelector(".buyers-list");
+    const refreshBtn = overlay.querySelector(".buyers-refresh");
     const render = (res) => {
       if (res.buyers.length === 0) {
         statusEl.textContent = `No buyers yet \u2014 no one has replicated a copy (scanned ${res.scanned} tx${res.scanned === 1 ? "" : "s"}).`;
@@ -22504,21 +22505,30 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
         listEl.append(row);
       }
     };
-    try {
-      const res = await scanCollectionBuyers(provider, {
-        collectionId: t.collectionId,
-        publisherPubKeyHashHex: t.publisherPubKeyHashHex,
-        onProgress: (done, total) => {
-          statusEl.textContent = `Scanning your sales\u2026 ${done}/${total}`;
-        }
-      });
-      render(res);
-      if (res.buyers.length) resolveAvatarsThen(res.buyers.map((b) => b.pubKeyHex), () => {
-        if (document.body.contains(overlay)) render(res);
-      });
-    } catch (e) {
-      statusEl.textContent = `Scan failed: ${e.message}`;
-    }
+    const scan = async () => {
+      refreshBtn.disabled = true;
+      listEl.innerHTML = "";
+      statusEl.textContent = "Scanning your sales\u2026";
+      try {
+        const res = await scanCollectionBuyers(provider, {
+          collectionId: t.collectionId,
+          publisherPubKeyHashHex: t.publisherPubKeyHashHex,
+          onProgress: (done, total) => {
+            statusEl.textContent = `Scanning your sales\u2026 ${done}/${total}`;
+          }
+        });
+        render(res);
+        if (res.buyers.length) resolveAvatarsThen(res.buyers.map((b) => b.pubKeyHex), () => {
+          if (document.body.contains(overlay)) render(res);
+        });
+      } catch (e) {
+        statusEl.textContent = `Scan failed: ${e.message}`;
+      } finally {
+        refreshBtn.disabled = false;
+      }
+    };
+    refreshBtn.onclick = () => void scan();
+    await scan();
   }
   async function onCheckUpdates() {
     const host = $("updatesFeed");
