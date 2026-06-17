@@ -112,6 +112,24 @@
     .buyers-selall { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
     .compose-many { display:flex; flex-wrap:wrap; gap:6px 10px; max-height:96px; overflow:auto; }
     .compose-hint code { background:var(--line); padding:0 4px; border-radius:4px; }
+    /* 💬 Discussions */
+    .disc-room { display:flex; align-items:center; gap:10px; width:100%; text-align:left; background:#161b22; border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; cursor:pointer; }
+    .disc-room:hover { border-color:var(--accent2); }
+    .disc-room-name { font-weight:600; flex:1 1 auto; min-width:0; }
+    .disc-room-meta { color:var(--muted); font-size:12px; flex:0 0 auto; }
+    .disc-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+    .disc-head h3 { margin:0; flex:1 1 auto; min-width:0; }
+    .disc-compose { display:flex; flex-direction:column; gap:8px; border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:14px; }
+    .disc-compose textarea { width:100%; box-sizing:border-box; resize:vertical; }
+    .disc-compose-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .disc-feed { display:flex; flex-direction:column; gap:10px; }
+    .disc-post { border:1px solid var(--line); border-radius:10px; padding:9px 11px; }
+    .disc-post-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin-bottom:5px; }
+    .disc-post-text { font-size:14px; white-space:pre-wrap; word-break:break-word; }
+    .disc-badge { font-size:11px; padding:1px 7px; border-radius:999px; border:1px solid var(--line); }
+    .disc-badge.root { color:#f0c674; border-color:#9e6a03; }
+    .disc-badge.self { color:var(--accent); border-color:var(--accent); }
+    .disc-badge.up { color:var(--accent2); border-color:var(--accent2); }
     .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
     .token-tile { display:flex; flex-direction:column; gap:6px; padding:8px; background:#0d1117; border:1px solid var(--line);
                   border-radius:8px; cursor:pointer; text-align:left; color:var(--fg); font:inherit; }
@@ -264,6 +282,7 @@
            button to surface it again. -->
       <button class="tab" data-tab="editions" role="tab">Publish</button>
       <button class="tab" data-tab="tokens" role="tab">My NFTs</button>
+      <button class="tab" data-tab="discussions" role="tab">Discussions</button>
       <button class="tab" data-tab="messages" role="tab">Messages</button>
       <button class="tab" data-tab="updates" role="tab">Updates</button>
       <button class="tab" data-tab="help" role="tab">Help</button>
@@ -402,6 +421,15 @@
       <div id="tokens"></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Enter a recipient public key above, then click <b>Send</b> on the NFT you want to transfer.</p>
     </div>
+    </section>
+
+    <section class="tabpanel" id="tab-discussions" role="tabpanel">
+      <div class="card">
+        <p class="help-sub">Members-only discussion for each collection you hold — you see posts from the creator and everyone up your lineage; post to your line and your downstream sees it.</p>
+        <div class="row" style="margin:6px 0 12px"><button id="btnDiscRefresh" class="secondary">🔄 Refresh</button></div>
+        <div id="discRooms"></div>
+        <div id="discThread" hidden></div>
+      </div>
     </section>
 
     <section class="tabpanel" id="tab-messages" role="tabpanel">

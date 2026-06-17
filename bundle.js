@@ -20419,6 +20419,163 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return null;
   }
 
+  // src/discussion.ts
+  var MAX_WALK_HOPS = 600;
+  var MAX_FEED_POSTS = 200;
+  var MAX_POST_BYTES = 1e3;
+  function u32le(n) {
+    return [n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255];
+  }
+  function nodeFeedHash160(collectionId, birthTxId, birthVout) {
+    const seed = [
+      ...utils_exports.toArray("PHARLAP-DISC-NODE-v1", "utf8"),
+      ...utils_exports.toArray(collectionId, "hex"),
+      ...utils_exports.toArray(birthTxId, "hex"),
+      ...u32le(birthVout)
+    ];
+    return Hash_exports.hash160(seed);
+  }
+  function rootFeedHash160(collectionId) {
+    return Hash_exports.hash160([...utils_exports.toArray("PHARLAP-DISC-ROOT-v1", "utf8"), ...utils_exports.toArray(collectionId, "hex")]);
+  }
+  function nodeRef(birthTxId, birthVout) {
+    return `${birthTxId}:${birthVout}`;
+  }
+  async function walkNodeAncestors(provider2, startTxId, startVout, collectionId, maxHops = MAX_WALK_HOPS) {
+    const nodes = [];
+    let txId = startTxId, vout = startVout;
+    for (let hop = 0; hop < maxHops; hop++) {
+      let tx;
+      try {
+        tx = await provider2.getSourceTransaction(txId);
+      } catch {
+        break;
+      }
+      const ed = parseEditionAny(tx.outputs[vout]?.lockingScript);
+      if (ed == null || ed.tx1RefHex !== collectionId) break;
+      const in0 = tx.inputs[0];
+      const pTxId = in0?.sourceTXID ?? in0?.sourceTransaction?.id("hex");
+      const pVout = in0?.sourceOutputIndex;
+      let parentSameCollection = false;
+      if (pTxId != null && pVout != null) {
+        try {
+          const pTx = await provider2.getSourceTransaction(pTxId);
+          const pEd = parseEditionAny(pTx.outputs[pVout]?.lockingScript);
+          parentSameCollection = pEd != null && pEd.tx1RefHex === collectionId;
+        } catch {
+        }
+      }
+      if (!parentSameCollection) {
+        nodes.unshift({ birthTxId: txId, birthVout: vout, ownerPubKeyHex: ed.ownerPubKeyHex, isGenesis: true });
+        break;
+      }
+      if (vout === 1) {
+        nodes.unshift({ birthTxId: txId, birthVout: vout, ownerPubKeyHex: ed.ownerPubKeyHex, isGenesis: false });
+      }
+      txId = pTxId;
+      vout = pVout;
+    }
+    return nodes;
+  }
+  async function postToNodeFeed(provider2, key2, params) {
+    const trimmed = params.text.trim();
+    if (trimmed.length === 0) throw new Error("post is empty");
+    if (new TextEncoder().encode(trimmed).length > MAX_POST_BYTES) throw new Error(`post exceeds ${MAX_POST_BYTES} bytes`);
+    const pubHex = key2.toPublicKey().toString();
+    const envelope = await buildEnvelope({
+      senderPriv: key2,
+      recipientPubKeyHex: pubHex,
+      parts: [{ kind: "text", text: trimmed }],
+      encrypt: false,
+      senderAlias: params.senderAlias,
+      sentAt: Date.now()
+    });
+    const selected = selectFunding(await getSafeUtxos(provider2), PHARLAP_OUTPUT_SATS + 1 + 700);
+    const funding = await Promise.all(selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) })));
+    const tx = new Transaction();
+    for (const f2 of funding) {
+      tx.addInput({ sourceTransaction: f2.sourceTx, sourceOutputIndex: f2.utxo.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(key2) });
+    }
+    tx.addOutput({ lockingScript: buildMessageScript(pubHex, { ref: params.ref, envelope }), satoshis: PHARLAP_OUTPUT_SATS });
+    tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(params.feedHash160)), satoshis: 1 });
+    tx.addOutput({ lockingScript: new P2PKH().lock(key2.toAddress()), change: true });
+    await tx.fee(new SatoshisPerKilobyte(params.feePerKb ?? DEFAULT_FEE_PER_KB));
+    await tx.sign();
+    await provider2.broadcast(tx.toHex());
+    const txId = tx.id("hex");
+    provider2.registerPendingTx(
+      txId,
+      selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
+      (tx.outputs[2]?.satoshis ?? 0) > 0 ? { outputIndex: 2, satoshis: tx.outputs[2].satoshis ?? 0 } : void 0
+    );
+    return txId;
+  }
+  async function scanNodeFeed(provider2, feedHash160, ref) {
+    const sh2 = wocScriptHash(p2pkhScript(feedHash160));
+    let utxos = [];
+    try {
+      utxos = await provider2.getUnspentByScriptHash(sh2);
+    } catch {
+      return [];
+    }
+    const want = ref.toLowerCase();
+    const seenTx = /* @__PURE__ */ new Set();
+    const posts = [];
+    for (const u of utxos) {
+      if (seenTx.has(u.txId)) continue;
+      seenTx.add(u.txId);
+      if (seenTx.size > MAX_FEED_POSTS) break;
+      let tx;
+      try {
+        tx = await provider2.getSourceTransaction(u.txId);
+      } catch {
+        continue;
+      }
+      for (const o of tx.outputs) {
+        const m = parseMessageScript(o.lockingScript);
+        if (m == null || m.fields.ref.toLowerCase() !== want) continue;
+        const opened = await openPublicEnvelope(m.fields.envelope);
+        if (opened == null || opened.senderPubKeyHex.toLowerCase() !== m.recipientPubKeyHex.toLowerCase()) continue;
+        const textPart = opened.parts.find((p) => p.kind === "text");
+        if (textPart && textPart.kind === "text") {
+          posts.push({ text: textPart.text, authorPubKeyHex: opened.senderPubKeyHex, senderAlias: opened.senderAlias, sentAt: opened.sentAt, txId: u.txId, ref });
+        }
+      }
+    }
+    return posts;
+  }
+  async function resolveCorridor(provider2, startTxId, startVout, collectionId) {
+    const ancestors = await walkNodeAncestors(provider2, startTxId, startVout, collectionId);
+    const out = [{
+      birthTxId: collectionId,
+      birthVout: -1,
+      ownerPubKeyHex: "",
+      isGenesis: false,
+      feedHash160: rootFeedHash160(collectionId),
+      ref: collectionId,
+      isRoot: true,
+      isSelf: false
+    }];
+    ancestors.forEach((n, i) => out.push({
+      ...n,
+      feedHash160: nodeFeedHash160(collectionId, n.birthTxId, n.birthVout),
+      ref: nodeRef(n.birthTxId, n.birthVout),
+      isRoot: false,
+      isSelf: i === ancestors.length - 1
+    }));
+    return out;
+  }
+  async function readCorridor(provider2, startTxId, startVout, collectionId) {
+    const nodes = await resolveCorridor(provider2, startTxId, startVout, collectionId);
+    const posts = [];
+    for (const node of nodes) {
+      const feed = await scanNodeFeed(provider2, node.feedHash160, node.ref);
+      for (const p of feed) posts.push({ ...p, node });
+    }
+    posts.sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0));
+    return { nodes, posts };
+  }
+
   // src/app.ts
   var WIF_KEY = "p:wallet:wif";
   var key;
@@ -22603,6 +22760,121 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     refreshBtn.onclick = () => void scan();
     await scan();
   }
+  var discAnchor = null;
+  function discRooms() {
+    const seen = /* @__PURE__ */ new Set();
+    const rooms = [];
+    for (const t of store2.active()) {
+      if (t.kind !== "edition" || seen.has(t.collectionId)) continue;
+      seen.add(t.collectionId);
+      rooms.push(t);
+    }
+    return rooms;
+  }
+  function renderDiscRooms() {
+    const host = $("discRooms");
+    const thread = $("discThread");
+    discAnchor = null;
+    thread.hidden = true;
+    thread.innerHTML = "";
+    host.hidden = false;
+    const rooms = discRooms();
+    if (rooms.length === 0) {
+      host.innerHTML = '<p class="muted">No discussions yet \u2014 hold or publish an edition to join its lineage corridor.</p>';
+      return;
+    }
+    host.innerHTML = "";
+    for (const t of rooms) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "disc-room";
+      row.innerHTML = `<span class="disc-room-name">${escapeHtml(t.collectionName ?? "Collection")}</span><span class="disc-room-meta">enter \u25B8</span>`;
+      row.onclick = () => void openDiscRoom(t);
+      host.append(row);
+    }
+  }
+  async function openDiscRoom(t) {
+    discAnchor = t;
+    const host = $("discRooms");
+    const thread = $("discThread");
+    host.hidden = true;
+    thread.hidden = false;
+    thread.innerHTML = `<div class="disc-head"><button class="secondary disc-back">\u2190 Rooms</button><h3>${escapeHtml(t.collectionName ?? "Collection")}</h3><button class="secondary disc-reload">\u{1F504}</button></div><div class="disc-compose"><textarea class="disc-text" rows="3" placeholder="Post to your line\u2026"></textarea><div class="disc-compose-row"><label class="muted" style="font-size:12px">Post to <select class="disc-target"></select></label><button class="disc-send">Post</button><span class="disc-status muted" style="font-size:12px"></span></div></div><div class="disc-feed"><p class="muted">Loading corridor\u2026</p></div>`;
+    thread.querySelector(".disc-back").addEventListener("click", () => renderDiscRooms());
+    thread.querySelector(".disc-reload").addEventListener("click", () => void loadDiscThread(t));
+    await loadDiscThread(t);
+  }
+  async function loadDiscThread(t) {
+    const thread = $("discThread");
+    const feedEl = thread.querySelector(".disc-feed");
+    const targetEl = thread.querySelector(".disc-target");
+    const sendBtn = thread.querySelector(".disc-send");
+    const textEl = thread.querySelector(".disc-text");
+    const statusEl = thread.querySelector(".disc-status");
+    feedEl.innerHTML = '<p class="muted">Loading corridor\u2026</p>';
+    let result;
+    try {
+      result = await readCorridor(provider, t.txId, t.outputIndex, t.collectionId);
+    } catch (e) {
+      feedEl.innerHTML = `<p class="muted">Couldn\u2019t load this corridor: ${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    const iAmPublisher = t.publisherPubKeyHashHex === myPubKeyHash();
+    const opts = [];
+    const selfNode = result.nodes.find((n) => n.isSelf);
+    if (selfNode) opts.push({ node: selfNode, label: "your line" });
+    for (const n of result.nodes) {
+      if (n.isRoot) {
+        if (iAmPublisher) opts.push({ node: n, label: "\u{1F4E3} everyone (collection)" });
+        continue;
+      }
+      if (!n.isSelf) opts.push({ node: n, label: `\u2B06 reply to ${displayName(n.ownerPubKeyHex).name}` });
+    }
+    targetEl.innerHTML = opts.map((o, i) => `<option value="${i}">${escapeHtml(o.label)}</option>`).join("");
+    sendBtn.onclick = () => void (async () => {
+      const text = textEl.value.trim();
+      if (text === "") {
+        statusEl.textContent = "Write something first.";
+        return;
+      }
+      const target = opts[parseInt(targetEl.value || "0", 10)]?.node;
+      if (target == null) {
+        statusEl.textContent = "No post target available.";
+        return;
+      }
+      sendBtn.disabled = true;
+      statusEl.textContent = "Posting\u2026";
+      try {
+        await postToNodeFeed(provider, key, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias() });
+        textEl.value = "";
+        statusEl.textContent = "\u2705 Posted.";
+        setTimeout(() => {
+          if (discAnchor === t) void loadDiscThread(t);
+        }, 900);
+      } catch (e) {
+        statusEl.textContent = `Post failed: ${e.message}`;
+        sendBtn.disabled = false;
+      }
+    })();
+    renderDiscFeed(feedEl, result.posts);
+    if (result.posts.length) resolveAvatarsThen(result.posts.map((p) => p.authorPubKeyHex), () => {
+      if (discAnchor === t) renderDiscFeed(feedEl, result.posts);
+    });
+  }
+  function renderDiscFeed(feedEl, posts) {
+    if (posts.length === 0) {
+      feedEl.innerHTML = '<p class="muted">No posts yet \u2014 be the first to post to your line.</p>';
+      return;
+    }
+    feedEl.innerHTML = "";
+    for (const p of posts) {
+      const badge = p.node.isRoot ? '<span class="disc-badge root">\u{1F4E3} everyone</span>' : p.node.isSelf ? '<span class="disc-badge self">your line</span>' : '<span class="disc-badge up">\u2B06 upline</span>';
+      const el = document.createElement("div");
+      el.className = "disc-post";
+      el.innerHTML = `<div class="disc-post-head">${nameChip(p.authorPubKeyHex)} ${badge}${p.sentAt ? ` \xB7 \u{1F552} ${escapeHtml(fmtTime(p.sentAt))}` : ""}</div><div class="disc-post-text">${escapeHtml(p.text)}</div>`;
+      feedEl.append(el);
+    }
+  }
   async function onCheckUpdates() {
     const host = $("updatesFeed");
     const held = [...new Set(store2.active().map((t) => t.collectionId))];
@@ -22648,6 +22920,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
       localStorage.setItem("p:activeTab", name);
     } catch {
     }
+    if (name === "discussions" && discAnchor == null) renderDiscRooms();
   }
   function initTabs() {
     const tabs = Array.from(document.querySelectorAll(".tab"));
@@ -22693,6 +22966,10 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     $("btnViewGrid").onclick = () => setNftView("grid");
     $("btnSortRecent").onclick = () => setNftSort("recent");
     $("btnSortPublisher").onclick = () => setNftSort("publisher");
+    $("btnDiscRefresh").onclick = () => {
+      if (discAnchor != null) void loadDiscThread(discAnchor);
+      else renderDiscRooms();
+    };
     $("tokenModalClose").onclick = () => closeTokenModal();
     $("tokenModal").addEventListener("click", (e) => {
       if (e.target === $("tokenModal")) closeTokenModal();

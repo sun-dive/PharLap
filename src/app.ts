@@ -25,6 +25,7 @@ import { verifyTokenLineage } from './verify.ts'
 import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
 import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime, downscaleToAvatar } from './thumbs.ts'
 import { publishProfile, resolveProfile } from './profile.ts'
+import { readCorridor, postToNodeFeed, type CorridorNode, type DiscPost } from './discussion.ts'
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
 import { decompress } from './compress.ts'
 
@@ -2121,6 +2122,100 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
   await scan()
 }
 
+// ─── discussions (lineage corridors) ────────────────────────────────
+let discAnchor: StoredToken | null = null // the held edition whose corridor is currently open
+
+/** One room per held EDITION collection (corridors are a lineage/replication feature); first held copy anchors it. */
+function discRooms(): StoredToken[] {
+  const seen = new Set<string>(); const rooms: StoredToken[] = []
+  for (const t of store.active()) {
+    if (t.kind !== 'edition' || seen.has(t.collectionId)) continue
+    seen.add(t.collectionId); rooms.push(t)
+  }
+  return rooms
+}
+
+function renderDiscRooms(): void {
+  const host = $('discRooms'); const thread = $('discThread')
+  discAnchor = null; thread.hidden = true; thread.innerHTML = ''; host.hidden = false
+  const rooms = discRooms()
+  if (rooms.length === 0) { host.innerHTML = '<p class="muted">No discussions yet — hold or publish an edition to join its lineage corridor.</p>'; return }
+  host.innerHTML = ''
+  for (const t of rooms) {
+    const row = document.createElement('button'); row.type = 'button'; row.className = 'disc-room'
+    row.innerHTML = `<span class="disc-room-name">${escapeHtml(t.collectionName ?? 'Collection')}</span><span class="disc-room-meta">enter ▸</span>`
+    row.onclick = () => void openDiscRoom(t)
+    host.append(row)
+  }
+}
+
+async function openDiscRoom(t: StoredToken): Promise<void> {
+  discAnchor = t
+  const host = $('discRooms'); const thread = $('discThread')
+  host.hidden = true; thread.hidden = false
+  thread.innerHTML =
+    `<div class="disc-head"><button class="secondary disc-back">← Rooms</button><h3>${escapeHtml(t.collectionName ?? 'Collection')}</h3><button class="secondary disc-reload">🔄</button></div>` +
+    '<div class="disc-compose"><textarea class="disc-text" rows="3" placeholder="Post to your line…"></textarea>' +
+    '<div class="disc-compose-row"><label class="muted" style="font-size:12px">Post to <select class="disc-target"></select></label>' +
+    '<button class="disc-send">Post</button><span class="disc-status muted" style="font-size:12px"></span></div></div>' +
+    '<div class="disc-feed"><p class="muted">Loading corridor…</p></div>'
+  thread.querySelector('.disc-back')!.addEventListener('click', () => renderDiscRooms())
+  thread.querySelector('.disc-reload')!.addEventListener('click', () => void loadDiscThread(t))
+  await loadDiscThread(t)
+}
+
+async function loadDiscThread(t: StoredToken): Promise<void> {
+  const thread = $('discThread')
+  const feedEl = thread.querySelector('.disc-feed') as HTMLElement
+  const targetEl = thread.querySelector('.disc-target') as HTMLSelectElement
+  const sendBtn = thread.querySelector('.disc-send') as HTMLButtonElement
+  const textEl = thread.querySelector('.disc-text') as HTMLTextAreaElement
+  const statusEl = thread.querySelector('.disc-status') as HTMLElement
+  feedEl.innerHTML = '<p class="muted">Loading corridor…</p>'
+  let result: { nodes: CorridorNode[]; posts: Array<DiscPost & { node: CorridorNode }> }
+  try { result = await readCorridor(provider, t.txId, t.outputIndex, t.collectionId) }
+  catch (e) { feedEl.innerHTML = `<p class="muted">Couldn’t load this corridor: ${escapeHtml((e as Error).message)}</p>`; return }
+  // Post targets: your line (self) + reply to any upline; the publisher can also post to everyone (root).
+  const iAmPublisher = t.publisherPubKeyHashHex === myPubKeyHash()
+  const opts: Array<{ node: CorridorNode; label: string }> = []
+  const selfNode = result.nodes.find(n => n.isSelf)
+  if (selfNode) opts.push({ node: selfNode, label: 'your line' })
+  for (const n of result.nodes) {
+    if (n.isRoot) { if (iAmPublisher) opts.push({ node: n, label: '📣 everyone (collection)' }); continue }
+    if (!n.isSelf) opts.push({ node: n, label: `⬆ reply to ${displayName(n.ownerPubKeyHex).name}` })
+  }
+  targetEl.innerHTML = opts.map((o, i) => `<option value="${i}">${escapeHtml(o.label)}</option>`).join('')
+  sendBtn.onclick = () => void (async () => {
+    const text = textEl.value.trim()
+    if (text === '') { statusEl.textContent = 'Write something first.'; return }
+    const target = opts[parseInt(targetEl.value || '0', 10)]?.node
+    if (target == null) { statusEl.textContent = 'No post target available.'; return }
+    sendBtn.disabled = true; statusEl.textContent = 'Posting…'
+    try {
+      await postToNodeFeed(provider, key, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias() })
+      textEl.value = ''; statusEl.textContent = '✅ Posted.'
+      setTimeout(() => { if (discAnchor === t) void loadDiscThread(t) }, 900)
+    } catch (e) { statusEl.textContent = `Post failed: ${(e as Error).message}`; sendBtn.disabled = false }
+  })()
+  renderDiscFeed(feedEl, result.posts)
+  if (result.posts.length) resolveAvatarsThen(result.posts.map(p => p.authorPubKeyHex), () => { if (discAnchor === t) renderDiscFeed(feedEl, result.posts) })
+}
+
+function renderDiscFeed(feedEl: HTMLElement, posts: Array<DiscPost & { node: CorridorNode }>): void {
+  if (posts.length === 0) { feedEl.innerHTML = '<p class="muted">No posts yet — be the first to post to your line.</p>'; return }
+  feedEl.innerHTML = ''
+  for (const p of posts) {
+    const badge = p.node.isRoot ? '<span class="disc-badge root">📣 everyone</span>'
+      : p.node.isSelf ? '<span class="disc-badge self">your line</span>'
+      : '<span class="disc-badge up">⬆ upline</span>'
+    const el = document.createElement('div'); el.className = 'disc-post'
+    el.innerHTML =
+      `<div class="disc-post-head">${nameChip(p.authorPubKeyHex)} ${badge}${p.sentAt ? ` · 🕒 ${escapeHtml(fmtTime(p.sentAt))}` : ''}</div>` +
+      `<div class="disc-post-text">${escapeHtml(p.text)}</div>`
+    feedEl.append(el)
+  }
+}
+
 /** Holder: pull announcements from the publishers of every collection you hold → newest-first feed. */
 async function onCheckUpdates(): Promise<void> {
   const host = $('updatesFeed')
@@ -2170,6 +2265,8 @@ function activateTab(name: string): void {
   document.querySelectorAll<HTMLElement>('.tab').forEach(t => t.classList.toggle('is-active', t.dataset.tab === name))
   document.querySelectorAll<HTMLElement>('.tabpanel').forEach(p => p.classList.toggle('is-active', p.id === `tab-${name}`))
   try { localStorage.setItem('p:activeTab', name) } catch { /* private mode — ignore */ }
+  // Populate the Discussions room list on open (unless a room is already open, so a reload of the tab keeps it).
+  if (name === 'discussions' && discAnchor == null) renderDiscRooms()
 }
 
 function initTabs(): void {
@@ -2207,6 +2304,7 @@ function init(): void {
   $('btnViewGrid').onclick = () => setNftView('grid')
   $('btnSortRecent').onclick = () => setNftSort('recent')
   $('btnSortPublisher').onclick = () => setNftSort('publisher')
+  $('btnDiscRefresh').onclick = () => { if (discAnchor != null) void loadDiscThread(discAnchor); else renderDiscRooms() }
   $('tokenModalClose').onclick = () => closeTokenModal()
   $('tokenModal').addEventListener('click', e => { if (e.target === $('tokenModal')) closeTokenModal() })
   // Any action button inside the detail modal navigates or mutates — hide the modal so it doesn't stack over
