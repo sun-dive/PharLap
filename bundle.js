@@ -20687,8 +20687,14 @@ Proceed?`
       setStatus(`\u{1F525} Burned. Reclaimed ${r2.reclaimSats.toLocaleString()} sats to your wallet. Tx ${short(r2.txId)}.`, "ok");
     } catch (e) {
       const msg = e.message;
-      const unconfirmed = /missing inputs/i.test(msg) || /raw TX fetch failed/i.test(msg);
-      setStatus(unconfirmed ? "Burn failed: this edition isn\u2019t confirmed on-chain yet. Wait for its transaction to confirm (usually a few minutes), then try again." : `Burn failed: ${msg}`, "error");
+      console.error(`[burn] failed for ${t.txId}:${t.outputIndex} \u2014`, msg);
+      if (/missing inputs|missingorspent/i.test(msg)) {
+        setStatus("Burn failed: the network can\u2019t spend this edition\u2019s UTXO \u2014 it\u2019s either not confirmed/propagated yet, or it has already been spent (moved or burned). If you just minted it, wait a few minutes and retry; otherwise tap Refresh to resync your holdings.", "error");
+      } else if (/raw TX fetch failed/i.test(msg)) {
+        setStatus("Burn failed: this edition\u2019s transaction isn\u2019t on-chain yet. Wait for it to confirm (usually a few minutes), then try again.", "error");
+      } else {
+        setStatus(`Burn failed: ${msg}`, "error");
+      }
     }
   }
   async function onSend(txId, outputIndex) {
