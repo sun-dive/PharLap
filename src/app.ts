@@ -12,8 +12,8 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
-import { parseEditionAny, parseEditionScriptV2 } from './covenant.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, broadcastV2Probe, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, claimGiftEdition, type EditionTerms } from './editionBuilder.ts'
+import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, type SellerNote } from './sellerNote.ts'
@@ -153,12 +153,15 @@ async function onMint(): Promise<void> {
 }
 
 // ─── editions (experimental covenant) ──────────────────────────────
+/** The refundable bond every new edition rides on (= the token UTXO value). Recoverable by burning. */
+const EDITION_BOND_SATS = 2100
+
 function ownTerms(): EditionTerms {
   return {
     publisherPubKeyHash: Hash.hash160(key.toPublicKey().encode(true) as number[]),
     publisherFeeSats: Math.max(0, parseInt(val('edPublisherFee') || '0', 10)),
     holderFeeSats: Math.max(0, parseInt(val('edHolderFee') || '0', 10)),
-    tokenSats: 1,
+    tokenSats: EDITION_BOND_SATS,
   }
 }
 
@@ -210,7 +213,7 @@ async function onMintEdition(): Promise<void> {
       tokenName: name, terms, mintCount: count, file, encrypt, description, cover,
       confirmSpend: total => confirm(
         `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ''}?\n\n` +
-        `This spends ${total.toLocaleString()} sats from your wallet (network fee + dust for ${count} edition${count > 1 ? 's' : ''}).\n\n` +
+        `This spends ${total.toLocaleString()} sats from your wallet — mostly a refundable ${EDITION_BOND_SATS.toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.\n\n` +
         `Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.\n\nProceed?`),
     })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
@@ -291,6 +294,23 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
     setStatus(`✅ Transferred. Tx ${short(r.txId)} — covenant re-created for the new owner.`, 'ok')
   } catch (e) {
     setStatus(`Transfer failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Burn an owned edition: owner-signed spend that destroys the token and reclaims its bond to your wallet. */
+async function onBurn(t: StoredToken): Promise<void> {
+  if (!t.lockHex) { setStatus('Missing edition script; cannot burn.', 'error'); return }
+  if (!confirm(
+    `Burn your edition of “${t.collectionName ?? 'this collection'}” and reclaim its ~${EDITION_BOND_SATS.toLocaleString()}-sat bond ` +
+    `(minus a small network fee) to your wallet?\n\n⚠ This DESTROYS the token permanently — it cannot be undone. Proceed?`)) return
+  setStatus('Burning edition (reclaiming the bond)…')
+  try {
+    const r = await burnEdition(provider, key, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex })
+    store.markSent(t.txId, t.outputIndex) // the token is destroyed
+    renderTokens()
+    setStatus(`🔥 Burned. Reclaimed ${r.reclaimSats.toLocaleString()} sats to your wallet. Tx ${short(r.txId)}.`, 'ok')
+  } catch (e) {
+    setStatus(`Burn failed: ${(e as Error).message}`, 'error')
   }
 }
 
@@ -809,6 +829,13 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
     sales.textContent = 'Sales page'; sales.className = 'secondary'
     sales.onclick = () => onOpenSalesPage(t)
     actions.append(replicate, xfer, view, sales, verify)
+    // 🔥 Burn — only for burn-capable (bonded) editions; reclaims the bond and destroys the token.
+    if (t.lockHex != null && editionSupportsBurn(Utils.toArray(t.lockHex, 'hex'))) {
+      const burn = document.createElement('button')
+      burn.textContent = '🔥 Burn'; burn.className = 'secondary'
+      burn.onclick = () => void onBurn(t)
+      actions.append(burn)
+    }
     if (iAmPublisher) {
       const bc = document.createElement('button')
       bc.textContent = '📣 Broadcast'; bc.className = 'secondary'
