@@ -308,7 +308,13 @@ async function onBurn(t: StoredToken): Promise<void> {
     renderTokens()
     setStatus(`🔥 Burned. Reclaimed ${r.reclaimSats.toLocaleString()} sats to your wallet. Tx ${short(r.txId)}.`, 'ok')
   } catch (e) {
-    setStatus(`Burn failed: ${(e as Error).message}`, 'error')
+    const msg = (e as Error).message
+    // "Missing inputs" / a raw-tx fetch 404 = the edition's creating tx hasn't confirmed (or been indexed) yet,
+    // so the network can't see the UTXO being spent. Explain the wait rather than show the bare node error.
+    const unconfirmed = /missing inputs/i.test(msg) || /raw TX fetch failed/i.test(msg)
+    setStatus(unconfirmed
+      ? 'Burn failed: this edition isn’t confirmed on-chain yet. Wait for its transaction to confirm (usually a few minutes), then try again.'
+      : `Burn failed: ${msg}`, 'error')
   }
 }
 

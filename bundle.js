@@ -16720,8 +16720,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const text = await resp.text();
         throw new Error(`Broadcast failed (${resp.status}): ${text}`);
       }
-      const txId = await resp.text();
-      return txId.replace(/"/g, "");
+      const txId = (await resp.text()).replace(/"/g, "");
+      this.txCache.set(txId, rawHex);
+      return txId;
     }
     // ── Raw Transactions ──────────────────────────────────────────
     async getRawTransaction(txId) {
@@ -20685,7 +20686,9 @@ Proceed?`
       renderTokens();
       setStatus(`\u{1F525} Burned. Reclaimed ${r2.reclaimSats.toLocaleString()} sats to your wallet. Tx ${short(r2.txId)}.`, "ok");
     } catch (e) {
-      setStatus(`Burn failed: ${e.message}`, "error");
+      const msg = e.message;
+      const unconfirmed = /missing inputs/i.test(msg) || /raw TX fetch failed/i.test(msg);
+      setStatus(unconfirmed ? "Burn failed: this edition isn\u2019t confirmed on-chain yet. Wait for its transaction to confirm (usually a few minutes), then try again." : `Burn failed: ${msg}`, "error");
     }
   }
   async function onSend(txId, outputIndex) {

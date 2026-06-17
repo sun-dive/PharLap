@@ -232,8 +232,11 @@ export class WalletProvider {
       const text = await resp.text()
       throw new Error(`Broadcast failed (${resp.status}): ${text}`)
     }
-    const txId = await resp.text()
-    return txId.replace(/"/g, '')
+    const txId = (await resp.text()).replace(/"/g, '')
+    // Cache the raw hex of what we just broadcast so a spend of one of its outputs (transfer / replicate /
+    // burn of a freshly-created edition) can be built immediately, without waiting for WoC to index the tx.
+    this.txCache.set(txId, rawHex)
+    return txId
   }
 
   // ── Raw Transactions ──────────────────────────────────────────
