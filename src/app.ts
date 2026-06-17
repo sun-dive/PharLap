@@ -326,6 +326,7 @@ async function onSendMessage(): Promise<void> {
   if (parts.length === 0) { setStatus('Write a message or attach a file first.', 'error'); return }
   setStatus(`Sending ${encrypt ? 'encrypted' : 'public'} message…`)
   try {
+    console.log('[alias-debug] SENDING with senderAlias =', JSON.stringify(getMyAlias()))
     const r = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt, senderAlias: getMyAlias() })
     ;($('msgText') as HTMLTextAreaElement).value = ''
     setStatus(`Message sent. Tx ${short(r.txId)}.`, 'ok')
@@ -364,6 +365,7 @@ async function onCheckMessages(): Promise<void> {
   setStatus('Checking for messages…')
   try {
     const msgs = await scanIncomingMessages(provider, key)
+    console.log('[alias-debug] scanned messages:', msgs.map(m => ({ from: m.senderPubKeyHex.slice(0, 12), senderAlias: m.senderAlias, height: m.height })))
     for (const m of msgs) if (m.senderAlias) rememberAlias(m.senderPubKeyHex, m.senderAlias)
     renderInbox(msgs)
     resolveAvatarsThen(msgs.map(m => m.senderPubKeyHex), () => renderInbox(lastInbox))
@@ -991,8 +993,9 @@ function setMyAlias(a: string): void { try { localStorage.setItem('p:myalias', a
 function rememberAlias(pubKeyHex: string, alias: string): void {
   if (alias === '') return
   const k = pubKeyHex.toLowerCase()
+  console.log('[alias-debug] rememberAlias', { key: k.slice(0, 12), incoming: alias, savedContact: contacts[k], pinned: pinned[k] === 1, seen: seenAliases[k] })
   if (contacts[k] != null) {
-    if (!pinned[k] && contacts[k] !== alias) { contacts[k] = alias; persist('p:contacts', contacts) } // follow rename
+    if (!pinned[k] && contacts[k] !== alias) { contacts[k] = alias; persist('p:contacts', contacts); console.log('[alias-debug] → followed rename to', alias) } // follow rename
     return
   }
   if (seenAliases[k] === alias) return
