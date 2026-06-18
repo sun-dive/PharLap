@@ -137,6 +137,8 @@
     .app-version { text-align:center; font-size:11px; color:var(--muted); margin:18px 0 8px; }
     .grid2[hidden] { display:none; } /* [hidden] alone loses to .grid2{display:grid}; this restores hiding */
     #seedPhrase.blurred { filter:blur(6px); }
+    .help-backup { border:1px solid #9e6a03; border-radius:10px; padding:12px 14px; margin:0 0 18px;
+      background:linear-gradient(180deg, rgba(158,106,3,.16), rgba(158,106,3,.05)); font-size:14px; line-height:1.5; }
     .seed-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
     .seed-word { background:#161b22; border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:14px; }
     .seed-word .seed-num { color:var(--muted); font-size:11px; margin-right:4px; }
@@ -549,6 +551,7 @@
 
     <section class="tabpanel" id="tab-help" role="tabpanel">
     <div class="card help">
+      <div class="help-backup">🔑 <b>First, back up your wallet.</b> Open the <b>Wallet</b> tab, reveal your <b>12-word seed phrase</b>, and write it down somewhere safe and private. It’s the only way to restore your wallet and funds on another device or after clearing your browser — and anyone who has it controls your wallet, so never share it.</div>
       <h3>What is SMART NFTs?</h3>
       <p>A self-custodial wallet for <b>publishing content as collectible editions on Bitcoin SV</b>. You publish
       something once; anyone with your link can buy their own copy in a single click. The rules — your publisher
