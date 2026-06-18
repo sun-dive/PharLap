@@ -174,15 +174,46 @@ function chosenBond(): number {
   return Math.max(1, parseInt(val('edBond') || String(EDITION_BOND_SATS), 10))
 }
 
+let feeMode: 'fixed' | 'pct' = 'fixed' // Publish pricing input mode (both mint plain v1 fixed fees)
+
+/** Resolve the fixed (publisher, holder) fees from the active Publish pricing mode. In percentage mode it's
+ *  a calculator: publisher fee = price × share, holder fee = the rest. Both floored at 1 sat (a 0-sat fee is
+ *  dust + leaves no sale signal). The minted covenant is always plain v1 fixed-fee. */
+function computeFees(): { publisherFeeSats: number; holderFeeSats: number } {
+  if (feeMode === 'pct') {
+    const price = Math.max(2, parseInt(val('edPrice') || '0', 10) || 0)
+    const pct = Math.min(100, Math.max(0, parseInt(val('edPubPct') || '0', 10) || 0))
+    const publisherFeeSats = Math.min(price - 1, Math.max(1, Math.round(price * pct / 100)))
+    return { publisherFeeSats, holderFeeSats: Math.max(1, price - publisherFeeSats) }
+  }
+  return {
+    publisherFeeSats: Math.max(1, parseInt(val('edPublisherFee') || '1', 10)),
+    holderFeeSats: Math.max(1, parseInt(val('edHolderFee') || '1', 10)),
+  }
+}
+
 function ownTerms(): EditionTerms {
   return {
     publisherPubKeyHash: Hash.hash160(key.toPublicKey().encode(true) as number[]),
-    // Floor at 1 sat: a 0-sat fee output is dust (risks rejection) and leaves the publisher/holder with no
-    // sale signal — the fee payment landing in their address is the only purchase notification.
-    publisherFeeSats: Math.max(1, parseInt(val('edPublisherFee') || '1', 10)),
-    holderFeeSats: Math.max(1, parseInt(val('edHolderFee') || '1', 10)),
+    ...computeFees(),
     tokenSats: chosenBond(),
   }
+}
+
+/** Toggle the Publish pricing input mode + refresh the percentage preview. */
+function setFeeMode(mode: 'fixed' | 'pct'): void {
+  feeMode = mode
+  $('btnFeeFixed').classList.toggle('active', mode === 'fixed')
+  $('btnFeePct').classList.toggle('active', mode === 'pct')
+  $('feeFixed').hidden = mode !== 'fixed'
+  $('feePct').hidden = mode !== 'pct'
+  updateFeePctPreview()
+}
+
+function updateFeePctPreview(): void {
+  if (feeMode !== 'pct') return
+  const f = computeFees()
+  $('edPctPreview').textContent = `→ Publisher ${f.publisherFeeSats.toLocaleString()} sat · Holder ${f.holderFeeSats.toLocaleString()} sat per copy`
 }
 
 function termsFromToken(t: StoredToken): EditionTerms {
@@ -2558,6 +2589,10 @@ function init(): void {
   $('btnRefresh').onclick = () => void refreshBalance()
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
+  $('btnFeeFixed').onclick = () => setFeeMode('fixed')
+  $('btnFeePct').onclick = () => setFeeMode('pct')
+  ;($('edPrice') as HTMLInputElement).addEventListener('input', updateFeePctPreview)
+  ;($('edPubPct') as HTMLInputElement).addEventListener('input', updateFeePctPreview)
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()
