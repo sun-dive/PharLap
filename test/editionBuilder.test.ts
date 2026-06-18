@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, LockingScript, Spend, Hash, Utils } from '@bsv/sdk'
 import {
   buildEditionGenesisTx, buildReplicateTx, buildReplicateV2Tx, buildEditionGenesisV2Tx, buildEditionTransferTx,
-  scanCollectionBuyers, type EditionUtxo, type EditionTerms,
+  scanCollectionBuyers, scanMySales, type EditionUtxo, type EditionTerms,
 } from '../src/editionBuilder.ts'
 import { buildEditionLockV2, p2pkhScript, parseEditionAny } from '../src/covenant.ts'
 import { readNoteFromTx } from '../src/sellerNote.ts'
@@ -114,6 +114,39 @@ test('scanCollectionBuyers: finds an UNCONFIRMED sale present only in getUtxos (
   const res = await scanCollectionBuyers(provider, { collectionId: TX1REF, publisherPubKeyHashHex: Utils.toHex(Hash.hash160(pub(publisher))) })
   assert.equal(res.buyers.length, 1)
   assert.equal(res.buyers[0].pubKeyHex, buyer.toPublicKey().toString())
+})
+
+test('scanMySales: creator sees ALL sales of their mint; reseller sees only their direct sales', async () => {
+  const b1 = PrivateKey.fromRandom(), b2 = PrivateKey.fromRandom()
+  // Genesis owned by the PUBLISHER (so they are also the source of the first resale).
+  const eu = (tx: Transaction, txId: string, vout: number): EditionUtxo =>
+    ({ txId, outputIndex: vout, satoshis: tx.outputs[vout].satoshis ?? 1, lockBytes: tx.outputs[vout].lockingScript.toBinary(), sourceTx: tx })
+  const genesis = await buildEditionGenesisTx({ key: publisher, funding: [faucet(publisher, 300000)], tx1Ref: TX1REF, terms, ownerPubKey: pub(publisher) })
+  const gVout = genesis.editionVouts[0]
+  const rep1 = await buildReplicateTx({ edition: eu(genesis.tx, genesis.txId, gVout), terms, buyerKey: b1, funding: [faucet(b1, 300000)] }) // b1 buys from publisher
+  const rep2 = await buildReplicateTx({ edition: eu(rep1.tx, rep1.txId, 1), terms, buyerKey: b2, funding: [faucet(b2, 300000)] })       // b2 buys from b1
+  const byId: Record<string, Transaction> = { [genesis.txId]: genesis.tx, [rep1.txId]: rep1.tx, [rep2.txId]: rep2.tx }
+  const provider = {
+    getAddressHistory: async () => [rep1.txId, rep2.txId].map(txId => ({ txId, blockHeight: 100 })),
+    getUtxos: async () => [],
+    getSourceTransaction: async (id: string) => byId[id] ?? (() => { throw new Error(`no tx ${id}`) })(),
+  } as unknown as Parameters<typeof scanMySales>[0]
+
+  // Publisher's view: creator = both sales of the mint; reseller = only rep1 (publisher was the source).
+  const pubSales = await scanMySales(provider, { myPubKeyHex: publisher.toPublicKey().toString(), myHash: Utils.toHex(Hash.hash160(pub(publisher))) })
+  assert.equal(pubSales.asCreator.length, 1)
+  assert.equal(pubSales.asCreator[0].sales, 2)            // both b1 and b2 replications of my collection
+  assert.equal(pubSales.asCreator[0].buyers.length, 2)
+  assert.equal(pubSales.asReseller.length, 1)
+  assert.equal(pubSales.asReseller[0].sales, 1)           // only rep1 (I was the cloning source)
+  assert.equal(pubSales.asReseller[0].buyers[0].pubKeyHex, b1.toPublicKey().toString())
+
+  // b1's view: not a creator; reseller of one direct sale (rep2, b1 was the source).
+  const b1Sales = await scanMySales(provider, { myPubKeyHex: b1.toPublicKey().toString(), myHash: Utils.toHex(Hash.hash160(pub(b1))) })
+  assert.equal(b1Sales.asCreator.length, 0)
+  assert.equal(b1Sales.asReseller.length, 1)
+  assert.equal(b1Sales.asReseller[0].sales, 1)
+  assert.equal(b1Sales.asReseller[0].buyers[0].pubKeyHex, b2.toPublicKey().toString())
 })
 
 test('replicate with a seller-note echoes a NOTE output to the buyer, covenant still valid', async () => {

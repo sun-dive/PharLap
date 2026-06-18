@@ -18960,6 +18960,71 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const buyers = [...byBuyer.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity));
     return { buyers, scanned: entries.length, capped };
   }
+  async function scanMySales(provider2, params) {
+    const me = params.myPubKeyHex.toLowerCase();
+    const myHash = params.myHash.toLowerCase();
+    const cap = params.maxTxs ?? 500;
+    const candidates = /* @__PURE__ */ new Map();
+    let capped = false;
+    try {
+      let hist = await provider2.getAddressHistory();
+      if (hist.length > cap) {
+        capped = true;
+        hist = hist.slice(hist.length - cap);
+      }
+      for (const h of hist) candidates.set(h.txId, h.blockHeight || 0);
+    } catch {
+    }
+    try {
+      for (const u of await provider2.getUtxos()) if (!candidates.has(u.txId)) candidates.set(u.txId, 0);
+    } catch {
+    }
+    const entries = [...candidates.entries()];
+    const creator = /* @__PURE__ */ new Map();
+    const reseller = /* @__PURE__ */ new Map();
+    const bump = (g, cid, buyerHex, h) => {
+      let m = g.get(cid);
+      if (m == null) {
+        m = /* @__PURE__ */ new Map();
+        g.set(cid, m);
+      }
+      const k = buyerHex.toLowerCase();
+      const rec = m.get(k);
+      if (rec != null) {
+        rec.count++;
+        if (h) {
+          rec.lastHeight = Math.max(rec.lastHeight, h);
+          rec.firstHeight = rec.firstHeight ? Math.min(rec.firstHeight, h) : h;
+        }
+      } else m.set(k, { pubKeyHex: buyerHex, count: 1, firstHeight: h, lastHeight: h });
+    };
+    let done = 0;
+    for (const [txId, blockHeight] of entries) {
+      params.onProgress?.(done, entries.length);
+      done++;
+      let tx;
+      try {
+        tx = await provider2.getSourceTransaction(txId);
+      } catch {
+        continue;
+      }
+      const ed = tx.outputs[1] != null ? parseEditionAny(tx.outputs[1].lockingScript) : null;
+      if (ed == null) continue;
+      const buyerHex = ed.ownerPubKeyHex;
+      const publisherHash = utils_exports.toHex(ed.terms.publisherPubKeyHash).toLowerCase();
+      if (utils_exports.toHex(Hash_exports.hash160(utils_exports.toArray(buyerHex, "hex"))).toLowerCase() === publisherHash) continue;
+      const h = blockHeight || 0;
+      if (publisherHash === myHash) bump(creator, ed.tx1RefHex, buyerHex, h);
+      const source = tx.outputs[0] != null ? parseEditionAny(tx.outputs[0].lockingScript) : null;
+      if (source != null && source.ownerPubKeyHex.toLowerCase() === me) bump(reseller, ed.tx1RefHex, buyerHex, h);
+    }
+    params.onProgress?.(entries.length, entries.length);
+    const toGroups = (g) => [...g.entries()].map(([collectionId, m]) => {
+      const buyers = [...m.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity));
+      return { collectionId, sales: buyers.reduce((s2, b) => s2 + b.count, 0), buyers };
+    }).sort((a, b) => b.sales - a.sales);
+    return { asCreator: toGroups(creator), asReseller: toGroups(reseller), scanned: entries.length, capped };
+  }
 
   // src/transfer.ts
   async function buildTransferTx(opts) {
@@ -23044,6 +23109,117 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     refreshBtn.onclick = () => void scan();
     await scan();
   }
+  async function onSalesDashboard() {
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = '<div class="modal-box gift-modal-box"><div class="modal-head"><span>\u{1F4CA} Sales</span><span class="row" style="gap:6px"><button class="secondary sales-refresh">\u{1F504} Refresh</button><button class="secondary sales-close">\u2715 Close</button></span></div><p class="sales-status muted" style="font-size:12px">Scanning your sales\u2026</p><div class="sales-body"></div><p class="muted" style="font-size:11px;margin-top:10px">Sales at point of purchase (replications). Onward transfers aren\u2019t visible, so buyer lists are "who bought," not current owners.</p></div>';
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector(".sales-close")?.addEventListener("click", close);
+    document.body.append(overlay);
+    const statusEl = overlay.querySelector(".sales-status");
+    const bodyEl = overlay.querySelector(".sales-body");
+    const refreshBtn = overlay.querySelector(".sales-refresh");
+    const scan = async () => {
+      refreshBtn.disabled = true;
+      bodyEl.innerHTML = "";
+      statusEl.textContent = "Scanning your sales\u2026";
+      try {
+        const res = await scanMySales(provider, {
+          myPubKeyHex: pubKeyHex,
+          myHash: myPubKeyHash(),
+          onProgress: (d, t) => {
+            statusEl.textContent = `Scanning your sales\u2026 ${d}/${t}`;
+          }
+        });
+        const cids = [...new Set([...res.asCreator, ...res.asReseller].map((g) => g.collectionId))];
+        const names = /* @__PURE__ */ new Map();
+        await Promise.all(cids.map(async (c) => {
+          try {
+            names.set(c, await resolveCollectionName(c));
+          } catch {
+            names.set(c, short(c));
+          }
+        }));
+        renderSales(res, names);
+        const allKeys = [...res.asCreator, ...res.asReseller].flatMap((g) => g.buyers.map((b) => b.pubKeyHex));
+        if (allKeys.length) resolveAvatarsThen(allKeys, () => {
+          if (document.body.contains(overlay)) renderSales(res, names);
+        });
+      } catch (e) {
+        statusEl.textContent = `Scan failed: ${e.message}`;
+      } finally {
+        refreshBtn.disabled = false;
+      }
+    };
+    const renderSales = (res, names) => {
+      const totalCreator = res.asCreator.reduce((s2, g) => s2 + g.sales, 0);
+      const totalReseller = res.asReseller.reduce((s2, g) => s2 + g.sales, 0);
+      statusEl.textContent = `${totalCreator} sale${totalCreator === 1 ? "" : "s"} of your mints \xB7 ${totalReseller} direct resale${totalReseller === 1 ? "" : "s"}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}`;
+      bodyEl.innerHTML = "";
+      bodyEl.append(salesSection("\u{1F4E4} As creator \u2014 sales of collections you publish", res.asCreator, names, "No sales of your mints yet."));
+      bodyEl.append(salesSection("\u{1F501} As reseller \u2014 your direct resales", res.asReseller, names, "You haven\u2019t resold a copy yet."));
+    };
+    refreshBtn.onclick = () => void scan();
+    await scan();
+  }
+  function salesSection(title, groups, names, empty) {
+    const sec = document.createElement("div");
+    sec.className = "token-section";
+    const head = document.createElement("div");
+    head.className = "token-section-head";
+    head.style.cursor = "default";
+    head.innerHTML = `<span class="token-section-label">${title}</span> <span class="count">${groups.length}</span>`;
+    sec.append(head);
+    if (groups.length === 0) {
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.style.fontSize = "12px";
+      p.textContent = empty;
+      sec.append(p);
+      return sec;
+    }
+    for (const g of groups) {
+      const name = names.get(g.collectionId) ?? short(g.collectionId);
+      const card2 = document.createElement("div");
+      card2.className = "sales-group";
+      const gh = document.createElement("button");
+      gh.type = "button";
+      gh.className = "sales-group-head";
+      gh.innerHTML = `<span class="chev">\u25B8</span> <span class="sales-group-name">${escapeHtml(name)}</span><span class="sales-group-meta">${g.sales} sale${g.sales === 1 ? "" : "s"} \xB7 ${g.buyers.length} buyer${g.buyers.length === 1 ? "" : "s"}</span>`;
+      const list = document.createElement("div");
+      list.className = "buyers-list";
+      list.hidden = true;
+      const msgAll = document.createElement("button");
+      msgAll.className = "secondary";
+      msgAll.style.margin = "6px 0";
+      msgAll.textContent = `\u2709 Message all ${g.buyers.length}`;
+      msgAll.onclick = () => openCompose(g.buyers.map((b) => b.pubKeyHex), { who: `${g.buyers.length} buyers`, product: name, recipientRole: "buyer" });
+      list.append(msgAll);
+      for (const b of g.buyers) {
+        const row = document.createElement("div");
+        row.className = "buyer-row";
+        const who = document.createElement("div");
+        who.className = "buyer-who";
+        who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">\xD7${b.count}</span>` : ""}`;
+        const msg = document.createElement("button");
+        msg.className = "secondary";
+        msg.textContent = "\u2709 Message";
+        msg.onclick = () => composeTo(b.pubKeyHex, "this buyer", { product: name, recipientRole: "buyer" });
+        row.append(who, msg);
+        list.append(row);
+      }
+      gh.onclick = () => {
+        list.hidden = !list.hidden;
+        gh.querySelector(".chev").textContent = list.hidden ? "\u25B8" : "\u25BE";
+      };
+      card2.append(gh, list);
+      sec.append(card2);
+    }
+    return sec;
+  }
   var discAnchor = null;
   function discRooms() {
     const seen = /* @__PURE__ */ new Set();
@@ -23270,6 +23446,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
       if (discAnchor != null) void loadDiscThread(discAnchor);
       else renderDiscRooms();
     };
+    $("btnSales").onclick = () => void onSalesDashboard();
     $("tokenModalClose").onclick = () => closeTokenModal();
     $("tokenModal").addEventListener("click", (e) => {
       if (e.target === $("tokenModal")) closeTokenModal();

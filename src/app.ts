@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, scanCollectionBuyers, wocScriptHash, type EditionTerms, type BuyerRecord } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type BuyerRecord, type MySales, type SalesGroup } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -2207,6 +2207,87 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
   await scan()
 }
 
+/** 📊 Sales dashboard: one scan of your address history → all your sales, both as creator (every sale of a
+ *  collection you publish) and as reseller (your direct resales), grouped per collection. */
+async function onSalesDashboard(): Promise<void> {
+  const overlay = document.createElement('div')
+  overlay.className = 'modal'
+  overlay.innerHTML =
+    '<div class="modal-box gift-modal-box">' +
+    '<div class="modal-head"><span>📊 Sales</span><span class="row" style="gap:6px">' +
+    '<button class="secondary sales-refresh">🔄 Refresh</button><button class="secondary sales-close">✕ Close</button></span></div>' +
+    '<p class="sales-status muted" style="font-size:12px">Scanning your sales…</p>' +
+    '<div class="sales-body"></div>' +
+    '<p class="muted" style="font-size:11px;margin-top:10px">Sales at point of purchase (replications). Onward transfers aren’t visible, so buyer lists are "who bought," not current owners.</p>' +
+    '</div>'
+  const close = (): void => overlay.remove()
+  overlay.addEventListener('click', e => { if (e.target === overlay) close() })
+  overlay.querySelector('.sales-close')?.addEventListener('click', close)
+  document.body.append(overlay)
+  const statusEl = overlay.querySelector('.sales-status') as HTMLElement
+  const bodyEl = overlay.querySelector('.sales-body') as HTMLElement
+  const refreshBtn = overlay.querySelector('.sales-refresh') as HTMLButtonElement
+
+  const scan = async (): Promise<void> => {
+    refreshBtn.disabled = true; bodyEl.innerHTML = ''; statusEl.textContent = 'Scanning your sales…'
+    try {
+      const res = await scanMySales(provider, { myPubKeyHex: pubKeyHex, myHash: myPubKeyHash(),
+        onProgress: (d, t) => { statusEl.textContent = `Scanning your sales… ${d}/${t}` } })
+      // Resolve collection names up front (cached), then render.
+      const cids = [...new Set([...res.asCreator, ...res.asReseller].map(g => g.collectionId))]
+      const names = new Map<string, string>()
+      await Promise.all(cids.map(async c => { try { names.set(c, await resolveCollectionName(c)) } catch { names.set(c, short(c)) } }))
+      renderSales(res, names)
+      const allKeys = [...res.asCreator, ...res.asReseller].flatMap(g => g.buyers.map(b => b.pubKeyHex))
+      if (allKeys.length) resolveAvatarsThen(allKeys, () => { if (document.body.contains(overlay)) renderSales(res, names) })
+    } catch (e) { statusEl.textContent = `Scan failed: ${(e as Error).message}` } finally { refreshBtn.disabled = false }
+  }
+  const renderSales = (res: MySales, names: Map<string, string>): void => {
+    const totalCreator = res.asCreator.reduce((s, g) => s + g.sales, 0)
+    const totalReseller = res.asReseller.reduce((s, g) => s + g.sales, 0)
+    statusEl.textContent = `${totalCreator} sale${totalCreator === 1 ? '' : 's'} of your mints · ${totalReseller} direct resale${totalReseller === 1 ? '' : 's'}${res.capped ? ` · most recent ${res.scanned} txs` : ''}`
+    bodyEl.innerHTML = ''
+    bodyEl.append(salesSection('📤 As creator — sales of collections you publish', res.asCreator, names, 'No sales of your mints yet.'))
+    bodyEl.append(salesSection('🔁 As reseller — your direct resales', res.asReseller, names, 'You haven’t resold a copy yet.'))
+  }
+  refreshBtn.onclick = () => void scan()
+  await scan()
+}
+
+/** A collapsible section of sales groups (collections), each expanding to its buyer list. */
+function salesSection(title: string, groups: SalesGroup[], names: Map<string, string>, empty: string): HTMLElement {
+  const sec = document.createElement('div'); sec.className = 'token-section'
+  const head = document.createElement('div'); head.className = 'token-section-head'; head.style.cursor = 'default'
+  head.innerHTML = `<span class="token-section-label">${title}</span> <span class="count">${groups.length}</span>`
+  sec.append(head)
+  if (groups.length === 0) {
+    const p = document.createElement('p'); p.className = 'muted'; p.style.fontSize = '12px'; p.textContent = empty; sec.append(p); return sec
+  }
+  for (const g of groups) {
+    const name = names.get(g.collectionId) ?? short(g.collectionId)
+    const card = document.createElement('div'); card.className = 'sales-group'
+    const gh = document.createElement('button'); gh.type = 'button'; gh.className = 'sales-group-head'
+    gh.innerHTML = `<span class="chev">▸</span> <span class="sales-group-name">${escapeHtml(name)}</span>` +
+      `<span class="sales-group-meta">${g.sales} sale${g.sales === 1 ? '' : 's'} · ${g.buyers.length} buyer${g.buyers.length === 1 ? '' : 's'}</span>`
+    const list = document.createElement('div'); list.className = 'buyers-list'; list.hidden = true
+    const msgAll = document.createElement('button'); msgAll.className = 'secondary'; msgAll.style.margin = '6px 0'
+    msgAll.textContent = `✉ Message all ${g.buyers.length}`
+    msgAll.onclick = () => openCompose(g.buyers.map(b => b.pubKeyHex), { who: `${g.buyers.length} buyers`, product: name, recipientRole: 'buyer' })
+    list.append(msgAll)
+    for (const b of g.buyers) {
+      const row = document.createElement('div'); row.className = 'buyer-row'
+      const who = document.createElement('div'); who.className = 'buyer-who'
+      who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">×${b.count}</span>` : ''}`
+      const msg = document.createElement('button'); msg.className = 'secondary'; msg.textContent = '✉ Message'
+      msg.onclick = () => composeTo(b.pubKeyHex, 'this buyer', { product: name, recipientRole: 'buyer' })
+      row.append(who, msg); list.append(row)
+    }
+    gh.onclick = () => { list.hidden = !list.hidden; gh.querySelector('.chev')!.textContent = list.hidden ? '▸' : '▾' }
+    card.append(gh, list); sec.append(card)
+  }
+  return sec
+}
+
 // ─── discussions (lineage corridors) ────────────────────────────────
 let discAnchor: StoredToken | null = null // the held edition whose corridor is currently open
 
@@ -2413,6 +2494,7 @@ function init(): void {
   $('btnSortRecent').onclick = () => setNftSort('recent')
   $('btnSortPublisher').onclick = () => setNftSort('publisher')
   $('btnDiscRefresh').onclick = () => { if (discAnchor != null) void loadDiscThread(discAnchor); else renderDiscRooms() }
+  $('btnSales').onclick = () => void onSalesDashboard()
   $('tokenModalClose').onclick = () => closeTokenModal()
   $('tokenModal').addEventListener('click', e => { if (e.target === $('tokenModal')) closeTokenModal() })
   // Any action button inside the detail modal navigates or mutates — hide the modal so it doesn't stack over
