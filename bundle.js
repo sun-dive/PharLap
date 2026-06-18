@@ -18715,6 +18715,42 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     return { nextIndex, live, claimedCount };
   }
+  async function sweepGiftVouchers(provider2, publisherKey, live, opts) {
+    const tx = new Transaction();
+    let inputs = 0, swept = 0;
+    for (const v of live) {
+      const k = PrivateKey.fromWif(v.wif);
+      const script = p2pkhScript(Hash_exports.hash160(k.toPublicKey().encode(true)));
+      let utxos = [];
+      try {
+        utxos = await provider2.getUnspentByScriptHash(wocScriptHash(script));
+      } catch {
+        continue;
+      }
+      let any = false;
+      for (const u of utxos) {
+        let src;
+        try {
+          src = await provider2.getSourceTransaction(u.txId);
+        } catch {
+          continue;
+        }
+        tx.addInput({ sourceTransaction: src, sourceOutputIndex: u.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(k) });
+        inputs++;
+        any = true;
+      }
+      if (any) swept++;
+    }
+    if (inputs === 0) return null;
+    tx.addOutput({ lockingScript: new P2PKH().lock(publisherKey.toAddress()), change: true });
+    await tx.fee(new SatoshisPerKilobyte(opts?.feePerKb ?? DEFAULT_FEE_PER_KB));
+    await tx.sign();
+    await provider2.broadcast(tx.toHex());
+    const txId = tx.id("hex");
+    const reclaimedSats = tx.outputs[0]?.satoshis ?? 0;
+    provider2.registerPendingTx(txId, [], reclaimedSats > 0 ? { outputIndex: 0, satoshis: reclaimedSats } : void 0);
+    return { swept, reclaimedSats, txId };
+  }
   async function claimGiftEdition(provider2, ownerKey, params) {
     const giftKey = PrivateKey.fromWif(params.giftWif);
     const giftScript = p2pkhScript(Hash_exports.hash160(giftKey.toPublicKey().encode(true)));
@@ -21717,11 +21753,15 @@ It's posted to your own address and spends a small network fee. Proceed?`
         links.textContent = "\u{1F4E5} Gift links";
         links.className = "secondary";
         links.onclick = () => void onViewGiftLinks(t);
+        const reclaim = document.createElement("button");
+        reclaim.textContent = "\u267B Reclaim gifts";
+        reclaim.className = "secondary";
+        reclaim.onclick = () => void onReclaimGifts(t);
         const buyers = document.createElement("button");
         buyers.textContent = "\u{1F465} Buyers";
         buyers.className = "secondary";
         buyers.onclick = () => void onViewBuyers(t);
-        actions.append(bc, gift, links, buyers);
+        actions.append(bc, gift, links, reclaim, buyers);
       }
     } else {
       const send = document.createElement("button");
@@ -22987,6 +23027,37 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
       setStatus(`Recovered ${links.length} unclaimed gift link(s)${scan.claimedCount > 0 ? ` (${scan.claimedCount} already claimed)` : ""}.`, "ok");
     } catch (e) {
       setStatus(`Recover gift links failed: ${e.message}`, "error");
+    }
+  }
+  async function onReclaimGifts(t) {
+    setStatus("Scanning for unclaimed gift links\u2026");
+    let scan;
+    try {
+      scan = await scanGiftVouchers(provider, key, t.collectionId);
+    } catch (e) {
+      setStatus(`Scan failed: ${e.message}`, "error");
+      return;
+    }
+    if (scan.live.length === 0) {
+      setStatus(scan.claimedCount > 0 ? `Nothing to reclaim \u2014 all ${scan.claimedCount} gift links were claimed.` : "No unclaimed gift links to reclaim.", "ok");
+      return;
+    }
+    if (!confirm(
+      `Reclaim ${scan.live.length} UNCLAIMED gift link${scan.live.length > 1 ? "s" : ""} for \u201C${t.collectionName ?? "this collection"}\u201D?
+
+This INVALIDATES those links and returns their pre-funded sats to your wallet (minus the network fee). Already-claimed gifts are unaffected.`
+    )) return;
+    setStatus("Reclaiming unclaimed gifts\u2026");
+    try {
+      const r2 = await sweepGiftVouchers(provider, key, scan.live);
+      if (r2 == null) {
+        setStatus("Nothing to reclaim \u2014 the links may have just been claimed.", "ok");
+        return;
+      }
+      setStatus(`\u267B Reclaimed ${r2.swept} unclaimed gift${r2.swept > 1 ? "s" : ""} \u2014 ${r2.reclaimedSats.toLocaleString()} sats back to your wallet. Tx ${short(r2.txId)}.`, "ok");
+      void refreshBalance();
+    } catch (e) {
+      setStatus(`Reclaim failed: ${e.message}`, "error");
     }
   }
   function showGiftLinksModal(title, links) {
