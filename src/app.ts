@@ -8,7 +8,7 @@
  * verification via verifyTokenLineage. Tokens are tracked locally (PharLapStore) since PushDrop
  * outputs are not WoC-address-indexed.
  */
-import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
+import { PrivateKey, Utils, Hash, LockingScript, Mnemonic, HD } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
@@ -65,14 +65,33 @@ function setStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
 }
 
 // ─── wallet ─────────────────────────────────────────────────────────
+const MNEMONIC_KEY = 'p:wallet:mnemonic'
+// Fixed BIP-44 path (236 = BSV coin type). MUST never change — restores derive the same key from it.
+const DERIVATION_PATH = "m/44'/236'/0'/0/0"
+
+/** Derive the wallet private key from a BIP-39 phrase (BIP-32 at the fixed path). Throws on an invalid phrase. */
+function keyFromMnemonic(phrase: string, passphrase = ''): PrivateKey {
+  const m = phrase.trim().replace(/\s+/g, ' ')
+  if (!Mnemonic.isValid(m)) throw new Error('invalid seed phrase')
+  return HD.fromSeed(Mnemonic.fromString(m).toSeed(passphrase)).derive(DERIVATION_PATH).privKey
+}
+
+/** Make a fresh seed wallet: a 12-word phrase + the key it derives. */
+function newSeedWallet(): { mnemonic: string; key: PrivateKey } {
+  const mnemonic = Mnemonic.fromRandom(128).toString() // 128 bits = 12 words
+  return { mnemonic, key: keyFromMnemonic(mnemonic) }
+}
+
 function loadKey(): PrivateKey {
   const wif = localStorage.getItem(WIF_KEY)
   if (wif) {
     try { return PrivateKey.fromWif(wif) } catch { /* fall through to new */ }
   }
-  const k = PrivateKey.fromRandom()
-  localStorage.setItem(WIF_KEY, k.toWif())
-  return k
+  // First run → a seed-phrase wallet (so new installs have a recoverable phrase), persisting both.
+  const { mnemonic, key } = newSeedWallet()
+  localStorage.setItem(WIF_KEY, key.toWif())
+  localStorage.setItem(MNEMONIC_KEY, mnemonic)
+  return key
 }
 
 function useKey(k: PrivateKey): void {
@@ -89,8 +108,11 @@ function useKey(k: PrivateKey): void {
  * and (on a WIF restore) rebuild this wallet's holdings from chain — the WIF + chain are the source of
  * truth, so purchases recover on any device. A fresh random wallet has nothing to recover.
  */
-function switchWallet(k: PrivateKey, recover: boolean): void {
+function switchWallet(k: PrivateKey, recover: boolean, mnemonic?: string): void {
   localStorage.setItem(WIF_KEY, k.toWif())
+  // A seed-derived wallet keeps its phrase; a raw-WIF import has none, so clear any stale phrase.
+  if (mnemonic != null && mnemonic !== '') localStorage.setItem(MNEMONIC_KEY, mnemonic)
+  else localStorage.removeItem(MNEMONIC_KEY)
   store.clear()
   useKey(k)
   renderTokens()
@@ -111,13 +133,47 @@ function renderWallet(): void {
   const mine = document.getElementById('myIdenticon')
   if (mine) mine.innerHTML = avatarHtml(pubKeyHex, 22) // your own avatar (or identicon)
   ;($('wif') as HTMLInputElement).value = key.toWif()
+  const seedEl = document.getElementById('seedPhrase') as HTMLTextAreaElement | null
+  if (seedEl != null) seedEl.value = localStorage.getItem(MNEMONIC_KEY) ?? '' // empty → placeholder (WIF-imported)
   hideWif() // re-mask on every wallet (re)load so a switched-in key is never left exposed
+  hideSeed()
 }
 
 /** Mask the WIF input and reset the toggle to "Show". */
 function hideWif(): void {
   ;($('wif') as HTMLInputElement).type = 'password'
   $('btnWifShow').textContent = '👁 Show'
+}
+
+/** Seed phrase reveal is a CSS blur toggle (a textarea can't be type=password). Re-blur on every wallet load. */
+function hideSeed(): void {
+  const el = document.getElementById('seedPhrase'); const btn = document.getElementById('btnSeedShow')
+  if (el != null) el.classList.add('blurred')
+  if (btn != null) btn.textContent = '👁 Reveal'
+}
+function toggleSeed(): void {
+  const el = document.getElementById('seedPhrase'); const btn = document.getElementById('btnSeedShow') as HTMLButtonElement | null
+  if (el == null || btn == null) return
+  const blurred = el.classList.toggle('blurred')
+  btn.textContent = blurred ? '👁 Reveal' : '🙈 Hide'
+}
+
+/** Force the backup moment when a new seed wallet is created: show the 12 words, numbered, with a warning. */
+function showSeedModal(mnemonic: string): void {
+  const words = mnemonic.split(' ')
+  const overlay = document.createElement('div'); overlay.className = 'modal'
+  overlay.innerHTML =
+    '<div class="modal-box" style="max-width:460px">' +
+    '<div class="modal-head"><span>🔑 Your new seed phrase</span><button class="secondary seed-close">✕ Close</button></div>' +
+    '<p class="muted" style="font-size:13px;margin:0 0 10px">Write these 12 words down, in order, and keep them secret &amp; safe. <b>Anyone with them controls this wallet</b>, and if you lose them with no backup it <b>cannot be recovered</b>.</p>' +
+    `<div class="seed-grid">${words.map((w, i) => `<div class="seed-word"><span class="seed-num">${i + 1}</span> ${escapeHtml(w)}</div>`).join('')}</div>` +
+    '<div class="row" style="margin-top:12px"><button class="seed-copy">Copy phrase</button><button class="secondary seed-done">I’ve written it down</button></div>' +
+    '</div>'
+  const close = (): void => overlay.remove()
+  overlay.querySelector('.seed-close')?.addEventListener('click', close)
+  overlay.querySelector('.seed-done')?.addEventListener('click', close)
+  overlay.querySelector('.seed-copy')?.addEventListener('click', () => void navigator.clipboard?.writeText(mnemonic))
+  document.body.append(overlay)
 }
 
 async function refreshBalance(): Promise<void> {
@@ -2618,15 +2674,27 @@ function init(): void {
   $('btnCfgRestore').onclick = () => void onConfigRestore()
   $('btnCheckUpdates').onclick = () => void onCheckUpdates()
   $('btnNewWallet').onclick = () => {
-    if (!confirm('Replace the current wallet with a new random key? Your current key is in the WIF box — back it up first.')) return
-    switchWallet(PrivateKey.fromRandom(), false)
-    setStatus('New wallet created.', 'ok')
+    if (!confirm('Replace the current wallet with a new one? Back up the current wallet first (its seed phrase / WIF is above) — it will be replaced.')) return
+    const { mnemonic, key } = newSeedWallet()
+    switchWallet(key, false, mnemonic)
+    setStatus('New wallet created — back up your seed phrase!', 'ok')
+    showSeedModal(mnemonic) // force the backup moment
   }
   $('btnRestore').onclick = () => {
     let k: PrivateKey
     try { k = PrivateKey.fromWif(val('restoreWif')) } catch { setStatus('Invalid WIF.', 'error'); return }
-    switchWallet(k, true) // recover this wallet's purchases from chain
+    switchWallet(k, true) // WIF import has no phrase; recover purchases from chain
   }
+  $('btnRestoreSeed').onclick = () => {
+    let k: PrivateKey
+    const phrase = val('restoreSeed').trim().replace(/\s+/g, ' ')
+    try { k = keyFromMnemonic(phrase) } catch { setStatus('Invalid seed phrase — check the words and order.', 'error'); return }
+    switchWallet(k, true, phrase) // recover purchases from chain + keep the phrase
+    ;($('restoreSeed') as HTMLInputElement).value = ''
+    setStatus('Wallet restored from seed phrase — recovering from chain…', 'ok')
+  }
+  $('btnSeedShow').onclick = () => toggleSeed()
+  $('btnSeedCopy').onclick = () => void navigator.clipboard?.writeText((($('seedPhrase') as HTMLTextAreaElement).value))
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)
   $('btnCopyAddr').onclick = () => void navigator.clipboard?.writeText(address)
   $('btnQrAddr').onclick = () => showQrModal('Receive address — BSV only', address)

@@ -381,8 +381,9 @@ on-chain footprint.
 
 ## Recovering on a new device
 
-The wallet is **self-custodial**: the local list of tokens is just a **cache**, and the **WIF private key
-plus the chain are the source of truth**. Paste your WIF into **Restore from WIF** on any browser or
+The wallet is **self-custodial**: the local list of tokens is just a **cache**, and the **private key
+plus the chain are the source of truth**. New wallets are created from a **BIP-39 12-word seed phrase**
+(BIP-32 path `m/44'/236'/0'/0/0`); back up the phrase (or the equivalent **WIF**) and restore from either. Paste your WIF into **Restore from WIF** on any browser or
 device and your holdings rebuild from chain — including each one's captured note and bonus. (A seller's
 published notes resolve from chain on demand too.) Editions you've already sold or transferred are left
 out; only your current, live holdings come back. No accounts, no server, nothing to lose but the key
