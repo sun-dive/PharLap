@@ -544,34 +544,64 @@
         <li><b>New wallet</b> — makes a fresh key (back up the current WIF first — it gets replaced).</li>
       </ol>
 
+      <h4>🪪 Identity &amp; contacts</h4>
+      <p class="help-sub">Make keys human — names, faces, and a recoverable address book.</p>
+      <ul>
+        <li><b>Your alias</b> — set <b>@you</b>; it rides with your messages/posts. Aliases aren't unique (the pubkey is the real identity — hover any name to see it), and every key also gets a unique <b>identicon</b> so a faked name looks different.</li>
+        <li><b>Profile</b> — publish an alias + small <b>avatar</b> once; others resolve your name + face by key.</li>
+        <li><b>📇 Contacts</b> — save, rename and confirm people; your labels win over self-claimed names.</li>
+        <li><b>☁ Back up config</b> — posts an <b>encrypted-to-you</b> copy of your contacts + alias + prefs to your own address; it auto-restores (and merges, newest-wins) when you <b>Restore from WIF</b> on a new device. Note: deletes don't sync yet.</li>
+      </ul>
+
       <h4>📤 Publish</h4>
       <p class="help-sub">Create editions of your content for anyone to buy.</p>
       <ol>
         <li>Enter a <b>collection name</b> and <b>description</b>, and add a <b>cover image</b> (what buyers see).</li>
-        <li>Pick a <b>pricing model</b>: <b>Fixed fees</b> (flat publisher + holder fee in sats), or <b>Percentage</b> (publisher takes a % of a reseller-set price).</li>
+        <li>Pick a <b>pricing model</b>: <b>Fixed fees</b> (flat publisher + holder fee in sats, min 1 each), or <b>Percentage</b> (publisher takes a % of a reseller-set price).</li>
+        <li>Set the <b>bond per edition</b> — a small refundable deposit (default 2100 sats) that rides with each copy and is reclaimable by burning. Gives every copy a price floor; pick a low bond for free drops, higher for premium.</li>
         <li>Set how many <b>editions to mint now</b>, and optionally <b>embed a file</b> — tick <b>Encrypt</b> to make it holders-only.</li>
         <li>Click <b>Mint edition collection</b> (needs a little BSV). Your new editions appear in <b>My NFTs</b>.</li>
       </ol>
 
       <h4>🎴 My NFTs</h4>
-      <p class="help-sub">Everything you hold, and what you can do with each item.</p>
+      <p class="help-sub">Everything you hold, and what you can do with each item. Sort by <b>recent</b> or <b>publisher</b>, and toggle <b>list</b>/<b>grid</b>. Each card shows the <b>publisher's</b> avatar/name — tap <b>✉ Message</b> to DM them.</p>
       <ul>
         <li><b>Sell / share</b> — click <b>Sales page</b> on an edition to open its public buy link, then <b>Share</b> it anywhere.</li>
         <li><b>Replicate</b> — mint yourself another copy of an edition.</li>
         <li><b>Transfer / Send</b> — paste the recipient's <b>public key</b> at the top, then <b>Transfer</b> (editions) or <b>Send</b> (plain NFTs) to hand it over.</li>
+        <li><b>🔥 Burn</b> — destroy a copy you hold and reclaim its bonded sats to your wallet (irreversible).</li>
         <li><b>View</b> — open the embedded content (decrypts automatically if you're a holder).</li>
         <li><b>Verify</b> — prove on-chain that an item is a genuine edition of its collection.</li>
+        <li><b>Publisher tools</b> (on collections you published): <b>📣 Broadcast</b>, <b>🎁 Gift</b> pre-funded links + <b>📥 Gift links</b> to recover them + <b>♻ Reclaim gifts</b> to sweep unclaimed ones back, and <b>👥 Buyers</b> to list buyers and message them.</li>
         <li><b>Check incoming / recover</b> — scan the chain for items sent to you, or rebuild your holdings after restoring a WIF.</li>
       </ul>
 
-      <h4>✉️ Messages</h4>
-      <p class="help-sub">Send on-chain notes or files to another person's public key.</p>
+      <h4>📊 Sales</h4>
+      <p class="help-sub">Your sales picture, from one scan of your own history.</p>
+      <ul>
+        <li><b>Stats</b> — sales of your mints, total <b>earned</b> (sats + BSV), your resales and unique buyers, each with a <b>this-month</b> figure.</li>
+        <li><b>As creator</b> — every collection you publish: total sales, earnings, and the full buyer list per collection.</li>
+        <li><b>As reseller</b> — items you resold: your direct buyers and earnings.</li>
+        <li>Expand a collection to <b>DM a buyer</b> or <b>Message all</b>. <b>🔄 Refresh</b> re-scans.</li>
+        <li>Figures are at <b>point of purchase</b> (onward transfers aren't visible); periods are approximate.</li>
+      </ul>
+
+      <h4>💬 Threads</h4>
+      <p class="help-sub">A members-only discussion along each collection's lineage (who bought from whom, back to the creator).</p>
+      <ul>
+        <li>Open a collection's room to read your <b>corridor</b>: posts from the <b>creator</b> and everyone up your line, plus — passively — posts from your <b>downline</b>.</li>
+        <li>Post to <b>your line</b> (your downstream sees it), <b>reply to an upline</b>, or — if you're the publisher — <b>📣 everyone</b>.</li>
+        <li>Authors carry <b>un-spoofable badges</b>: 👑 creator, 🌱 original holder, ✓ holder (derived from the real lineage).</li>
+      </ul>
+
+      <h4>✉️ DMs</h4>
+      <p class="help-sub">Private, encrypted on-chain notes or files to another person's public key.</p>
       <ol>
-        <li>Paste the <b>recipient's public key</b>.</li>
+        <li>Paste the <b>recipient's public key</b> (or hit <b>✉ Message</b> on a card / buyer to pre-fill it).</li>
         <li>Write your <b>message</b> and optionally <b>attach a file</b>.</li>
         <li>Leave <b>Encrypt to the recipient</b> ticked for a private, authenticated message.</li>
-        <li>Click <b>Send message</b> — it's delivered on-chain to their key.</li>
-        <li>Click <b>Check messages</b> to read messages others have sent you.</li>
+        <li>Click <b>Send message</b> — it's delivered on-chain to their key. Click <b>Check messages</b> to read your inbox.</li>
+        <li><b>Bulk send</b> (from 👥 Buyers / Sales): message several at once — a personalized mail-merge with <b>%buyer%</b>, <b>%publisher%</b>, <b>%product%</b> wildcards (one transaction each).</li>
       </ol>
 
       <h4>📣 Updates</h4>
@@ -598,6 +628,10 @@
       <div class="kv"><b>Do buyers need an account?</b>No — anyone with a funded wallet buys from a link in one click. No sign-up, no server.</div>
       <div class="kv"><b>What does a copy cost?</b>The price the publisher set, plus a tiny network (miner) fee. The Sales page shows the exact split before you confirm.</div>
       <div class="kv"><b>Is my file private?</b>Tick <b>Encrypt</b> when publishing and only holders can open it. It's an inconvenience to non-holders, not hard DRM.</div>
+      <div class="kv"><b>What's the bond?</b>A small refundable deposit that rides with each edition (default 2100 sats). It gives every copy a price floor and is reclaimed by <b>burning</b> the copy — it's not a fee, nobody keeps it.</div>
+      <div class="kv"><b>Can I see who bought my work?</b>Yes — <b>👥 Buyers</b> on a collection, or the <b>📊 Sales</b> tab for everything at once, and you can DM them. It's buyers at point of sale; onward transfers aren't visible to you.</div>
+      <div class="kv"><b>What are Threads?</b>A members-only discussion scoped to a collection's lineage — you see the creator and everyone up/down your line, with un-spoofable creator/holder badges.</div>
+      <div class="kv"><b>Are my contacts safe if I switch devices?</b>Use <b>☁ Back up</b> in 📇 Contacts. It's encrypted to your own key and auto-restores when you Restore from WIF.</div>
       <div class="kv"><b>Why does it say experimental?</b>The covenant tech is new and runs on real mainnet BSV — use small amounts while it's being proven.</div>
     </div>
     </section>
