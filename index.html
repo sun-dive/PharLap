@@ -754,6 +754,27 @@
       <p>Your only secret is your <b>WIF</b>. If you lose this browser's data, paste the WIF into <b>Wallet → Restore from WIF</b>
       on any device to rebuild your holdings and purchases straight from the blockchain. <b>If you lose the WIF with no backup, the wallet can't be recovered</b> — so back it up.</p>
 
+      <h3>Air-gapped (cold) signing</h3>
+      <p>Keep your private key on a <b>permanently-offline</b> machine and still transact. Only files cross the gap —
+      the key never does. It works for <b>plain BSV payments</b> and edition <b>transfers / burns</b>. Two machines:</p>
+      <ul>
+        <li><b>Offline (cold) box</b> — a device with no network that holds your wallet (its seed phrase / WIF). It only <b>signs</b>.</li>
+        <li><b>Online (watch) box</b> — an internet-connected device that holds <b>no key</b>. It views your holdings, <b>exports</b> unsigned requests, and <b>broadcasts</b> signed ones.</li>
+      </ul>
+      <p><b>One-time setup:</b> on the offline box, open the app and create/restore your wallet, then copy its
+      <b>public key</b> (Wallet tab — it's not a secret). On the online box, go to <b>Wallet → 👁 Watch a wallet</b>,
+      paste that public key, and tap <b>Watch</b>. The online box now shows your balance and holdings with every
+      signing button hidden.</p>
+      <p><b>To send (the 3-step loop):</b></p>
+      <ol>
+        <li><b>Export (online box).</b> Fill in <b>⚡ Send BSV</b> (or pick an edition under <b>⚙ Advanced — air-gapped signing</b>) and tap <b>Export for offline signing →</b>. It downloads a <code>…airgap-request.json</code> file. Move it to the offline box (USB stick).</li>
+        <li><b>Sign (offline box).</b> Open <b>Wallet → ⚙ Advanced → 2 · Sign offline</b>, import the request file, check the summary, and tap <b>Sign &amp; export signed tx →</b>. It downloads a signed-tx file. Move that back to the online box.</li>
+        <li><b>Broadcast (online box).</b> Open <b>⚙ Advanced → 3 · Broadcast signed</b>, import (or paste) the signed file, and tap <b>Broadcast →</b>. Done — the payment is on-chain.</li>
+      </ol>
+      <p class="muted" style="font-size:13px">The signer only ever produces the exact transaction the online wallet
+      described, and refuses anything its key doesn't own. Use a <b>fresh, dedicated USB</b>, and never type your seed
+      phrase / WIF into an online device. Full guide: <code>docs/AIR_GAPPED.md</code>.</p>
+
       <h3>FAQ</h3>
       <div class="kv"><b>Do buyers need an account?</b>No — anyone with a funded wallet buys from a link in one click. No sign-up, no server.</div>
       <div class="kv"><b>What does a copy cost?</b>The price the publisher set, plus a tiny network (miner) fee. The Sales page shows the exact split before you confirm.</div>
@@ -762,6 +783,7 @@
       <div class="kv"><b>Can I see who bought my work?</b>Yes — <b>👥 Buyers</b> on a collection, or the <b>📊 Sales</b> tab for everything at once, and you can DM them. It's buyers at point of sale; onward transfers aren't visible to you.</div>
       <div class="kv"><b>What are Threads?</b>A members-only discussion scoped to a collection's lineage — you see the creator and everyone up/down your line, with un-spoofable creator/holder badges.</div>
       <div class="kv"><b>Are my contacts safe if I switch devices?</b>Use <b>☁ Back up</b> in 📇 Contacts. It's encrypted to your own key and auto-restores when you Restore from WIF.</div>
+      <div class="kv"><b>Can I keep my key offline?</b>Yes — see <b>Air-gapped (cold) signing</b> above. The online device runs watch-only (no key); a permanently-offline device signs. Only files cross between them.</div>
       <div class="kv"><b>Why does it say experimental?</b>The covenant tech is new and runs on real mainnet BSV — use small amounts while it's being proven.</div>
     </div>
     </section>
