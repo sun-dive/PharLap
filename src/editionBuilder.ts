@@ -879,6 +879,41 @@ export async function scanGiftVouchers(
 }
 
 /**
+ * Publisher: reclaim UNCLAIMED gift vouchers — sweep each live voucher's funding back to your wallet in one
+ * tx (invalidating those links). Pass the `live` list from scanGiftVouchers (each carries its voucher WIF).
+ * Already-claimed gifts have no unspent funding, so they're untouched. Returns null if nothing to reclaim.
+ */
+export async function sweepGiftVouchers(
+  provider: WalletProvider, publisherKey: PrivateKey, live: Array<{ wif: string }>, opts?: { feePerKb?: number },
+): Promise<{ swept: number; reclaimedSats: number; txId: string } | null> {
+  const tx = new Transaction()
+  let inputs = 0, swept = 0
+  for (const v of live) {
+    const k = PrivateKey.fromWif(v.wif)
+    const script = p2pkhScript(Hash.hash160(k.toPublicKey().encode(true) as number[]))
+    let utxos: Utxo[] = []
+    try { utxos = await provider.getUnspentByScriptHash(wocScriptHash(script)) } catch { continue }
+    let any = false
+    for (const u of utxos) {
+      let src: Transaction
+      try { src = await provider.getSourceTransaction(u.txId) } catch { continue }
+      tx.addInput({ sourceTransaction: src, sourceOutputIndex: u.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(k) })
+      inputs++; any = true
+    }
+    if (any) swept++
+  }
+  if (inputs === 0) return null
+  tx.addOutput({ lockingScript: new P2PKH().lock(publisherKey.toAddress()), change: true }) // everything back to you, minus fee
+  await tx.fee(new SatoshisPerKilobyte(opts?.feePerKb ?? DEFAULT_FEE_PER_KB))
+  await tx.sign()
+  await provider.broadcast(tx.toHex())
+  const txId = tx.id('hex')
+  const reclaimedSats = tx.outputs[0]?.satoshis ?? 0
+  provider.registerPendingTx(txId, [], reclaimedSats > 0 ? { outputIndex: 0, satoshis: reclaimedSats } : undefined)
+  return { swept, reclaimedSats, txId }
+}
+
+/**
  * Recipient: claim a gift edition with a funded voucher key. The voucher signs the funding (pays the fee +
  * price), but the replica is owned by `ownerKey` (the recipient's own wallet) and change tops them up.
  * Works for a brand-new OR existing wallet. Throws if the voucher has already been spent (single-use).

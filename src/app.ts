@@ -12,7 +12,7 @@ import { PrivateKey, Utils, Hash, LockingScript } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type BuyerRecord, type MySales, type SalesGroup } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type BuyerRecord, type MySales, type SalesGroup } from './editionBuilder.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -940,10 +940,13 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
       const links = document.createElement('button')
       links.textContent = '📥 Gift links'; links.className = 'secondary'
       links.onclick = () => void onViewGiftLinks(t)
+      const reclaim = document.createElement('button')
+      reclaim.textContent = '♻ Reclaim gifts'; reclaim.className = 'secondary'
+      reclaim.onclick = () => void onReclaimGifts(t)
       const buyers = document.createElement('button')
       buyers.textContent = '👥 Buyers'; buyers.className = 'secondary'
       buyers.onclick = () => void onViewBuyers(t)
-      actions.append(bc, gift, links, buyers)
+      actions.append(bc, gift, links, reclaim, buyers)
     }
   } else {
     const send = document.createElement('button')
@@ -2088,6 +2091,32 @@ async function onViewGiftLinks(t: StoredToken): Promise<void> {
     setStatus(`Recovered ${links.length} unclaimed gift link(s)${scan.claimedCount > 0 ? ` (${scan.claimedCount} already claimed)` : ''}.`, 'ok')
   } catch (e) {
     setStatus(`Recover gift links failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Publisher: reclaim UNCLAIMED gift links — sweep their pre-funded sats back to your wallet (invalidating
+ *  those links). Already-claimed gifts are untouched. */
+async function onReclaimGifts(t: StoredToken): Promise<void> {
+  setStatus('Scanning for unclaimed gift links…')
+  let scan
+  try { scan = await scanGiftVouchers(provider, key, t.collectionId) }
+  catch (e) { setStatus(`Scan failed: ${(e as Error).message}`, 'error'); return }
+  if (scan.live.length === 0) {
+    setStatus(scan.claimedCount > 0 ? `Nothing to reclaim — all ${scan.claimedCount} gift links were claimed.` : 'No unclaimed gift links to reclaim.', 'ok')
+    return
+  }
+  if (!confirm(
+    `Reclaim ${scan.live.length} UNCLAIMED gift link${scan.live.length > 1 ? 's' : ''} for “${t.collectionName ?? 'this collection'}”?\n\n` +
+    `This INVALIDATES those links and returns their pre-funded sats to your wallet (minus the network fee). ` +
+    `Already-claimed gifts are unaffected.`)) return
+  setStatus('Reclaiming unclaimed gifts…')
+  try {
+    const r = await sweepGiftVouchers(provider, key, scan.live)
+    if (r == null) { setStatus('Nothing to reclaim — the links may have just been claimed.', 'ok'); return }
+    setStatus(`♻ Reclaimed ${r.swept} unclaimed gift${r.swept > 1 ? 's' : ''} — ${r.reclaimedSats.toLocaleString()} sats back to your wallet. Tx ${short(r.txId)}.`, 'ok')
+    void refreshBalance()
+  } catch (e) {
+    setStatus(`Reclaim failed: ${(e as Error).message}`, 'error')
   }
 }
 
