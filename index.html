@@ -136,6 +136,10 @@
     .cfg-backup { border-top:1px solid var(--line); padding-top:12px; margin-bottom:12px; }
     .app-version { text-align:center; font-size:11px; color:var(--muted); margin:18px 0 8px; }
     .grid2[hidden] { display:none; } /* [hidden] alone loses to .grid2{display:grid}; this restores hiding */
+    #seedPhrase.blurred { filter:blur(6px); }
+    .seed-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+    .seed-word { background:#161b22; border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:14px; }
+    .seed-word .seed-num { color:var(--muted); font-size:11px; margin-right:4px; }
     /* 📊 Sales dashboard */
     .sales-group { border:1px solid var(--line); border-radius:8px; margin:6px 0; overflow:hidden; }
     .sales-group-head { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:#161b22; color:var(--fg); border:none; padding:9px 11px; cursor:pointer; font:inherit; }
@@ -367,13 +371,27 @@
         <button id="btnRefresh" class="secondary">Refresh balance</button>
         <button id="btnNewWallet" class="secondary">New wallet</button>
       </div>
-      <label>WIF (private key — back this up; keep it secret)</label>
+      <label>Seed phrase (your backup — write the words down, keep them secret)</label>
+      <div class="row" style="flex-wrap:nowrap; align-items:stretch">
+        <textarea id="seedPhrase" readonly rows="2" autocomplete="off" class="blurred" placeholder="(this wallet was imported from a WIF — it has no seed phrase; back up the WIF below)" style="flex:1 1 auto; min-width:0; resize:none"></textarea>
+        <button id="btnSeedShow" class="secondary" style="white-space:nowrap">👁 Reveal</button>
+        <button id="btnSeedCopy" class="secondary">Copy</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:6px 0 0">Anyone with these 12 words controls this wallet. They restore everything on any device.</p>
+
+      <label style="margin-top:12px">WIF (advanced — the raw private key; equivalent to the phrase)</label>
       <div class="row" style="flex-wrap:nowrap; align-items:stretch">
         <input id="wif" type="password" readonly autocomplete="off" style="flex:1 1 auto; width:auto; min-width:0" />
         <button id="btnWifShow" class="secondary" style="white-space:nowrap">👁 Show</button>
         <button id="btnWifCopy" class="secondary">Copy</button>
       </div>
-      <label>Restore from WIF</label>
+
+      <label style="margin-top:12px">Restore from seed phrase</label>
+      <div class="grid2">
+        <input id="restoreSeed" placeholder="your 12 words, separated by spaces" />
+        <button id="btnRestoreSeed" class="secondary">Restore</button>
+      </div>
+      <label style="margin-top:8px">Restore from WIF</label>
       <div class="grid2">
         <input id="restoreWif" placeholder="L… / K… WIF" />
         <button id="btnRestore" class="secondary">Restore</button>
@@ -539,7 +557,7 @@
 
       <h3>Quick start</h3>
       <ol>
-        <li><b>Back up your wallet.</b> In <b>Wallet</b>, copy your <b>WIF</b> (private key) somewhere safe — it restores everything on any device.</li>
+        <li><b>Back up your wallet.</b> In <b>Wallet</b>, reveal your <b>12-word seed phrase</b> and write it down somewhere safe — it restores everything on any device. (A raw <b>WIF</b> is also shown as an equivalent backup.)</li>
         <li><b>Add a little BSV.</b> Send a small amount to your address (shown in <b>Wallet</b>) — you need it to publish and to buy.</li>
         <li><b>Publish an edition.</b> In <b>Publish</b>, set a name, cover, description, an optional file, and a price model, then mint.</li>
         <li><b>Share it.</b> Your edition appears in <b>My NFTs</b> — click <b>Sales page</b> to open its public link, then <b>Share</b> it anywhere.</li>
@@ -554,9 +572,9 @@
         <li><b>Check your balance</b> — click <b>Refresh balance</b>.</li>
         <li><b>Receive BSV</b> — send funds to your <b>Address</b> (you need a little to publish or buy).</li>
         <li><b>Share your identity</b> — <b>Copy public key</b> to give to anyone sending you NFTs or messages.</li>
-        <li><b>Back up</b> — copy your <b>WIF</b> and store it safely. It is the only thing that can restore this wallet.</li>
-        <li><b>Restore / recover</b> — paste a WIF into <b>Restore from WIF</b> → <b>Restore</b>; your holdings and purchases rebuild from chain.</li>
-        <li><b>New wallet</b> — makes a fresh key (back up the current WIF first — it gets replaced).</li>
+        <li><b>Back up</b> — reveal your <b>12-word seed phrase</b>, write it down, keep it secret. Anyone with it controls the wallet; lose it with no backup and the wallet can't be recovered. (The <b>WIF</b> is shown too as an equivalent backup.)</li>
+        <li><b>Restore / recover</b> — enter your words in <b>Restore from seed phrase</b> (or a WIF in <b>Restore from WIF</b>) → <b>Restore</b>; your holdings and purchases rebuild from chain.</li>
+        <li><b>New wallet</b> — makes a fresh wallet and shows its new seed phrase to write down (back up the current one first — it gets replaced). <i>Note: wallets imported from a WIF have no seed phrase.</i></li>
       </ol>
 
       <h4>🪪 Identity &amp; contacts</h4>

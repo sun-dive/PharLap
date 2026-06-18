@@ -15828,6 +15828,2616 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
   };
 
+  // node_modules/@bsv/sdk/dist/esm/src/compat/HD.js
+  var HD = class _HD {
+    /**
+     * Constructor for the BIP32 HD wallet.
+     * Initializes an HD wallet with optional parameters for version bytes, depth, parent fingerprint, child index, chain code, private key, and public key.
+     * @param versionBytesNum - Version bytes number for the wallet.
+     * @param depth - Depth of the key in the hierarchy.
+     * @param parentFingerPrint - Fingerprint of the parent key.
+     * @param childIndex - Index of the child key.
+     * @param chainCode - Chain code for key derivation.
+     * @param privKey - Private key of the wallet.
+     * @param pubKey - Public key of the wallet.
+     */
+    constructor(versionBytesNum, depth, parentFingerPrint, childIndex, chainCode, privKey, pubKey) {
+      __publicField(this, "versionBytesNum");
+      __publicField(this, "depth");
+      __publicField(this, "parentFingerPrint");
+      __publicField(this, "childIndex");
+      __publicField(this, "chainCode");
+      __publicField(this, "privKey");
+      __publicField(this, "pubKey");
+      __publicField(this, "constants", {
+        pubKey: 76067358,
+        privKey: 76066276
+      });
+      this.versionBytesNum = versionBytesNum;
+      this.depth = depth;
+      this.parentFingerPrint = parentFingerPrint;
+      this.childIndex = childIndex;
+      this.chainCode = chainCode;
+      this.privKey = privKey;
+      this.pubKey = pubKey;
+    }
+    /**
+     * Generates a new HD wallet with random keys.
+     * This method creates a root HD wallet with randomly generated private and public keys.
+     * @returns {HD} The current HD instance with generated keys.
+     */
+    fromRandom() {
+      this.versionBytesNum = this.constants.privKey;
+      this.depth = 0;
+      this.parentFingerPrint = [0, 0, 0, 0];
+      this.childIndex = 0;
+      this.chainCode = Random_default(32);
+      this.privKey = PrivateKey.fromRandom();
+      this.pubKey = this.privKey.toPublicKey();
+      return this;
+    }
+    /**
+     * Generates a new HD wallet with random keys.
+     * This method creates a root HD wallet with randomly generated private and public keys.
+     * @returns {HD} A new HD instance with generated keys.
+     * @static
+     */
+    static fromRandom() {
+      return new this().fromRandom();
+    }
+    /**
+     * Initializes the HD wallet from a given base58 encoded string.
+     * This method decodes a provided string to set up the HD wallet's properties.
+     * @param str - A base58 encoded string representing the wallet.
+     * @returns {HD} The new instance with properties set from the string.
+     */
+    static fromString(str) {
+      return new this().fromString(str);
+    }
+    /**
+     * Initializes the HD wallet from a given base58 encoded string.
+     * This method decodes a provided string to set up the HD wallet's properties.
+     * @param str - A base58 encoded string representing the wallet.
+     * @returns {HD} The current instance with properties set from the string.
+     */
+    fromString(str) {
+      const decoded = fromBase58Check(str);
+      return this.fromBinary([...decoded.prefix, ...decoded.data]);
+    }
+    /**
+     * Initializes the HD wallet from a seed.
+     * This method generates keys and other properties from a given seed, conforming to the BIP32 specification.
+     * @param bytes - An array of bytes representing the seed.
+     * @returns {HD} The current instance with properties set from the seed.
+     */
+    static fromSeed(bytes2) {
+      return new this().fromSeed(bytes2);
+    }
+    /**
+     * Initializes the HD wallet from a seed.
+     * This method generates keys and other properties from a given seed, conforming to the BIP32 specification.
+     * @param bytes - An array of bytes representing the seed.
+     * @returns {HD} The current instance with properties set from the seed.
+     */
+    fromSeed(bytes2) {
+      if (bytes2.length < 128 / 8) {
+        throw new Error("Need more than 128 bits of entropy");
+      }
+      if (bytes2.length > 512 / 8) {
+        throw new Error("More than 512 bits of entropy is nonstandard");
+      }
+      const hash = sha512hmac(toArray2("Bitcoin seed", "utf8"), bytes2);
+      this.depth = 0;
+      this.parentFingerPrint = [0, 0, 0, 0];
+      this.childIndex = 0;
+      this.chainCode = hash.slice(32, 64);
+      this.versionBytesNum = this.constants.privKey;
+      this.privKey = new PrivateKey(hash.slice(0, 32));
+      this.pubKey = this.privKey.toPublicKey();
+      return this;
+    }
+    /**
+     * Initializes the HD wallet from a binary buffer.
+     * Parses a binary buffer to set up the wallet's properties.
+     * @param buf - A buffer containing the wallet data.
+     * @returns {HD} The new instance with properties set from the buffer.
+     */
+    static fromBinary(buf) {
+      return new this().fromBinary(buf);
+    }
+    /**
+     * Initializes the HD wallet from a binary buffer.
+     * Parses a binary buffer to set up the wallet's properties.
+     * @param buf - A buffer containing the wallet data.
+     * @returns {HD} The current instance with properties set from the buffer.
+     */
+    fromBinary(buf) {
+      if (buf.length !== 78) {
+        throw new Error("incorrect bip32 data length");
+      }
+      const reader = new Reader(buf);
+      this.versionBytesNum = reader.readUInt32BE();
+      this.depth = reader.readUInt8();
+      this.parentFingerPrint = reader.read(4);
+      this.childIndex = reader.readUInt32BE();
+      this.chainCode = reader.read(32);
+      const keyBytes = reader.read(33);
+      const isPrivate = this.versionBytesNum === this.constants.privKey;
+      const isPublic = this.versionBytesNum === this.constants.pubKey;
+      if (isPrivate && keyBytes[0] === 0) {
+        this.privKey = new PrivateKey(keyBytes.slice(1, 33));
+        this.pubKey = this.privKey.toPublicKey();
+      } else if (isPublic && (keyBytes[0] === 2 || keyBytes[0] === 3)) {
+        this.pubKey = PublicKey.fromString(toHex(keyBytes));
+      } else {
+        throw new Error("Invalid key");
+      }
+      return this;
+    }
+    /**
+     * Converts the HD wallet to a base58 encoded string.
+     * This method provides a string representation of the HD wallet's current state.
+     * @returns {string} A base58 encoded string of the HD wallet.
+     */
+    toString() {
+      const bin = this.toBinary();
+      return toBase58Check(bin, []);
+    }
+    /**
+     * Derives a child HD wallet based on a given path.
+     * The path specifies the hierarchy of the child key to be derived.
+     * @param path - A string representing the derivation path (e.g., 'm/0'/1).
+     * @returns {HD} A new HD instance representing the derived child wallet.
+     */
+    derive(path) {
+      if (path === "m") {
+        return this;
+      }
+      const e = path.split("/");
+      let bip32 = this;
+      for (const [i, c] of e.entries()) {
+        if (i === 0) {
+          if (c !== "m") {
+            throw new Error("invalid path");
+          }
+          continue;
+        }
+        const childMatch = /^(\d+)('?)$/.exec(c);
+        if (childMatch === null) {
+          throw new Error("invalid path");
+        }
+        const childIndexValue = Number.parseInt(childMatch[1], 10);
+        if (childIndexValue > 2147483647) {
+          throw new Error("invalid path");
+        }
+        const usePrivate = childMatch[2] === "'";
+        let childIndex = childIndexValue;
+        if (usePrivate) {
+          childIndex += 2147483648;
+        }
+        bip32 = bip32.deriveChild(childIndex);
+      }
+      return bip32;
+    }
+    /**
+     * Derives a child HD wallet from the current wallet based on an index.
+     * This method generates either a private or public child key depending on the current wallet's state.
+     * @param i - The index of the child key to derive.
+     * @returns {HD} A new HD instance representing the derived child wallet.
+     */
+    deriveChild(i) {
+      if (typeof i !== "number") {
+        throw new TypeError("i must be a number");
+      }
+      const ibc = [];
+      ibc.push(i >> 24 & 255);
+      ibc.push(i >> 16 & 255);
+      ibc.push(i >> 8 & 255);
+      ibc.push(i & 255);
+      const ib = [...ibc];
+      const usePrivate = (i & 2147483648) !== 0;
+      const isPrivate = this.versionBytesNum === this.constants.privKey;
+      if (usePrivate && (this.privKey === null || this.privKey === void 0 || !isPrivate)) {
+        throw new Error("Cannot do private key derivation without private key");
+      }
+      let ret = null;
+      if (this.privKey !== null && this.privKey !== void 0) {
+        let data = null;
+        if (usePrivate) {
+          data = [0, ...this.privKey.toArray("be", 32), ...ib];
+        } else {
+          data = [...this.pubKey.encode(true), ...ib];
+        }
+        const hash = sha512hmac(this.chainCode, data);
+        const il = new BigNumber(hash.slice(0, 32));
+        const ir = hash.slice(32, 64);
+        const k = il.add(this.privKey).mod(new Curve().n);
+        ret = new _HD();
+        ret.chainCode = ir;
+        ret.privKey = new PrivateKey(k.toArray());
+        ret.pubKey = ret.privKey.toPublicKey();
+      } else {
+        const data = [...this.pubKey.encode(true), ...ib];
+        const hash = sha512hmac(this.chainCode, data);
+        const il = new BigNumber(hash.slice(0, 32));
+        const ir = hash.slice(32, 64);
+        const ilG = new Curve().g.mul(il);
+        const Kpar = this.pubKey;
+        const Ki = ilG.add(Kpar);
+        const newpub = new PublicKey(Ki.x, Ki.y);
+        ret = new _HD();
+        ret.chainCode = ir;
+        ret.pubKey = newpub;
+      }
+      ret.childIndex = i;
+      const pubKeyhash = hash160(this.pubKey.encode(true));
+      ret.parentFingerPrint = pubKeyhash.slice(0, 4);
+      ret.versionBytesNum = this.versionBytesNum;
+      ret.depth = this.depth + 1;
+      return ret;
+    }
+    /**
+     * Converts the current HD wallet to a public-only wallet.
+     * This method strips away the private key information, leaving only the public part.
+     * @returns {HD} A new HD instance representing the public-only wallet.
+     */
+    toPublic() {
+      const bip32 = new _HD(this.versionBytesNum, this.depth, this.parentFingerPrint, this.childIndex, this.chainCode, this.privKey, this.pubKey);
+      bip32.versionBytesNum = this.constants.pubKey;
+      bip32.privKey = void 0;
+      return bip32;
+    }
+    /**
+     * Converts the HD wallet into a binary representation.
+     * This method serializes the wallet's properties into a binary format.
+     * @returns {number[]} An array of numbers representing the binary data of the wallet.
+     */
+    toBinary() {
+      const isPrivate = this.versionBytesNum === this.constants.privKey;
+      const isPublic = this.versionBytesNum === this.constants.pubKey;
+      if (isPrivate) {
+        return new Writer().writeUInt32BE(this.versionBytesNum).writeUInt8(this.depth).write(this.parentFingerPrint).writeUInt32BE(this.childIndex).write(this.chainCode).writeUInt8(0).write(this.privKey.toArray("be", 32)).toArray();
+      } else if (isPublic) {
+        return new Writer().writeUInt32BE(this.versionBytesNum).writeUInt8(this.depth).write(this.parentFingerPrint).writeUInt32BE(this.childIndex).write(this.chainCode).write(this.pubKey.encode(true)).toArray();
+      } else {
+        throw new Error("bip32: invalid versionBytesNum byte");
+      }
+    }
+    /**
+     * Checks if the HD wallet contains a private key.
+     * This method determines whether the wallet is a private key wallet or a public key only wallet.
+     * @returns {boolean} A boolean value indicating whether the wallet has a private key (true) or not (false).
+     */
+    isPrivate() {
+      return this.versionBytesNum === this.constants.privKey;
+    }
+  };
+
+  // node_modules/@bsv/sdk/dist/esm/src/compat/bip-39-wordlist-en.js
+  var wordList = {
+    value: [
+      "abandon",
+      "ability",
+      "able",
+      "about",
+      "above",
+      "absent",
+      "absorb",
+      "abstract",
+      "absurd",
+      "abuse",
+      "access",
+      "accident",
+      "account",
+      "accuse",
+      "achieve",
+      "acid",
+      "acoustic",
+      "acquire",
+      "across",
+      "act",
+      "action",
+      "actor",
+      "actress",
+      "actual",
+      "adapt",
+      "add",
+      "addict",
+      "address",
+      "adjust",
+      "admit",
+      "adult",
+      "advance",
+      "advice",
+      "aerobic",
+      "affair",
+      "afford",
+      "afraid",
+      "again",
+      "age",
+      "agent",
+      "agree",
+      "ahead",
+      "aim",
+      "air",
+      "airport",
+      "aisle",
+      "alarm",
+      "album",
+      "alcohol",
+      "alert",
+      "alien",
+      "all",
+      "alley",
+      "allow",
+      "almost",
+      "alone",
+      "alpha",
+      "already",
+      "also",
+      "alter",
+      "always",
+      "amateur",
+      "amazing",
+      "among",
+      "amount",
+      "amused",
+      "analyst",
+      "anchor",
+      "ancient",
+      "anger",
+      "angle",
+      "angry",
+      "animal",
+      "ankle",
+      "announce",
+      "annual",
+      "another",
+      "answer",
+      "antenna",
+      "antique",
+      "anxiety",
+      "any",
+      "apart",
+      "apology",
+      "appear",
+      "apple",
+      "approve",
+      "april",
+      "arch",
+      "arctic",
+      "area",
+      "arena",
+      "argue",
+      "arm",
+      "armed",
+      "armor",
+      "army",
+      "around",
+      "arrange",
+      "arrest",
+      "arrive",
+      "arrow",
+      "art",
+      "artefact",
+      "artist",
+      "artwork",
+      "ask",
+      "aspect",
+      "assault",
+      "asset",
+      "assist",
+      "assume",
+      "asthma",
+      "athlete",
+      "atom",
+      "attack",
+      "attend",
+      "attitude",
+      "attract",
+      "auction",
+      "audit",
+      "august",
+      "aunt",
+      "author",
+      "auto",
+      "autumn",
+      "average",
+      "avocado",
+      "avoid",
+      "awake",
+      "aware",
+      "away",
+      "awesome",
+      "awful",
+      "awkward",
+      "axis",
+      "baby",
+      "bachelor",
+      "bacon",
+      "badge",
+      "bag",
+      "balance",
+      "balcony",
+      "ball",
+      "bamboo",
+      "banana",
+      "banner",
+      "bar",
+      "barely",
+      "bargain",
+      "barrel",
+      "base",
+      "basic",
+      "basket",
+      "battle",
+      "beach",
+      "bean",
+      "beauty",
+      "because",
+      "become",
+      "beef",
+      "before",
+      "begin",
+      "behave",
+      "behind",
+      "believe",
+      "below",
+      "belt",
+      "bench",
+      "benefit",
+      "best",
+      "betray",
+      "better",
+      "between",
+      "beyond",
+      "bicycle",
+      "bid",
+      "bike",
+      "bind",
+      "biology",
+      "bird",
+      "birth",
+      "bitter",
+      "black",
+      "blade",
+      "blame",
+      "blanket",
+      "blast",
+      "bleak",
+      "bless",
+      "blind",
+      "blood",
+      "blossom",
+      "blouse",
+      "blue",
+      "blur",
+      "blush",
+      "board",
+      "boat",
+      "body",
+      "boil",
+      "bomb",
+      "bone",
+      "bonus",
+      "book",
+      "boost",
+      "border",
+      "boring",
+      "borrow",
+      "boss",
+      "bottom",
+      "bounce",
+      "box",
+      "boy",
+      "bracket",
+      "brain",
+      "brand",
+      "brass",
+      "brave",
+      "bread",
+      "breeze",
+      "brick",
+      "bridge",
+      "brief",
+      "bright",
+      "bring",
+      "brisk",
+      "broccoli",
+      "broken",
+      "bronze",
+      "broom",
+      "brother",
+      "brown",
+      "brush",
+      "bubble",
+      "buddy",
+      "budget",
+      "buffalo",
+      "build",
+      "bulb",
+      "bulk",
+      "bullet",
+      "bundle",
+      "bunker",
+      "burden",
+      "burger",
+      "burst",
+      "bus",
+      "business",
+      "busy",
+      "butter",
+      "buyer",
+      "buzz",
+      "cabbage",
+      "cabin",
+      "cable",
+      "cactus",
+      "cage",
+      "cake",
+      "call",
+      "calm",
+      "camera",
+      "camp",
+      "can",
+      "canal",
+      "cancel",
+      "candy",
+      "cannon",
+      "canoe",
+      "canvas",
+      "canyon",
+      "capable",
+      "capital",
+      "captain",
+      "car",
+      "carbon",
+      "card",
+      "cargo",
+      "carpet",
+      "carry",
+      "cart",
+      "case",
+      "cash",
+      "casino",
+      "castle",
+      "casual",
+      "cat",
+      "catalog",
+      "catch",
+      "category",
+      "cattle",
+      "caught",
+      "cause",
+      "caution",
+      "cave",
+      "ceiling",
+      "celery",
+      "cement",
+      "census",
+      "century",
+      "cereal",
+      "certain",
+      "chair",
+      "chalk",
+      "champion",
+      "change",
+      "chaos",
+      "chapter",
+      "charge",
+      "chase",
+      "chat",
+      "cheap",
+      "check",
+      "cheese",
+      "chef",
+      "cherry",
+      "chest",
+      "chicken",
+      "chief",
+      "child",
+      "chimney",
+      "choice",
+      "choose",
+      "chronic",
+      "chuckle",
+      "chunk",
+      "churn",
+      "cigar",
+      "cinnamon",
+      "circle",
+      "citizen",
+      "city",
+      "civil",
+      "claim",
+      "clap",
+      "clarify",
+      "claw",
+      "clay",
+      "clean",
+      "clerk",
+      "clever",
+      "click",
+      "client",
+      "cliff",
+      "climb",
+      "clinic",
+      "clip",
+      "clock",
+      "clog",
+      "close",
+      "cloth",
+      "cloud",
+      "clown",
+      "club",
+      "clump",
+      "cluster",
+      "clutch",
+      "coach",
+      "coast",
+      "coconut",
+      "code",
+      "coffee",
+      "coil",
+      "coin",
+      "collect",
+      "color",
+      "column",
+      "combine",
+      "come",
+      "comfort",
+      "comic",
+      "common",
+      "company",
+      "concert",
+      "conduct",
+      "confirm",
+      "congress",
+      "connect",
+      "consider",
+      "control",
+      "convince",
+      "cook",
+      "cool",
+      "copper",
+      "copy",
+      "coral",
+      "core",
+      "corn",
+      "correct",
+      "cost",
+      "cotton",
+      "couch",
+      "country",
+      "couple",
+      "course",
+      "cousin",
+      "cover",
+      "coyote",
+      "crack",
+      "cradle",
+      "craft",
+      "cram",
+      "crane",
+      "crash",
+      "crater",
+      "crawl",
+      "crazy",
+      "cream",
+      "credit",
+      "creek",
+      "crew",
+      "cricket",
+      "crime",
+      "crisp",
+      "critic",
+      "crop",
+      "cross",
+      "crouch",
+      "crowd",
+      "crucial",
+      "cruel",
+      "cruise",
+      "crumble",
+      "crunch",
+      "crush",
+      "cry",
+      "crystal",
+      "cube",
+      "culture",
+      "cup",
+      "cupboard",
+      "curious",
+      "current",
+      "curtain",
+      "curve",
+      "cushion",
+      "custom",
+      "cute",
+      "cycle",
+      "dad",
+      "damage",
+      "damp",
+      "dance",
+      "danger",
+      "daring",
+      "dash",
+      "daughter",
+      "dawn",
+      "day",
+      "deal",
+      "debate",
+      "debris",
+      "decade",
+      "december",
+      "decide",
+      "decline",
+      "decorate",
+      "decrease",
+      "deer",
+      "defense",
+      "define",
+      "defy",
+      "degree",
+      "delay",
+      "deliver",
+      "demand",
+      "demise",
+      "denial",
+      "dentist",
+      "deny",
+      "depart",
+      "depend",
+      "deposit",
+      "depth",
+      "deputy",
+      "derive",
+      "describe",
+      "desert",
+      "design",
+      "desk",
+      "despair",
+      "destroy",
+      "detail",
+      "detect",
+      "develop",
+      "device",
+      "devote",
+      "diagram",
+      "dial",
+      "diamond",
+      "diary",
+      "dice",
+      "diesel",
+      "diet",
+      "differ",
+      "digital",
+      "dignity",
+      "dilemma",
+      "dinner",
+      "dinosaur",
+      "direct",
+      "dirt",
+      "disagree",
+      "discover",
+      "disease",
+      "dish",
+      "dismiss",
+      "disorder",
+      "display",
+      "distance",
+      "divert",
+      "divide",
+      "divorce",
+      "dizzy",
+      "doctor",
+      "document",
+      "dog",
+      "doll",
+      "dolphin",
+      "domain",
+      "donate",
+      "donkey",
+      "donor",
+      "door",
+      "dose",
+      "double",
+      "dove",
+      "draft",
+      "dragon",
+      "drama",
+      "drastic",
+      "draw",
+      "dream",
+      "dress",
+      "drift",
+      "drill",
+      "drink",
+      "drip",
+      "drive",
+      "drop",
+      "drum",
+      "dry",
+      "duck",
+      "dumb",
+      "dune",
+      "during",
+      "dust",
+      "dutch",
+      "duty",
+      "dwarf",
+      "dynamic",
+      "eager",
+      "eagle",
+      "early",
+      "earn",
+      "earth",
+      "easily",
+      "east",
+      "easy",
+      "echo",
+      "ecology",
+      "economy",
+      "edge",
+      "edit",
+      "educate",
+      "effort",
+      "egg",
+      "eight",
+      "either",
+      "elbow",
+      "elder",
+      "electric",
+      "elegant",
+      "element",
+      "elephant",
+      "elevator",
+      "elite",
+      "else",
+      "embark",
+      "embody",
+      "embrace",
+      "emerge",
+      "emotion",
+      "employ",
+      "empower",
+      "empty",
+      "enable",
+      "enact",
+      "end",
+      "endless",
+      "endorse",
+      "enemy",
+      "energy",
+      "enforce",
+      "engage",
+      "engine",
+      "enhance",
+      "enjoy",
+      "enlist",
+      "enough",
+      "enrich",
+      "enroll",
+      "ensure",
+      "enter",
+      "entire",
+      "entry",
+      "envelope",
+      "episode",
+      "equal",
+      "equip",
+      "era",
+      "erase",
+      "erode",
+      "erosion",
+      "error",
+      "erupt",
+      "escape",
+      "essay",
+      "essence",
+      "estate",
+      "eternal",
+      "ethics",
+      "evidence",
+      "evil",
+      "evoke",
+      "evolve",
+      "exact",
+      "example",
+      "excess",
+      "exchange",
+      "excite",
+      "exclude",
+      "excuse",
+      "execute",
+      "exercise",
+      "exhaust",
+      "exhibit",
+      "exile",
+      "exist",
+      "exit",
+      "exotic",
+      "expand",
+      "expect",
+      "expire",
+      "explain",
+      "expose",
+      "express",
+      "extend",
+      "extra",
+      "eye",
+      "eyebrow",
+      "fabric",
+      "face",
+      "faculty",
+      "fade",
+      "faint",
+      "faith",
+      "fall",
+      "false",
+      "fame",
+      "family",
+      "famous",
+      "fan",
+      "fancy",
+      "fantasy",
+      "farm",
+      "fashion",
+      "fat",
+      "fatal",
+      "father",
+      "fatigue",
+      "fault",
+      "favorite",
+      "feature",
+      "february",
+      "federal",
+      "fee",
+      "feed",
+      "feel",
+      "female",
+      "fence",
+      "festival",
+      "fetch",
+      "fever",
+      "few",
+      "fiber",
+      "fiction",
+      "field",
+      "figure",
+      "file",
+      "film",
+      "filter",
+      "final",
+      "find",
+      "fine",
+      "finger",
+      "finish",
+      "fire",
+      "firm",
+      "first",
+      "fiscal",
+      "fish",
+      "fit",
+      "fitness",
+      "fix",
+      "flag",
+      "flame",
+      "flash",
+      "flat",
+      "flavor",
+      "flee",
+      "flight",
+      "flip",
+      "float",
+      "flock",
+      "floor",
+      "flower",
+      "fluid",
+      "flush",
+      "fly",
+      "foam",
+      "focus",
+      "fog",
+      "foil",
+      "fold",
+      "follow",
+      "food",
+      "foot",
+      "force",
+      "forest",
+      "forget",
+      "fork",
+      "fortune",
+      "forum",
+      "forward",
+      "fossil",
+      "foster",
+      "found",
+      "fox",
+      "fragile",
+      "frame",
+      "frequent",
+      "fresh",
+      "friend",
+      "fringe",
+      "frog",
+      "front",
+      "frost",
+      "frown",
+      "frozen",
+      "fruit",
+      "fuel",
+      "fun",
+      "funny",
+      "furnace",
+      "fury",
+      "future",
+      "gadget",
+      "gain",
+      "galaxy",
+      "gallery",
+      "game",
+      "gap",
+      "garage",
+      "garbage",
+      "garden",
+      "garlic",
+      "garment",
+      "gas",
+      "gasp",
+      "gate",
+      "gather",
+      "gauge",
+      "gaze",
+      "general",
+      "genius",
+      "genre",
+      "gentle",
+      "genuine",
+      "gesture",
+      "ghost",
+      "giant",
+      "gift",
+      "giggle",
+      "ginger",
+      "giraffe",
+      "girl",
+      "give",
+      "glad",
+      "glance",
+      "glare",
+      "glass",
+      "glide",
+      "glimpse",
+      "globe",
+      "gloom",
+      "glory",
+      "glove",
+      "glow",
+      "glue",
+      "goat",
+      "goddess",
+      "gold",
+      "good",
+      "goose",
+      "gorilla",
+      "gospel",
+      "gossip",
+      "govern",
+      "gown",
+      "grab",
+      "grace",
+      "grain",
+      "grant",
+      "grape",
+      "grass",
+      "gravity",
+      "great",
+      "green",
+      "grid",
+      "grief",
+      "grit",
+      "grocery",
+      "group",
+      "grow",
+      "grunt",
+      "guard",
+      "guess",
+      "guide",
+      "guilt",
+      "guitar",
+      "gun",
+      "gym",
+      "habit",
+      "hair",
+      "half",
+      "hammer",
+      "hamster",
+      "hand",
+      "happy",
+      "harbor",
+      "hard",
+      "harsh",
+      "harvest",
+      "hat",
+      "have",
+      "hawk",
+      "hazard",
+      "head",
+      "health",
+      "heart",
+      "heavy",
+      "hedgehog",
+      "height",
+      "hello",
+      "helmet",
+      "help",
+      "hen",
+      "hero",
+      "hidden",
+      "high",
+      "hill",
+      "hint",
+      "hip",
+      "hire",
+      "history",
+      "hobby",
+      "hockey",
+      "hold",
+      "hole",
+      "holiday",
+      "hollow",
+      "home",
+      "honey",
+      "hood",
+      "hope",
+      "horn",
+      "horror",
+      "horse",
+      "hospital",
+      "host",
+      "hotel",
+      "hour",
+      "hover",
+      "hub",
+      "huge",
+      "human",
+      "humble",
+      "humor",
+      "hundred",
+      "hungry",
+      "hunt",
+      "hurdle",
+      "hurry",
+      "hurt",
+      "husband",
+      "hybrid",
+      "ice",
+      "icon",
+      "idea",
+      "identify",
+      "idle",
+      "ignore",
+      "ill",
+      "illegal",
+      "illness",
+      "image",
+      "imitate",
+      "immense",
+      "immune",
+      "impact",
+      "impose",
+      "improve",
+      "impulse",
+      "inch",
+      "include",
+      "income",
+      "increase",
+      "index",
+      "indicate",
+      "indoor",
+      "industry",
+      "infant",
+      "inflict",
+      "inform",
+      "inhale",
+      "inherit",
+      "initial",
+      "inject",
+      "injury",
+      "inmate",
+      "inner",
+      "innocent",
+      "input",
+      "inquiry",
+      "insane",
+      "insect",
+      "inside",
+      "inspire",
+      "install",
+      "intact",
+      "interest",
+      "into",
+      "invest",
+      "invite",
+      "involve",
+      "iron",
+      "island",
+      "isolate",
+      "issue",
+      "item",
+      "ivory",
+      "jacket",
+      "jaguar",
+      "jar",
+      "jazz",
+      "jealous",
+      "jeans",
+      "jelly",
+      "jewel",
+      "job",
+      "join",
+      "joke",
+      "journey",
+      "joy",
+      "judge",
+      "juice",
+      "jump",
+      "jungle",
+      "junior",
+      "junk",
+      "just",
+      "kangaroo",
+      "keen",
+      "keep",
+      "ketchup",
+      "key",
+      "kick",
+      "kid",
+      "kidney",
+      "kind",
+      "kingdom",
+      "kiss",
+      "kit",
+      "kitchen",
+      "kite",
+      "kitten",
+      "kiwi",
+      "knee",
+      "knife",
+      "knock",
+      "know",
+      "lab",
+      "label",
+      "labor",
+      "ladder",
+      "lady",
+      "lake",
+      "lamp",
+      "language",
+      "laptop",
+      "large",
+      "later",
+      "latin",
+      "laugh",
+      "laundry",
+      "lava",
+      "law",
+      "lawn",
+      "lawsuit",
+      "layer",
+      "lazy",
+      "leader",
+      "leaf",
+      "learn",
+      "leave",
+      "lecture",
+      "left",
+      "leg",
+      "legal",
+      "legend",
+      "leisure",
+      "lemon",
+      "lend",
+      "length",
+      "lens",
+      "leopard",
+      "lesson",
+      "letter",
+      "level",
+      "liar",
+      "liberty",
+      "library",
+      "license",
+      "life",
+      "lift",
+      "light",
+      "like",
+      "limb",
+      "limit",
+      "link",
+      "lion",
+      "liquid",
+      "list",
+      "little",
+      "live",
+      "lizard",
+      "load",
+      "loan",
+      "lobster",
+      "local",
+      "lock",
+      "logic",
+      "lonely",
+      "long",
+      "loop",
+      "lottery",
+      "loud",
+      "lounge",
+      "love",
+      "loyal",
+      "lucky",
+      "luggage",
+      "lumber",
+      "lunar",
+      "lunch",
+      "luxury",
+      "lyrics",
+      "machine",
+      "mad",
+      "magic",
+      "magnet",
+      "maid",
+      "mail",
+      "main",
+      "major",
+      "make",
+      "mammal",
+      "man",
+      "manage",
+      "mandate",
+      "mango",
+      "mansion",
+      "manual",
+      "maple",
+      "marble",
+      "march",
+      "margin",
+      "marine",
+      "market",
+      "marriage",
+      "mask",
+      "mass",
+      "master",
+      "match",
+      "material",
+      "math",
+      "matrix",
+      "matter",
+      "maximum",
+      "maze",
+      "meadow",
+      "mean",
+      "measure",
+      "meat",
+      "mechanic",
+      "medal",
+      "media",
+      "melody",
+      "melt",
+      "member",
+      "memory",
+      "mention",
+      "menu",
+      "mercy",
+      "merge",
+      "merit",
+      "merry",
+      "mesh",
+      "message",
+      "metal",
+      "method",
+      "middle",
+      "midnight",
+      "milk",
+      "million",
+      "mimic",
+      "mind",
+      "minimum",
+      "minor",
+      "minute",
+      "miracle",
+      "mirror",
+      "misery",
+      "miss",
+      "mistake",
+      "mix",
+      "mixed",
+      "mixture",
+      "mobile",
+      "model",
+      "modify",
+      "mom",
+      "moment",
+      "monitor",
+      "monkey",
+      "monster",
+      "month",
+      "moon",
+      "moral",
+      "more",
+      "morning",
+      "mosquito",
+      "mother",
+      "motion",
+      "motor",
+      "mountain",
+      "mouse",
+      "move",
+      "movie",
+      "much",
+      "muffin",
+      "mule",
+      "multiply",
+      "muscle",
+      "museum",
+      "mushroom",
+      "music",
+      "must",
+      "mutual",
+      "myself",
+      "mystery",
+      "myth",
+      "naive",
+      "name",
+      "napkin",
+      "narrow",
+      "nasty",
+      "nation",
+      "nature",
+      "near",
+      "neck",
+      "need",
+      "negative",
+      "neglect",
+      "neither",
+      "nephew",
+      "nerve",
+      "nest",
+      "net",
+      "network",
+      "neutral",
+      "never",
+      "news",
+      "next",
+      "nice",
+      "night",
+      "noble",
+      "noise",
+      "nominee",
+      "noodle",
+      "normal",
+      "north",
+      "nose",
+      "notable",
+      "note",
+      "nothing",
+      "notice",
+      "novel",
+      "now",
+      "nuclear",
+      "number",
+      "nurse",
+      "nut",
+      "oak",
+      "obey",
+      "object",
+      "oblige",
+      "obscure",
+      "observe",
+      "obtain",
+      "obvious",
+      "occur",
+      "ocean",
+      "october",
+      "odor",
+      "off",
+      "offer",
+      "office",
+      "often",
+      "oil",
+      "okay",
+      "old",
+      "olive",
+      "olympic",
+      "omit",
+      "once",
+      "one",
+      "onion",
+      "online",
+      "only",
+      "open",
+      "opera",
+      "opinion",
+      "oppose",
+      "option",
+      "orange",
+      "orbit",
+      "orchard",
+      "order",
+      "ordinary",
+      "organ",
+      "orient",
+      "original",
+      "orphan",
+      "ostrich",
+      "other",
+      "outdoor",
+      "outer",
+      "output",
+      "outside",
+      "oval",
+      "oven",
+      "over",
+      "own",
+      "owner",
+      "oxygen",
+      "oyster",
+      "ozone",
+      "pact",
+      "paddle",
+      "page",
+      "pair",
+      "palace",
+      "palm",
+      "panda",
+      "panel",
+      "panic",
+      "panther",
+      "paper",
+      "parade",
+      "parent",
+      "park",
+      "parrot",
+      "party",
+      "pass",
+      "patch",
+      "path",
+      "patient",
+      "patrol",
+      "pattern",
+      "pause",
+      "pave",
+      "payment",
+      "peace",
+      "peanut",
+      "pear",
+      "peasant",
+      "pelican",
+      "pen",
+      "penalty",
+      "pencil",
+      "people",
+      "pepper",
+      "perfect",
+      "permit",
+      "person",
+      "pet",
+      "phone",
+      "photo",
+      "phrase",
+      "physical",
+      "piano",
+      "picnic",
+      "picture",
+      "piece",
+      "pig",
+      "pigeon",
+      "pill",
+      "pilot",
+      "pink",
+      "pioneer",
+      "pipe",
+      "pistol",
+      "pitch",
+      "pizza",
+      "place",
+      "planet",
+      "plastic",
+      "plate",
+      "play",
+      "please",
+      "pledge",
+      "pluck",
+      "plug",
+      "plunge",
+      "poem",
+      "poet",
+      "point",
+      "polar",
+      "pole",
+      "police",
+      "pond",
+      "pony",
+      "pool",
+      "popular",
+      "portion",
+      "position",
+      "possible",
+      "post",
+      "potato",
+      "pottery",
+      "poverty",
+      "powder",
+      "power",
+      "practice",
+      "praise",
+      "predict",
+      "prefer",
+      "prepare",
+      "present",
+      "pretty",
+      "prevent",
+      "price",
+      "pride",
+      "primary",
+      "print",
+      "priority",
+      "prison",
+      "private",
+      "prize",
+      "problem",
+      "process",
+      "produce",
+      "profit",
+      "program",
+      "project",
+      "promote",
+      "proof",
+      "property",
+      "prosper",
+      "protect",
+      "proud",
+      "provide",
+      "public",
+      "pudding",
+      "pull",
+      "pulp",
+      "pulse",
+      "pumpkin",
+      "punch",
+      "pupil",
+      "puppy",
+      "purchase",
+      "purity",
+      "purpose",
+      "purse",
+      "push",
+      "put",
+      "puzzle",
+      "pyramid",
+      "quality",
+      "quantum",
+      "quarter",
+      "question",
+      "quick",
+      "quit",
+      "quiz",
+      "quote",
+      "rabbit",
+      "raccoon",
+      "race",
+      "rack",
+      "radar",
+      "radio",
+      "rail",
+      "rain",
+      "raise",
+      "rally",
+      "ramp",
+      "ranch",
+      "random",
+      "range",
+      "rapid",
+      "rare",
+      "rate",
+      "rather",
+      "raven",
+      "raw",
+      "razor",
+      "ready",
+      "real",
+      "reason",
+      "rebel",
+      "rebuild",
+      "recall",
+      "receive",
+      "recipe",
+      "record",
+      "recycle",
+      "reduce",
+      "reflect",
+      "reform",
+      "refuse",
+      "region",
+      "regret",
+      "regular",
+      "reject",
+      "relax",
+      "release",
+      "relief",
+      "rely",
+      "remain",
+      "remember",
+      "remind",
+      "remove",
+      "render",
+      "renew",
+      "rent",
+      "reopen",
+      "repair",
+      "repeat",
+      "replace",
+      "report",
+      "require",
+      "rescue",
+      "resemble",
+      "resist",
+      "resource",
+      "response",
+      "result",
+      "retire",
+      "retreat",
+      "return",
+      "reunion",
+      "reveal",
+      "review",
+      "reward",
+      "rhythm",
+      "rib",
+      "ribbon",
+      "rice",
+      "rich",
+      "ride",
+      "ridge",
+      "rifle",
+      "right",
+      "rigid",
+      "ring",
+      "riot",
+      "ripple",
+      "risk",
+      "ritual",
+      "rival",
+      "river",
+      "road",
+      "roast",
+      "robot",
+      "robust",
+      "rocket",
+      "romance",
+      "roof",
+      "rookie",
+      "room",
+      "rose",
+      "rotate",
+      "rough",
+      "round",
+      "route",
+      "royal",
+      "rubber",
+      "rude",
+      "rug",
+      "rule",
+      "run",
+      "runway",
+      "rural",
+      "sad",
+      "saddle",
+      "sadness",
+      "safe",
+      "sail",
+      "salad",
+      "salmon",
+      "salon",
+      "salt",
+      "salute",
+      "same",
+      "sample",
+      "sand",
+      "satisfy",
+      "satoshi",
+      "sauce",
+      "sausage",
+      "save",
+      "say",
+      "scale",
+      "scan",
+      "scare",
+      "scatter",
+      "scene",
+      "scheme",
+      "school",
+      "science",
+      "scissors",
+      "scorpion",
+      "scout",
+      "scrap",
+      "screen",
+      "script",
+      "scrub",
+      "sea",
+      "search",
+      "season",
+      "seat",
+      "second",
+      "secret",
+      "section",
+      "security",
+      "seed",
+      "seek",
+      "segment",
+      "select",
+      "sell",
+      "seminar",
+      "senior",
+      "sense",
+      "sentence",
+      "series",
+      "service",
+      "session",
+      "settle",
+      "setup",
+      "seven",
+      "shadow",
+      "shaft",
+      "shallow",
+      "share",
+      "shed",
+      "shell",
+      "sheriff",
+      "shield",
+      "shift",
+      "shine",
+      "ship",
+      "shiver",
+      "shock",
+      "shoe",
+      "shoot",
+      "shop",
+      "short",
+      "shoulder",
+      "shove",
+      "shrimp",
+      "shrug",
+      "shuffle",
+      "shy",
+      "sibling",
+      "sick",
+      "side",
+      "siege",
+      "sight",
+      "sign",
+      "silent",
+      "silk",
+      "silly",
+      "silver",
+      "similar",
+      "simple",
+      "since",
+      "sing",
+      "siren",
+      "sister",
+      "situate",
+      "six",
+      "size",
+      "skate",
+      "sketch",
+      "ski",
+      "skill",
+      "skin",
+      "skirt",
+      "skull",
+      "slab",
+      "slam",
+      "sleep",
+      "slender",
+      "slice",
+      "slide",
+      "slight",
+      "slim",
+      "slogan",
+      "slot",
+      "slow",
+      "slush",
+      "small",
+      "smart",
+      "smile",
+      "smoke",
+      "smooth",
+      "snack",
+      "snake",
+      "snap",
+      "sniff",
+      "snow",
+      "soap",
+      "soccer",
+      "social",
+      "sock",
+      "soda",
+      "soft",
+      "solar",
+      "soldier",
+      "solid",
+      "solution",
+      "solve",
+      "someone",
+      "song",
+      "soon",
+      "sorry",
+      "sort",
+      "soul",
+      "sound",
+      "soup",
+      "source",
+      "south",
+      "space",
+      "spare",
+      "spatial",
+      "spawn",
+      "speak",
+      "special",
+      "speed",
+      "spell",
+      "spend",
+      "sphere",
+      "spice",
+      "spider",
+      "spike",
+      "spin",
+      "spirit",
+      "split",
+      "spoil",
+      "sponsor",
+      "spoon",
+      "sport",
+      "spot",
+      "spray",
+      "spread",
+      "spring",
+      "spy",
+      "square",
+      "squeeze",
+      "squirrel",
+      "stable",
+      "stadium",
+      "staff",
+      "stage",
+      "stairs",
+      "stamp",
+      "stand",
+      "start",
+      "state",
+      "stay",
+      "steak",
+      "steel",
+      "stem",
+      "step",
+      "stereo",
+      "stick",
+      "still",
+      "sting",
+      "stock",
+      "stomach",
+      "stone",
+      "stool",
+      "story",
+      "stove",
+      "strategy",
+      "street",
+      "strike",
+      "strong",
+      "struggle",
+      "student",
+      "stuff",
+      "stumble",
+      "style",
+      "subject",
+      "submit",
+      "subway",
+      "success",
+      "such",
+      "sudden",
+      "suffer",
+      "sugar",
+      "suggest",
+      "suit",
+      "summer",
+      "sun",
+      "sunny",
+      "sunset",
+      "super",
+      "supply",
+      "supreme",
+      "sure",
+      "surface",
+      "surge",
+      "surprise",
+      "surround",
+      "survey",
+      "suspect",
+      "sustain",
+      "swallow",
+      "swamp",
+      "swap",
+      "swarm",
+      "swear",
+      "sweet",
+      "swift",
+      "swim",
+      "swing",
+      "switch",
+      "sword",
+      "symbol",
+      "symptom",
+      "syrup",
+      "system",
+      "table",
+      "tackle",
+      "tag",
+      "tail",
+      "talent",
+      "talk",
+      "tank",
+      "tape",
+      "target",
+      "task",
+      "taste",
+      "tattoo",
+      "taxi",
+      "teach",
+      "team",
+      "tell",
+      "ten",
+      "tenant",
+      "tennis",
+      "tent",
+      "term",
+      "test",
+      "text",
+      "thank",
+      "that",
+      "theme",
+      "then",
+      "theory",
+      "there",
+      "they",
+      "thing",
+      "this",
+      "thought",
+      "three",
+      "thrive",
+      "throw",
+      "thumb",
+      "thunder",
+      "ticket",
+      "tide",
+      "tiger",
+      "tilt",
+      "timber",
+      "time",
+      "tiny",
+      "tip",
+      "tired",
+      "tissue",
+      "title",
+      "toast",
+      "tobacco",
+      "today",
+      "toddler",
+      "toe",
+      "together",
+      "toilet",
+      "token",
+      "tomato",
+      "tomorrow",
+      "tone",
+      "tongue",
+      "tonight",
+      "tool",
+      "tooth",
+      "top",
+      "topic",
+      "topple",
+      "torch",
+      "tornado",
+      "tortoise",
+      "toss",
+      "total",
+      "tourist",
+      "toward",
+      "tower",
+      "town",
+      "toy",
+      "track",
+      "trade",
+      "traffic",
+      "tragic",
+      "train",
+      "transfer",
+      "trap",
+      "trash",
+      "travel",
+      "tray",
+      "treat",
+      "tree",
+      "trend",
+      "trial",
+      "tribe",
+      "trick",
+      "trigger",
+      "trim",
+      "trip",
+      "trophy",
+      "trouble",
+      "truck",
+      "true",
+      "truly",
+      "trumpet",
+      "trust",
+      "truth",
+      "try",
+      "tube",
+      "tuition",
+      "tumble",
+      "tuna",
+      "tunnel",
+      "turkey",
+      "turn",
+      "turtle",
+      "twelve",
+      "twenty",
+      "twice",
+      "twin",
+      "twist",
+      "two",
+      "type",
+      "typical",
+      "ugly",
+      "umbrella",
+      "unable",
+      "unaware",
+      "uncle",
+      "uncover",
+      "under",
+      "undo",
+      "unfair",
+      "unfold",
+      "unhappy",
+      "uniform",
+      "unique",
+      "unit",
+      "universe",
+      "unknown",
+      "unlock",
+      "until",
+      "unusual",
+      "unveil",
+      "update",
+      "upgrade",
+      "uphold",
+      "upon",
+      "upper",
+      "upset",
+      "urban",
+      "urge",
+      "usage",
+      "use",
+      "used",
+      "useful",
+      "useless",
+      "usual",
+      "utility",
+      "vacant",
+      "vacuum",
+      "vague",
+      "valid",
+      "valley",
+      "valve",
+      "van",
+      "vanish",
+      "vapor",
+      "various",
+      "vast",
+      "vault",
+      "vehicle",
+      "velvet",
+      "vendor",
+      "venture",
+      "venue",
+      "verb",
+      "verify",
+      "version",
+      "very",
+      "vessel",
+      "veteran",
+      "viable",
+      "vibrant",
+      "vicious",
+      "victory",
+      "video",
+      "view",
+      "village",
+      "vintage",
+      "violin",
+      "virtual",
+      "virus",
+      "visa",
+      "visit",
+      "visual",
+      "vital",
+      "vivid",
+      "vocal",
+      "voice",
+      "void",
+      "volcano",
+      "volume",
+      "vote",
+      "voyage",
+      "wage",
+      "wagon",
+      "wait",
+      "walk",
+      "wall",
+      "walnut",
+      "want",
+      "warfare",
+      "warm",
+      "warrior",
+      "wash",
+      "wasp",
+      "waste",
+      "water",
+      "wave",
+      "way",
+      "wealth",
+      "weapon",
+      "wear",
+      "weasel",
+      "weather",
+      "web",
+      "wedding",
+      "weekend",
+      "weird",
+      "welcome",
+      "west",
+      "wet",
+      "whale",
+      "what",
+      "wheat",
+      "wheel",
+      "when",
+      "where",
+      "whip",
+      "whisper",
+      "wide",
+      "width",
+      "wife",
+      "wild",
+      "will",
+      "win",
+      "window",
+      "wine",
+      "wing",
+      "wink",
+      "winner",
+      "winter",
+      "wire",
+      "wisdom",
+      "wise",
+      "wish",
+      "witness",
+      "wolf",
+      "woman",
+      "wonder",
+      "wood",
+      "wool",
+      "word",
+      "work",
+      "world",
+      "worry",
+      "worth",
+      "wrap",
+      "wreck",
+      "wrestle",
+      "wrist",
+      "write",
+      "wrong",
+      "yard",
+      "year",
+      "yellow",
+      "you",
+      "young",
+      "youth",
+      "zebra",
+      "zero",
+      "zone",
+      "zoo"
+    ],
+    space: " "
+  };
+
+  // node_modules/@bsv/sdk/dist/esm/src/compat/Mnemonic.js
+  var Mnemonic = class _Mnemonic {
+    /**
+     * Constructs a Mnemonic object.
+     * @param {string} [mnemonic] - An optional mnemonic phrase.
+     * @param {number[]} [seed] - An optional seed derived from the mnemonic.
+     * @param {object} [wordlist=wordList] - An object containing a list of words and space character used in the mnemonic.
+     */
+    constructor(mnemonic, seed, wordlist = wordList) {
+      __publicField(this, "mnemonic");
+      __publicField(this, "seed");
+      __publicField(this, "Wordlist");
+      this.mnemonic = mnemonic ?? "";
+      this.seed = seed ?? [];
+      this.Wordlist = wordlist;
+    }
+    /**
+     * Converts the mnemonic and seed into a binary representation.
+     * @returns {number[]} The binary representation of the mnemonic and seed.
+     */
+    toBinary() {
+      const bw = new Writer();
+      if (this.mnemonic === "") {
+        bw.writeVarIntNum(0);
+      } else {
+        const buf = toArray2(this.mnemonic, "utf8");
+        bw.writeVarIntNum(buf.length);
+        bw.write(buf);
+      }
+      if (this.seed.length > 0) {
+        bw.writeVarIntNum(this.seed.length);
+        bw.write(this.seed);
+      } else {
+        bw.writeVarIntNum(0);
+      }
+      return bw.toArray();
+    }
+    /**
+     * Loads a mnemonic and seed from a binary representation.
+     * @param {number[]} bin - The binary representation of a mnemonic and seed.
+     * @returns {this} The Mnemonic instance with loaded mnemonic and seed.
+     */
+    fromBinary(bin) {
+      const br = new Reader(bin);
+      const mnemoniclen = br.readVarIntNum();
+      if (mnemoniclen > 0) {
+        this.mnemonic = encode(br.read(mnemoniclen), "utf8");
+      }
+      const seedlen = br.readVarIntNum();
+      if (seedlen > 0) {
+        this.seed = br.read(seedlen);
+      }
+      return this;
+    }
+    /**
+     * Generates a random mnemonic from a given bit length.
+     * @param {number} [bits=128] - The bit length for the random mnemonic (must be a multiple of 32 and at least 128).
+     * @returns {this} The Mnemonic instance with the new random mnemonic.
+     * @throws {Error} If the bit length is not a multiple of 32 or is less than 128.
+     */
+    fromRandom(bits) {
+      if (bits === void 0 || bits === null || Number.isNaN(bits) || bits === 0) {
+        bits = 128;
+      }
+      if (bits % 32 !== 0) {
+        throw new Error("bits must be multiple of 32");
+      }
+      if (bits < 128) {
+        throw new Error("bits must be at least 128");
+      }
+      const buf = Random_default(bits / 8);
+      this.entropy2Mnemonic(buf);
+      this.mnemonic2Seed();
+      return this;
+    }
+    /**
+     * Static method to generate a Mnemonic instance with a random mnemonic.
+     * @param {number} [bits=128] - The bit length for the random mnemonic.
+     * @returns {Mnemonic} A new Mnemonic instance.
+     */
+    static fromRandom(bits) {
+      return new this().fromRandom(bits);
+    }
+    /**
+     * Converts given entropy into a mnemonic phrase.
+     * This method is used to generate a mnemonic from a specific entropy source.
+     * @param {number[]} buf - The entropy buffer, must be at least 128 bits.
+     * @returns {this} The Mnemonic instance with the mnemonic set from the given entropy.
+     * @throws {Error} If the entropy is less than 128 bits.
+     */
+    fromEntropy(buf) {
+      this.entropy2Mnemonic(buf);
+      return this;
+    }
+    /**
+     * Static method to create a Mnemonic instance from a given entropy.
+     * @param {number[]} buf - The entropy buffer.
+     * @returns {Mnemonic} A new Mnemonic instance.
+     */
+    static fromEntropy(buf) {
+      return new this().fromEntropy(buf);
+    }
+    /**
+     * Sets the mnemonic for the instance from a string.
+     * @param {string} mnemonic - The mnemonic phrase as a string.
+     * @returns {this} The Mnemonic instance with the set mnemonic.
+     * @throws {Error} If the mnemonic does not pass BIP-39 validation
+     * (unknown words, invalid length, or bad checksum).
+     */
+    fromString(mnemonic) {
+      this.mnemonic = mnemonic;
+      let valid = false;
+      try {
+        valid = this.check();
+      } catch {
+        valid = false;
+      }
+      if (!valid) {
+        throw new Error("Mnemonic does not pass the check - was the mnemonic typed incorrectly? Are there extra spaces?");
+      }
+      return this;
+    }
+    /**
+     * Static method to create a Mnemonic instance from a mnemonic string.
+     * @param {string} str - The mnemonic phrase.
+     * @returns {Mnemonic} A new Mnemonic instance.
+     */
+    static fromString(str) {
+      return new this().fromString(str);
+    }
+    /**
+     * Converts the instance's mnemonic to a string representation.
+     * @returns {string} The mnemonic phrase as a string.
+     */
+    toString() {
+      return this.mnemonic;
+    }
+    /**
+     * Converts the mnemonic to a seed.
+     * The mnemonic must pass the validity check before conversion.
+     * @param {string} [passphrase=''] - An optional passphrase for additional security.
+     * @returns {number[]} The generated seed.
+     * @throws {Error} If the mnemonic is invalid.
+     */
+    toSeed(passphrase) {
+      this.mnemonic2Seed(passphrase);
+      return this.seed;
+    }
+    /**
+     * Converts entropy to a mnemonic phrase.
+     * This method takes a buffer of entropy and converts it into a corresponding
+     * mnemonic phrase based on the Mnemonic wordlist. The entropy should be at least 128 bits.
+     * The method applies a checksum and maps the entropy to words in the wordlist.
+     * @param {number[]} buf - The entropy buffer to convert. Must be at least 128 bits.
+     * @returns {this} The Mnemonic instance with the mnemonic set from the entropy.
+     * @throws {Error} If the entropy is less than 128 bits or if it's not an even multiple of 11 bits.
+     */
+    entropy2Mnemonic(buf) {
+      if (buf.length < 128 / 8) {
+        throw new Error("Entropy is less than 128 bits. It must be 128 bits or more.");
+      }
+      const hash = sha256(buf);
+      let bin = "";
+      const bits = buf.length * 8;
+      for (const byte of buf) {
+        bin = bin + ("00000000" + byte.toString(2)).slice(-8);
+      }
+      let hashbits = hash[0].toString(2);
+      hashbits = ("00000000" + hashbits).slice(-8).slice(0, bits / 32);
+      bin = bin + hashbits;
+      if (bin.length % 11 !== 0) {
+        throw new Error("internal error - entropy not an even multiple of 11 bits - " + bin.length.toString());
+      }
+      let mnemonic = "";
+      for (let i = 0; i < bin.length / 11; i++) {
+        if (mnemonic !== "") {
+          mnemonic = mnemonic + this.Wordlist.space;
+        }
+        const wi = Number.parseInt(bin.slice(i * 11, (i + 1) * 11), 2);
+        mnemonic = mnemonic + this.Wordlist.value[wi];
+      }
+      this.mnemonic = mnemonic;
+      return this;
+    }
+    /**
+     * Validates the mnemonic phrase.
+     * Checks for correct length, absence of invalid words, and proper checksum.
+     * @returns {boolean} True if the mnemonic is valid, false otherwise.
+     * @throws {Error} If the mnemonic is not an even multiple of 11 bits.
+     */
+    check() {
+      const mnemonic = this.mnemonic;
+      const words = mnemonic.split(this.Wordlist.space);
+      let bin = "";
+      for (const word of words) {
+        const ind = this.Wordlist.value.indexOf(word);
+        if (ind < 0) {
+          return false;
+        }
+        bin = bin + ("00000000000" + ind.toString(2)).slice(-11);
+      }
+      if (bin.length % 11 !== 0) {
+        throw new Error("internal error - entropy not an even multiple of 11 bits - " + bin.length.toString());
+      }
+      const cs = bin.length / 33;
+      const hashBits = bin.slice(-cs);
+      const nonhashBits = bin.slice(0, bin.length - cs);
+      const buf = [];
+      for (let i = 0; i < nonhashBits.length / 8; i++) {
+        buf.push(Number.parseInt(bin.slice(i * 8, (i + 1) * 8), 2));
+      }
+      const hash = sha256(buf.slice(0, nonhashBits.length / 8));
+      let expectedHashBits = hash[0].toString(2);
+      expectedHashBits = ("00000000" + expectedHashBits).slice(-8).slice(0, cs);
+      return expectedHashBits === hashBits;
+    }
+    /**
+     * Converts a mnemonic to a seed.
+     * This method takes the instance's mnemonic phrase, combines it with a passphrase (if provided),
+     * and uses PBKDF2 to generate a seed. It also validates the mnemonic before conversion.
+     * This seed can then be used for generating deterministic keys.
+     * @param {string} [passphrase=''] - An optional passphrase for added security.
+     * @returns {this} The Mnemonic instance with the seed generated from the mnemonic.
+     * @throws {Error} If the mnemonic does not pass validation or if the passphrase is not a string.
+     */
+    mnemonic2Seed(passphrase = "") {
+      let mnemonic = this.mnemonic;
+      if (!this.check()) {
+        throw new Error("Mnemonic does not pass the check - was the mnemonic typed incorrectly? Are there extra spaces?");
+      }
+      if (typeof passphrase !== "string") {
+        throw new TypeError("passphrase must be a string or undefined");
+      }
+      mnemonic = mnemonic.normalize("NFKD");
+      passphrase = passphrase.normalize("NFKD");
+      const mbuf = toArray2(mnemonic, "utf8");
+      const pbuf = [
+        ...toArray2("mnemonic", "utf8"),
+        ...toArray2(passphrase, "utf8")
+      ];
+      this.seed = pbkdf2(mbuf, pbuf, 2048, 64, "sha512");
+      return this;
+    }
+    /**
+     * Determines the validity of a given passphrase with the mnemonic.
+     * This method is useful for checking if a passphrase matches with the mnemonic.
+     * @param {string} [passphrase=''] - The passphrase to validate.
+     * @returns {boolean} True if the mnemonic and passphrase combination is valid, false otherwise.
+     */
+    isValid(passphrase = "") {
+      let isValid;
+      try {
+        this.mnemonic2Seed(passphrase);
+        isValid = true;
+      } catch {
+        isValid = false;
+      }
+      return isValid;
+    }
+    /**
+     * Static method to check the validity of a given mnemonic and passphrase combination.
+     * @param {string} mnemonic - The mnemonic phrase.
+     * @param {string} [passphrase=''] - The passphrase to validate.
+     * @returns {boolean} True if the combination is valid, false otherwise.
+     */
+    static isValid(mnemonic, passphrase = "") {
+      return new _Mnemonic(mnemonic).isValid(passphrase);
+    }
+  };
+
   // node_modules/@bsv/sdk/dist/esm/src/compat/ECIES.js
   function AES2(key2) {
     if (this._tables[0][0][0] === 0)
@@ -20869,6 +23479,17 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     el.textContent = msg;
     el.className = `status ${kind}`;
   }
+  var MNEMONIC_KEY = "p:wallet:mnemonic";
+  var DERIVATION_PATH = "m/44'/236'/0'/0/0";
+  function keyFromMnemonic(phrase, passphrase = "") {
+    const m = phrase.trim().replace(/\s+/g, " ");
+    if (!Mnemonic.isValid(m)) throw new Error("invalid seed phrase");
+    return HD.fromSeed(Mnemonic.fromString(m).toSeed(passphrase)).derive(DERIVATION_PATH).privKey;
+  }
+  function newSeedWallet() {
+    const mnemonic = Mnemonic.fromRandom(128).toString();
+    return { mnemonic, key: keyFromMnemonic(mnemonic) };
+  }
   function loadKey() {
     const wif = localStorage.getItem(WIF_KEY);
     if (wif) {
@@ -20877,9 +23498,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       } catch {
       }
     }
-    const k = PrivateKey.fromRandom();
-    localStorage.setItem(WIF_KEY, k.toWif());
-    return k;
+    const { mnemonic, key: key2 } = newSeedWallet();
+    localStorage.setItem(WIF_KEY, key2.toWif());
+    localStorage.setItem(MNEMONIC_KEY, mnemonic);
+    return key2;
   }
   function useKey(k) {
     key = k;
@@ -20889,8 +23511,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     salesCache = null;
     renderWallet();
   }
-  function switchWallet(k, recover) {
+  function switchWallet(k, recover, mnemonic) {
     localStorage.setItem(WIF_KEY, k.toWif());
+    if (mnemonic != null && mnemonic !== "") localStorage.setItem(MNEMONIC_KEY, mnemonic);
+    else localStorage.removeItem(MNEMONIC_KEY);
     store2.clear();
     useKey(k);
     renderTokens();
@@ -20915,12 +23539,39 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const mine = document.getElementById("myIdenticon");
     if (mine) mine.innerHTML = avatarHtml(pubKeyHex, 22);
     $("wif").value = key.toWif();
+    const seedEl = document.getElementById("seedPhrase");
+    if (seedEl != null) seedEl.value = localStorage.getItem(MNEMONIC_KEY) ?? "";
     hideWif();
+    hideSeed();
   }
   function hideWif() {
     ;
     $("wif").type = "password";
     $("btnWifShow").textContent = "\u{1F441} Show";
+  }
+  function hideSeed() {
+    const el = document.getElementById("seedPhrase");
+    const btn = document.getElementById("btnSeedShow");
+    if (el != null) el.classList.add("blurred");
+    if (btn != null) btn.textContent = "\u{1F441} Reveal";
+  }
+  function toggleSeed() {
+    const el = document.getElementById("seedPhrase");
+    const btn = document.getElementById("btnSeedShow");
+    if (el == null || btn == null) return;
+    const blurred = el.classList.toggle("blurred");
+    btn.textContent = blurred ? "\u{1F441} Reveal" : "\u{1F648} Hide";
+  }
+  function showSeedModal(mnemonic) {
+    const words = mnemonic.split(" ");
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = `<div class="modal-box" style="max-width:460px"><div class="modal-head"><span>\u{1F511} Your new seed phrase</span><button class="secondary seed-close">\u2715 Close</button></div><p class="muted" style="font-size:13px;margin:0 0 10px">Write these 12 words down, in order, and keep them secret &amp; safe. <b>Anyone with them controls this wallet</b>, and if you lose them with no backup it <b>cannot be recovered</b>.</p><div class="seed-grid">${words.map((w, i) => `<div class="seed-word"><span class="seed-num">${i + 1}</span> ${escapeHtml(w)}</div>`).join("")}</div><div class="row" style="margin-top:12px"><button class="seed-copy">Copy phrase</button><button class="secondary seed-done">I\u2019ve written it down</button></div></div>`;
+    const close = () => overlay.remove();
+    overlay.querySelector(".seed-close")?.addEventListener("click", close);
+    overlay.querySelector(".seed-done")?.addEventListener("click", close);
+    overlay.querySelector(".seed-copy")?.addEventListener("click", () => void navigator.clipboard?.writeText(mnemonic));
+    document.body.append(overlay);
   }
   async function refreshBalance() {
     setStatus("Fetching balance\u2026");
@@ -23572,7 +26223,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"8dbfbca"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"aeefeac"} \xB7 ${"2026-06-18"}`;
     loadAliases();
     useKey(loadKey());
     try {
@@ -23636,9 +26287,11 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     $("btnCfgRestore").onclick = () => void onConfigRestore();
     $("btnCheckUpdates").onclick = () => void onCheckUpdates();
     $("btnNewWallet").onclick = () => {
-      if (!confirm("Replace the current wallet with a new random key? Your current key is in the WIF box \u2014 back it up first.")) return;
-      switchWallet(PrivateKey.fromRandom(), false);
-      setStatus("New wallet created.", "ok");
+      if (!confirm("Replace the current wallet with a new one? Back up the current wallet first (its seed phrase / WIF is above) \u2014 it will be replaced.")) return;
+      const { mnemonic, key: key2 } = newSeedWallet();
+      switchWallet(key2, false, mnemonic);
+      setStatus("New wallet created \u2014 back up your seed phrase!", "ok");
+      showSeedModal(mnemonic);
     };
     $("btnRestore").onclick = () => {
       let k;
@@ -23650,6 +26303,21 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       }
       switchWallet(k, true);
     };
+    $("btnRestoreSeed").onclick = () => {
+      let k;
+      const phrase = val("restoreSeed").trim().replace(/\s+/g, " ");
+      try {
+        k = keyFromMnemonic(phrase);
+      } catch {
+        setStatus("Invalid seed phrase \u2014 check the words and order.", "error");
+        return;
+      }
+      switchWallet(k, true, phrase);
+      $("restoreSeed").value = "";
+      setStatus("Wallet restored from seed phrase \u2014 recovering from chain\u2026", "ok");
+    };
+    $("btnSeedShow").onclick = () => toggleSeed();
+    $("btnSeedCopy").onclick = () => void navigator.clipboard?.writeText($("seedPhrase").value);
     $("btnCopyPub").onclick = () => void navigator.clipboard?.writeText(pubKeyHex);
     $("btnCopyAddr").onclick = () => void navigator.clipboard?.writeText(address);
     $("btnQrAddr").onclick = () => showQrModal("Receive address \u2014 BSV only", address);
