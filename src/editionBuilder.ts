@@ -471,7 +471,7 @@ export async function buildEditionTransferTx(opts: {
 
 // ─── Network wrappers (funding selection + broadcast) ───────────────
 
-async function toFundingInputs(provider: WalletProvider, utxos: Utxo[]): Promise<FundingInput[]> {
+export async function toFundingInputs(provider: WalletProvider, utxos: Utxo[]): Promise<FundingInput[]> {
   return Promise.all(utxos.map(async u => ({ utxo: u, sourceTx: await provider.getSourceTransaction(u.txId) })))
 }
 

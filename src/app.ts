@@ -11,8 +11,9 @@
 import { PrivateKey, Utils, Hash, LockingScript, Mnemonic, HD } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
-import { createCollection, getSafeUtxos, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type BuyerRecord, type MySales, type SalesGroup } from './editionBuilder.ts'
+import { createCollection, getSafeUtxos, selectFunding, PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, SPEND_CANCELLED } from './collectionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type SalesGroup } from './editionBuilder.ts'
+import { buildAirgapRequest, signAirgapRequest, encodeAirgapRequest, decodeAirgapRequest, type AirgapAction, type AirgapRequest } from './airgap.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -462,6 +463,124 @@ async function onBurn(t: StoredToken): Promise<void> {
     } else {
       setStatus(`Burn failed: ${msg}`, 'error')
     }
+  }
+}
+
+// ─── air-gapped signing (Advanced) ──────────────────────────────────
+// Online box exports an unsigned request → offline box signs it with the key → online box broadcasts.
+// Only files cross the gap; the key never leaves the offline machine. Engine in airgap.ts.
+
+function downloadText(filename: string, text: string, mime = 'text/plain'): void {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }))
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+function readFileText(input: HTMLInputElement): Promise<string | null> {
+  const f = input.files?.[0]
+  return f ? f.text() : Promise.resolve(null)
+}
+
+/** Fill the edition picker with the wallet's held covenant editions (the only spendable air-gap targets). */
+function populateAirgapEditions(): void {
+  const sel = document.getElementById('agEdition') as HTMLSelectElement | null
+  if (sel == null) return
+  const prev = sel.value
+  const held = store.active().filter(t => t.kind === 'edition' && t.lockHex)
+  sel.innerHTML = held.length === 0
+    ? '<option value="">(no editions held)</option>'
+    : held.map(t => `<option value="${t.txId}:${t.outputIndex}">${escapeHtml(t.collectionName ?? 'Edition')} · ${short(t.txId, 6)}:${t.outputIndex}</option>`).join('')
+  if (held.some(t => `${t.txId}:${t.outputIndex}` === prev)) sel.value = prev
+}
+
+/** Toggle the recipient field by the chosen action (burn needs no recipient). */
+function syncAirgapAction(): void {
+  const action = (document.querySelector('input[name="agAction"]:checked') as HTMLInputElement | null)?.value
+  const row = document.getElementById('agRecipientRow')
+  if (row != null) row.style.display = action === 'burn' ? 'none' : ''
+}
+
+/** Step 1 (online): gather the edition + funding inputs and download a keyless signing request. */
+async function onAirgapExport(): Promise<void> {
+  const t = store.active().find(x => `${x.txId}:${x.outputIndex}` === val('agEdition'))
+  if (t == null || !t.lockHex) { setStatus('Select an edition to export.', 'error'); return }
+  const action = ((document.querySelector('input[name="agAction"]:checked') as HTMLInputElement | null)?.value ?? 'transfer') as AirgapAction
+  const recipient = val('agRecipient')
+  if (action === 'transfer' && recipient.length !== 66 && recipient.length !== 130) {
+    setStatus("Enter the recipient's public key (33- or 65-byte hex) to export a transfer.", 'error'); return
+  }
+  setStatus('Gathering inputs for the offline signer…')
+  try {
+    const sourceTx = await provider.getSourceTransaction(t.txId)
+    const bond = sourceTx.outputs[t.outputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS
+    const edition: EditionUtxo = { txId: t.txId, outputIndex: t.outputIndex, satoshis: bond, lockBytes: Utils.toArray(t.lockHex, 'hex'), sourceTx }
+    const name = t.collectionName ?? 'edition'
+    let req: AirgapRequest
+    if (action === 'burn') {
+      req = buildAirgapRequest('burn', edition, {
+        summary: `Burn edition of “${name}” (${short(t.txId, 6)}:${t.outputIndex}); reclaim ~${bond.toLocaleString()} sats to the signer's wallet.`,
+      })
+    } else {
+      const note = await noteToPropagate(t)
+      const noteSats = note ? PHARLAP_OUTPUT_SATS : 0
+      const estFee = Math.ceil((1500 * DEFAULT_FEE_PER_KB) / 1000)
+      const selected = selectFunding(await getSafeUtxos(provider), noteSats + estFee + 1000)
+      const funding = await toFundingInputs(provider, selected)
+      req = buildAirgapRequest('transfer', edition, {
+        newOwnerPubKeyHex: recipient, note, funding,
+        summary: `Transfer edition of “${name}” (${short(t.txId, 6)}:${t.outputIndex}) to ${short(recipient, 8)}; ${bond.toLocaleString()}-sat bond rides forward.`,
+      })
+    }
+    downloadText(`smartnfts-${action}-${t.txId.slice(0, 8)}.airgap-request.json`, encodeAirgapRequest(req), 'application/json')
+    setStatus(`✅ Exported ${action} request. Move the file to your offline machine and sign it there (step 2).`, 'ok')
+  } catch (e) {
+    setStatus(`Export failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+let pendingSignReq: AirgapRequest | null = null
+/** Step 2a (offline): read + validate an imported request and show what will be signed. */
+async function onAirgapSignFile(): Promise<void> {
+  pendingSignReq = null
+  const sumEl = $('agSignSummary'); const btn = $('btnAgSign') as HTMLButtonElement
+  const txt = await readFileText($('agSignFile') as HTMLInputElement)
+  if (txt == null) { sumEl.textContent = ''; btn.disabled = true; return }
+  try {
+    const req = decodeAirgapRequest(txt)
+    pendingSignReq = req
+    sumEl.textContent = `${req.action.toUpperCase()} — ${req.summary ?? '(no summary in request)'}`
+    sumEl.style.color = ''
+    btn.disabled = false
+  } catch (e) {
+    sumEl.textContent = `⚠ Not a valid request: ${(e as Error).message}`
+    sumEl.style.color = 'var(--err, #f85149)'
+    btn.disabled = true
+  }
+}
+/** Step 2b (offline): sign the imported request with this wallet's key and download the signed raw tx. */
+async function onAirgapSign(): Promise<void> {
+  if (pendingSignReq == null) { setStatus('Import a request file first.', 'error'); return }
+  setStatus('Signing offline…')
+  try {
+    const { txId, rawTx } = await signAirgapRequest(pendingSignReq, key)
+    downloadText(`smartnfts-signed-${txId.slice(0, 8)}.txt`, rawTx)
+    setStatus(`✅ Signed (tx ${short(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, 'ok')
+  } catch (e) {
+    setStatus(`Sign failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Step 3 (online): broadcast a signed raw tx imported from the offline machine. */
+async function onAirgapBroadcast(): Promise<void> {
+  let hex = val('agBcHex')
+  if (hex.length === 0) hex = ((await readFileText($('agBcFile') as HTMLInputElement)) ?? '').trim()
+  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length < 20) { setStatus('Import or paste the signed raw-tx hex first.', 'error'); return }
+  setStatus('Broadcasting signed transaction…')
+  try {
+    const txId = await provider.broadcast(hex)
+    ;($('agBcHex') as HTMLTextAreaElement).value = ''
+    setStatus(`✅ Broadcast. Tx ${short(txId)}. Refresh balance / check holdings to see it settle.`, 'ok')
+  } catch (e) {
+    setStatus(`Broadcast failed: ${(e as Error).message}`, 'error')
   }
 }
 
@@ -2693,6 +2812,13 @@ function init(): void {
     ;($('restoreSeed') as HTMLInputElement).value = ''
     setStatus('Wallet restored from seed phrase — recovering from chain…', 'ok')
   }
+  // Air-gapped signing (Advanced panel)
+  $('advAirgap').addEventListener('toggle', () => { if (($('advAirgap') as HTMLDetailsElement).open) populateAirgapEditions() })
+  document.querySelectorAll('input[name="agAction"]').forEach(r => r.addEventListener('change', syncAirgapAction))
+  $('btnAgExport').onclick = () => void onAirgapExport()
+  $('agSignFile').addEventListener('change', () => void onAirgapSignFile())
+  $('btnAgSign').onclick = () => void onAirgapSign()
+  $('btnAgBroadcast').onclick = () => void onAirgapBroadcast()
   $('btnSeedShow').onclick = () => toggleSeed()
   $('btnSeedCopy').onclick = () => void navigator.clipboard?.writeText((($('seedPhrase') as HTMLTextAreaElement).value))
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)

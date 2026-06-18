@@ -137,6 +137,14 @@
     .app-version { text-align:center; font-size:11px; color:var(--muted); margin:18px 0 8px; }
     .grid2[hidden] { display:none; } /* [hidden] alone loses to .grid2{display:grid}; this restores hiding */
     #seedPhrase.blurred { filter:blur(6px); }
+    .adv-airgap { border-top:1px solid var(--line); padding-top:12px; }
+    .adv-airgap > summary { cursor:pointer; font-weight:600; color:var(--muted); }
+    .adv-airgap[open] > summary { color:var(--fg); }
+    .airgap-step { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:10px 0; }
+    .airgap-step .airgap-h { margin-bottom:6px; }
+    .airgap-step .airgap-h .muted { font-weight:400; font-size:12px; margin-left:6px; }
+    .airgap-radio { display:inline-flex; align-items:center; gap:5px; font-weight:400; }
+    .airgap-radio input { width:auto; }
     .help-backup { border:1px solid #9e6a03; border-radius:10px; padding:12px 14px; margin:0 0 18px;
       background:linear-gradient(180deg, rgba(158,106,3,.16), rgba(158,106,3,.05)); font-size:14px; line-height:1.5; }
     .seed-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
@@ -399,6 +407,49 @@
         <button id="btnRestore" class="secondary">Restore</button>
       </div>
       <p class="muted" style="font-size:12px;margin:6px 0 0">Restoring rebuilds your wallet <b>and recovers your purchases from chain</b> — works on any browser or device.</p>
+
+      <details id="advAirgap" class="adv-airgap" style="margin-top:16px">
+        <summary>⚙ Advanced — air-gapped signing</summary>
+        <p class="muted" style="font-size:12px;margin:8px 0 12px">
+          Sign edition transfers/burns on a permanently-offline machine. The <b>online</b> box exports an
+          unsigned request, the <b>offline</b> box (which holds your key) signs it, and the online box
+          broadcasts the signed transaction. Only files cross the gap — your seed phrase never does. See the
+          air-gap guide in <code>docs/AIR_GAPPED.md</code>.
+        </p>
+
+        <div class="airgap-step">
+          <div class="airgap-h"><b>1 · Export an unsigned request</b> <span class="muted">online box</span></div>
+          <label>Edition to spend</label>
+          <select id="agEdition"></select>
+          <label>Action</label>
+          <div class="row" style="gap:14px">
+            <label class="airgap-radio"><input type="radio" name="agAction" value="transfer" checked> Transfer</label>
+            <label class="airgap-radio"><input type="radio" name="agAction" value="burn"> Burn</label>
+          </div>
+          <div id="agRecipientRow">
+            <label>Recipient public key (transfer only)</label>
+            <input id="agRecipient" placeholder="33- or 65-byte hex public key" autocomplete="off" />
+          </div>
+          <div class="row" style="margin-top:8px"><button id="btnAgExport" class="secondary">Export request →</button></div>
+        </div>
+
+        <div class="airgap-step">
+          <div class="airgap-h"><b>2 · Sign offline</b> <span class="muted">offline box — holds your key</span></div>
+          <label>Import request file</label>
+          <input id="agSignFile" type="file" accept=".json,application/json" />
+          <div id="agSignSummary" class="muted" style="font-size:12px;margin:6px 0 0"></div>
+          <div class="row" style="margin-top:8px"><button id="btnAgSign" class="secondary" disabled>Sign &amp; export signed tx →</button></div>
+        </div>
+
+        <div class="airgap-step">
+          <div class="airgap-h"><b>3 · Broadcast signed</b> <span class="muted">online box</span></div>
+          <label>Import signed-tx file…</label>
+          <input id="agBcFile" type="file" accept=".txt,.hex,text/plain" />
+          <label style="margin-top:8px">…or paste the signed raw-tx hex</label>
+          <textarea id="agBcHex" rows="2" autocomplete="off" placeholder="0100000001…" style="width:100%;resize:vertical"></textarea>
+          <div class="row" style="margin-top:8px"><button id="btnAgBroadcast" class="secondary">Broadcast →</button></div>
+        </div>
+      </details>
     </div>
     </section>
 
