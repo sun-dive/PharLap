@@ -176,15 +176,16 @@ function chosenBond(): number {
 
 let feeMode: 'fixed' | 'pct' = 'fixed' // Publish pricing input mode (both mint plain v1 fixed fees)
 
-/** Resolve the fixed (publisher, holder) fees from the active Publish pricing mode. In percentage mode it's
- *  a calculator: publisher fee = price × share, holder fee = the rest. Both floored at 1 sat (a 0-sat fee is
- *  dust + leaves no sale signal). The minted covenant is always plain v1 fixed-fee. */
+/** Resolve the fixed (publisher, holder) fees from the active Publish pricing mode. Percentage mode is a
+ *  calculator: the fee pot = final price − bond; the reseller (holder) keeps its net share, publisher the
+ *  rest. Both floored at 1 sat (a 0-sat fee is dust + leaves no sale signal). Minted as plain v1 fixed-fee. */
 function computeFees(): { publisherFeeSats: number; holderFeeSats: number } {
   if (feeMode === 'pct') {
-    const price = Math.max(2, parseInt(val('edPrice') || '0', 10) || 0)
-    const pct = Math.min(100, Math.max(0, parseInt(val('edPubPct') || '0', 10) || 0))
-    const publisherFeeSats = Math.min(price - 1, Math.max(1, Math.round(price * pct / 100)))
-    return { publisherFeeSats, holderFeeSats: Math.max(1, price - publisherFeeSats) }
+    const bond = chosenBond()
+    const fees = Math.max(2, (parseInt(val('edPrice') || '0', 10) || 0) - bond) // ≥2 so each fee ≥1
+    const resellerPct = Math.min(100, Math.max(0, parseInt(val('edResellerPct') || '0', 10) || 0))
+    const holderFeeSats = Math.min(fees - 1, Math.max(1, Math.round(fees * resellerPct / 100)))
+    return { publisherFeeSats: Math.max(1, fees - holderFeeSats), holderFeeSats }
   }
   return {
     publisherFeeSats: Math.max(1, parseInt(val('edPublisherFee') || '1', 10)),
@@ -212,12 +213,18 @@ function setFeeMode(mode: 'fixed' | 'pct'): void {
 
 function updateFeePctPreview(): void {
   if (feeMode !== 'pct') return
-  const f = computeFees()
   const bond = chosenBond()
+  const enteredPrice = parseInt(val('edPrice') || '0', 10) || 0
+  const el = $('edPctPreview')
+  if (enteredPrice < bond + 2) { // price must clear the bond with room for both fees
+    el.innerHTML = `<span style="color:#ffb4ae">Final price must be at least ${(bond + 2).toLocaleString()} sat (above the ${bond.toLocaleString()}-sat bond).</span>`
+    return
+  }
+  const f = computeFees()
   const buyerTotal = f.publisherFeeSats + f.holderFeeSats + bond
-  $('edPctPreview').innerHTML =
-    `→ Publisher <b>${f.publisherFeeSats.toLocaleString()}</b> · Holder <b>${f.holderFeeSats.toLocaleString()}</b> · bond <b>${bond.toLocaleString()}</b> (refundable)` +
-    `<br>Buyer pays ≈ <b>${buyerTotal.toLocaleString()} sat</b> per copy <span class="muted">(+ a small network fee; the ${bond.toLocaleString()}-sat bond is reclaimable by burning)</span>`
+  el.innerHTML =
+    `→ Reseller <b>${f.holderFeeSats.toLocaleString()}</b> · Publisher <b>${f.publisherFeeSats.toLocaleString()}</b> · bond <b>${bond.toLocaleString()}</b> (refundable)` +
+    `<br>Buyer pays <b>${buyerTotal.toLocaleString()} sat</b> per copy <span class="muted">(+ a small network fee; the ${bond.toLocaleString()}-sat bond is reclaimable by burning)</span>`
 }
 
 function termsFromToken(t: StoredToken): EditionTerms {
@@ -2596,7 +2603,7 @@ function init(): void {
   $('btnFeeFixed').onclick = () => setFeeMode('fixed')
   $('btnFeePct').onclick = () => setFeeMode('pct')
   ;($('edPrice') as HTMLInputElement).addEventListener('input', updateFeePctPreview)
-  ;($('edPubPct') as HTMLInputElement).addEventListener('input', updateFeePctPreview)
+  ;($('edResellerPct') as HTMLInputElement).addEventListener('input', updateFeePctPreview)
   ;($('edBond') as HTMLInputElement).addEventListener('input', updateFeePctPreview) // bond feeds the buyer-total preview
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()

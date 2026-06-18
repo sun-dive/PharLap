@@ -20982,10 +20982,11 @@ Proceed?`
   var feeMode = "fixed";
   function computeFees() {
     if (feeMode === "pct") {
-      const price = Math.max(2, parseInt(val("edPrice") || "0", 10) || 0);
-      const pct = Math.min(100, Math.max(0, parseInt(val("edPubPct") || "0", 10) || 0));
-      const publisherFeeSats = Math.min(price - 1, Math.max(1, Math.round(price * pct / 100)));
-      return { publisherFeeSats, holderFeeSats: Math.max(1, price - publisherFeeSats) };
+      const bond = chosenBond();
+      const fees = Math.max(2, (parseInt(val("edPrice") || "0", 10) || 0) - bond);
+      const resellerPct = Math.min(100, Math.max(0, parseInt(val("edResellerPct") || "0", 10) || 0));
+      const holderFeeSats = Math.min(fees - 1, Math.max(1, Math.round(fees * resellerPct / 100)));
+      return { publisherFeeSats: Math.max(1, fees - holderFeeSats), holderFeeSats };
     }
     return {
       publisherFeeSats: Math.max(1, parseInt(val("edPublisherFee") || "1", 10)),
@@ -21009,10 +21010,16 @@ Proceed?`
   }
   function updateFeePctPreview() {
     if (feeMode !== "pct") return;
-    const f2 = computeFees();
     const bond = chosenBond();
+    const enteredPrice = parseInt(val("edPrice") || "0", 10) || 0;
+    const el = $("edPctPreview");
+    if (enteredPrice < bond + 2) {
+      el.innerHTML = `<span style="color:#ffb4ae">Final price must be at least ${(bond + 2).toLocaleString()} sat (above the ${bond.toLocaleString()}-sat bond).</span>`;
+      return;
+    }
+    const f2 = computeFees();
     const buyerTotal = f2.publisherFeeSats + f2.holderFeeSats + bond;
-    $("edPctPreview").innerHTML = `\u2192 Publisher <b>${f2.publisherFeeSats.toLocaleString()}</b> \xB7 Holder <b>${f2.holderFeeSats.toLocaleString()}</b> \xB7 bond <b>${bond.toLocaleString()}</b> (refundable)<br>Buyer pays \u2248 <b>${buyerTotal.toLocaleString()} sat</b> per copy <span class="muted">(+ a small network fee; the ${bond.toLocaleString()}-sat bond is reclaimable by burning)</span>`;
+    el.innerHTML = `\u2192 Reseller <b>${f2.holderFeeSats.toLocaleString()}</b> \xB7 Publisher <b>${f2.publisherFeeSats.toLocaleString()}</b> \xB7 bond <b>${bond.toLocaleString()}</b> (refundable)<br>Buyer pays <b>${buyerTotal.toLocaleString()} sat</b> per copy <span class="muted">(+ a small network fee; the ${bond.toLocaleString()}-sat bond is reclaimable by burning)</span>`;
   }
   function termsFromToken(t) {
     return {
@@ -23565,7 +23572,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"b4dafcb"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"3d767e2"} \xB7 ${"2026-06-18"}`;
     loadAliases();
     useKey(loadKey());
     try {
@@ -23612,7 +23619,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     $("btnFeeFixed").onclick = () => setFeeMode("fixed");
     $("btnFeePct").onclick = () => setFeeMode("pct");
     $("edPrice").addEventListener("input", updateFeePctPreview);
-    $("edPubPct").addEventListener("input", updateFeePctPreview);
+    $("edResellerPct").addEventListener("input", updateFeePctPreview);
     $("edBond").addEventListener("input", updateFeePctPreview);
     $("btnIncoming").onclick = () => void onCheckIncoming();
     $("btnSendMessage").onclick = () => void onSendMessage();
