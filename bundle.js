@@ -26223,7 +26223,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"aeefeac"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"ba39081"} \xB7 ${"2026-06-18"}`;
     loadAliases();
     useKey(loadKey());
     try {
