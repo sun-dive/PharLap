@@ -135,6 +135,7 @@
     .disc-badge.senior { color:var(--accent); border-color:var(--accent); }
     .cfg-backup { border-top:1px solid var(--line); padding-top:12px; margin-bottom:12px; }
     .app-version { text-align:center; font-size:11px; color:var(--muted); margin:18px 0 8px; }
+    .grid2[hidden] { display:none; } /* [hidden] alone loses to .grid2{display:grid}; this restores hiding */
     /* 📊 Sales dashboard */
     .sales-group { border:1px solid var(--line); border-radius:8px; margin:6px 0; overflow:hidden; }
     .sales-group-head { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:#161b22; color:var(--fg); border:none; padding:9px 11px; cursor:pointer; font:inherit; }
@@ -406,6 +407,9 @@
       <textarea id="edDescription" placeholder="What is this? What do holders get? (a short blurb buyers see before purchase)"></textarea>
       <label>Cover image (optional — public storefront art, shown even if the content is encrypted)</label>
       <input id="edCover" type="file" accept="image/*" />
+      <label>Bond per edition (sats) — refundable, reclaimed by burning a copy</label>
+      <input id="edBond" type="number" min="1" value="2100" />
+      <p class="muted" style="font-size:12px;margin:2px 0 0">Each edition rides on this many sats; the owner reclaims them by burning. Higher = stronger price floor (and pricier gifts); set low (e.g. 1) for free-content drops.</p>
       <!-- Pricing is always v1 fixed-fee on-chain. "Percentage" is a UI calculator: enter a price + publisher
            share and we compute the fixed publisher/holder fees that get minted. (Covenant v2 ranged pricing
            stays in the codebase + tests, hidden, for a future build.) -->
@@ -424,11 +428,8 @@
           <div><label>Publisher share (%)</label><input id="edPubPct" type="number" min="0" max="100" value="80" /></div>
         </div>
         <p id="edPctPreview" class="muted" style="font-size:12px;margin:4px 0 0"></p>
-        <p class="muted" style="font-size:11px;margin:2px 0 0">A convenience: this just sets the <b>fixed</b> publisher + holder fees below from your price &amp; share — the publisher keeps the share, the holder (reseller) keeps the rest, on every copy.</p>
+        <p class="muted" style="font-size:11px;margin:2px 0 0">A convenience: from your price &amp; share we set the <b>fixed</b> publisher + holder fees that get minted — the publisher keeps the share, the holder (reseller) keeps the rest, on every copy.</p>
       </div>
-      <label>Bond per edition (sats) — refundable, reclaimed by burning a copy</label>
-      <input id="edBond" type="number" min="1" value="2100" />
-      <p class="muted" style="font-size:12px;margin:2px 0 0">Each edition rides on this many sats; the owner reclaims them by burning. Higher = stronger price floor (and pricier gifts); set low (e.g. 1) for free-content drops.</p>
       <label>Editions to mint now</label>
       <input id="edCount" type="number" min="1" value="1" />
       <label>Embed a file (optional — viewable by holders)</label>
