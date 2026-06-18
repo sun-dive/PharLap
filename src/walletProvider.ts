@@ -258,6 +258,14 @@ export class WalletProvider {
 
   // ── Block Headers (feeds into SPV verification) ───────────────
 
+  /** Current chain tip height (for approximate time-bucketing of activity by block-height delta). */
+  async getChainHeight(): Promise<number> {
+    const resp = await fetchWithRetry(`${WOC_BASE}/chain/info`)
+    if (!resp.ok) throw new Error(`WoC chain info fetch failed: ${resp.status}`)
+    const data = await resp.json()
+    return (data?.blocks ?? 0) as number
+  }
+
   async getBlockHeader(height: number): Promise<WalletBlockHeader> {
     const hashResp = await fetchWithRetry(`${WOC_BASE}/block/height/${height}`)
     if (!hashResp.ok) throw new Error(`WoC block height fetch failed: ${hashResp.status}`)

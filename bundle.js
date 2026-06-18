@@ -16739,6 +16739,13 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       return Transaction.fromHex(hex);
     }
     // ── Block Headers (feeds into SPV verification) ───────────────
+    /** Current chain tip height (for approximate time-bucketing of activity by block-height delta). */
+    async getChainHeight() {
+      const resp = await fetchWithRetry(`${WOC_BASE}/chain/info`);
+      if (!resp.ok) throw new Error(`WoC chain info fetch failed: ${resp.status}`);
+      const data = await resp.json();
+      return data?.blocks ?? 0;
+    }
     async getBlockHeader(height) {
       const hashResp = await fetchWithRetry(`${WOC_BASE}/block/height/${height}`);
       if (!hashResp.ok) throw new Error(`WoC block height fetch failed: ${hashResp.status}`);
@@ -19026,6 +19033,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const entries = [...candidates.entries()];
     const creator = /* @__PURE__ */ new Map();
     const reseller = /* @__PURE__ */ new Map();
+    const creatorEarn = /* @__PURE__ */ new Map();
+    const resellerEarn = /* @__PURE__ */ new Map();
+    const events = [];
     const bump = (g, cid, buyerHex, h) => {
       let m = g.get(cid);
       if (m == null) {
@@ -19042,6 +19052,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         }
       } else m.set(k, { pubKeyHex: buyerHex, count: 1, firstHeight: h, lastHeight: h });
     };
+    const addEarn = (m, cid, v) => {
+      m.set(cid, (m.get(cid) ?? 0) + v);
+    };
     let done = 0;
     for (const [txId, blockHeight] of entries) {
       params.onProgress?.(done, entries.length);
@@ -19055,19 +19068,30 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       const ed = tx.outputs[1] != null ? parseEditionAny(tx.outputs[1].lockingScript) : null;
       if (ed == null) continue;
       const buyerHex = ed.ownerPubKeyHex;
+      const cid = ed.tx1RefHex;
       const publisherHash = utils_exports.toHex(ed.terms.publisherPubKeyHash).toLowerCase();
       if (utils_exports.toHex(Hash_exports.hash160(utils_exports.toArray(buyerHex, "hex"))).toLowerCase() === publisherHash) continue;
       const h = blockHeight || 0;
-      if (publisherHash === myHash) bump(creator, ed.tx1RefHex, buyerHex, h);
+      if (publisherHash === myHash) {
+        const fee = tx.outputs[2]?.satoshis ?? 0;
+        bump(creator, cid, buyerHex, h);
+        addEarn(creatorEarn, cid, fee);
+        events.push({ collectionId: cid, role: "creator", feeSats: fee, height: h, buyerPubKeyHex: buyerHex });
+      }
       const source = tx.outputs[0] != null ? parseEditionAny(tx.outputs[0].lockingScript) : null;
-      if (source != null && source.ownerPubKeyHex.toLowerCase() === me) bump(reseller, ed.tx1RefHex, buyerHex, h);
+      if (source != null && source.ownerPubKeyHex.toLowerCase() === me) {
+        const fee = tx.outputs[3]?.satoshis ?? 0;
+        bump(reseller, cid, buyerHex, h);
+        addEarn(resellerEarn, cid, fee);
+        events.push({ collectionId: cid, role: "reseller", feeSats: fee, height: h, buyerPubKeyHex: buyerHex });
+      }
     }
     params.onProgress?.(entries.length, entries.length);
-    const toGroups = (g) => [...g.entries()].map(([collectionId, m]) => {
+    const toGroups = (g, earn) => [...g.entries()].map(([collectionId, m]) => {
       const buyers = [...m.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity));
-      return { collectionId, sales: buyers.reduce((s2, b) => s2 + b.count, 0), buyers };
+      return { collectionId, sales: buyers.reduce((s2, b) => s2 + b.count, 0), earnings: earn.get(collectionId) ?? 0, buyers };
     }).sort((a, b) => b.sales - a.sales);
-    return { asCreator: toGroups(creator), asReseller: toGroups(reseller), scanned: entries.length, capped };
+    return { asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped };
   }
 
   // src/transfer.ts
@@ -20862,6 +20886,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     pubKeyHex = k.toPublicKey().toString();
     address = k.toAddress();
     provider = new WalletProvider(address);
+    salesCache = null;
     renderWallet();
   }
   function switchWallet(k, recover) {
@@ -23188,61 +23213,80 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     refreshBtn.onclick = () => void scan();
     await scan();
   }
-  async function onSalesDashboard() {
-    const overlay = document.createElement("div");
-    overlay.className = "modal";
-    overlay.innerHTML = '<div class="modal-box gift-modal-box"><div class="modal-head"><span>\u{1F4CA} Sales</span><span class="row" style="gap:6px"><button class="secondary sales-refresh">\u{1F504} Refresh</button><button class="secondary sales-close">\u2715 Close</button></span></div><p class="sales-status muted" style="font-size:12px">Scanning your sales\u2026</p><div class="sales-body"></div><p class="muted" style="font-size:11px;margin-top:10px">Sales at point of purchase (replications). Onward transfers aren\u2019t visible, so buyer lists are "who bought," not current owners.</p></div>';
-    const close = () => overlay.remove();
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) close();
-    });
-    overlay.querySelector(".sales-close")?.addEventListener("click", close);
-    document.body.append(overlay);
-    const statusEl = overlay.querySelector(".sales-status");
-    const bodyEl = overlay.querySelector(".sales-body");
-    const refreshBtn = overlay.querySelector(".sales-refresh");
-    const scan = async () => {
-      refreshBtn.disabled = true;
-      bodyEl.innerHTML = "";
-      statusEl.textContent = "Scanning your sales\u2026";
-      try {
-        const res = await scanMySales(provider, {
-          myPubKeyHex: pubKeyHex,
-          myHash: myPubKeyHash(),
-          onProgress: (d, t) => {
-            statusEl.textContent = `Scanning your sales\u2026 ${d}/${t}`;
-          }
-        });
-        const cids = [...new Set([...res.asCreator, ...res.asReseller].map((g) => g.collectionId))];
-        const names = /* @__PURE__ */ new Map();
-        await Promise.all(cids.map(async (c) => {
+  var salesCache = null;
+  var salesHeight = 0;
+  var salesNames = /* @__PURE__ */ new Map();
+  var BLOCKS_PER_DAY = 144;
+  var fmtBsv = (sats) => (sats / 1e8).toFixed(8).replace(/\.?0+$/, "") || "0";
+  async function renderSalesTab(force = false) {
+    const statsEl = $("salesStats");
+    const statusEl = $("salesStatus");
+    const bodyEl = $("salesBody");
+    const refreshBtn = $("btnSalesRefresh");
+    if (salesCache != null && !force) {
+      paintSales(salesCache, salesHeight);
+      return;
+    }
+    refreshBtn.disabled = true;
+    statsEl.innerHTML = "";
+    bodyEl.innerHTML = "";
+    statusEl.textContent = "Scanning your sales\u2026";
+    try {
+      const height = await provider.getChainHeight().catch(() => 0);
+      const res = await scanMySales(provider, {
+        myPubKeyHex: pubKeyHex,
+        myHash: myPubKeyHash(),
+        onProgress: (d, t) => {
+          statusEl.textContent = `Scanning your sales\u2026 ${d}/${t}`;
+        }
+      });
+      salesCache = res;
+      salesHeight = height;
+      const cids = [...new Set(res.events.map((e) => e.collectionId))];
+      await Promise.all(cids.map(async (c) => {
+        if (!salesNames.has(c)) {
           try {
-            names.set(c, await resolveCollectionName(c));
+            salesNames.set(c, await resolveCollectionName(c));
           } catch {
-            names.set(c, short(c));
+            salesNames.set(c, short(c));
           }
-        }));
-        renderSales(res, names);
-        const allKeys = [...res.asCreator, ...res.asReseller].flatMap((g) => g.buyers.map((b) => b.pubKeyHex));
-        if (allKeys.length) resolveAvatarsThen(allKeys, () => {
-          if (document.body.contains(overlay)) renderSales(res, names);
-        });
-      } catch (e) {
-        statusEl.textContent = `Scan failed: ${e.message}`;
-      } finally {
-        refreshBtn.disabled = false;
-      }
-    };
-    const renderSales = (res, names) => {
-      const totalCreator = res.asCreator.reduce((s2, g) => s2 + g.sales, 0);
-      const totalReseller = res.asReseller.reduce((s2, g) => s2 + g.sales, 0);
-      statusEl.textContent = `${totalCreator} sale${totalCreator === 1 ? "" : "s"} of your mints \xB7 ${totalReseller} direct resale${totalReseller === 1 ? "" : "s"}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}`;
-      bodyEl.innerHTML = "";
-      bodyEl.append(salesSection("\u{1F4E4} As creator \u2014 sales of collections you publish", res.asCreator, names, "No sales of your mints yet."));
-      bodyEl.append(salesSection("\u{1F501} As reseller \u2014 your direct resales", res.asReseller, names, "You haven\u2019t resold a copy yet."));
-    };
-    refreshBtn.onclick = () => void scan();
-    await scan();
+        }
+      }));
+      paintSales(res, height);
+      const keys = res.events.map((e) => e.buyerPubKeyHex);
+      if (keys.length) resolveAvatarsThen(keys, () => {
+        if (salesCache === res) paintSales(res, height);
+      });
+    } catch (e) {
+      statusEl.textContent = `Scan failed: ${e.message}`;
+    } finally {
+      refreshBtn.disabled = false;
+    }
+  }
+  function statTile(label, value, sub) {
+    return `<div class="stat-tile"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-val">${value}</div><div class="stat-sub muted">${escapeHtml(sub)}</div></div>`;
+  }
+  function paintSales(res, height) {
+    const statsEl = $("salesStats");
+    const statusEl = $("salesStatus");
+    const bodyEl = $("salesBody");
+    const monthFloor = height > 0 ? height - 30 * BLOCKS_PER_DAY : 0;
+    const inMonth = (h) => height === 0 || h === 0 || h >= monthFloor;
+    const creatorEv = res.events.filter((e) => e.role === "creator");
+    const resellerEv = res.events.filter((e) => e.role === "reseller");
+    const earned = res.events.reduce((s2, e) => s2 + e.feeSats, 0);
+    const earnedMonth = res.events.filter((e) => inMonth(e.height)).reduce((s2, e) => s2 + e.feeSats, 0);
+    const salesMonth = creatorEv.filter((e) => inMonth(e.height)).length;
+    const resalesMonth = resellerEv.filter((e) => inMonth(e.height)).length;
+    const uniqueBuyers = new Set(res.events.map((e) => e.buyerPubKeyHex.toLowerCase())).size;
+    const top = res.asCreator[0];
+    const noHeight = height === 0;
+    const monthLbl = noHeight ? "period n/a" : "this month";
+    statsEl.innerHTML = '<div class="stat-grid">' + statTile("Sales (your mints)", String(creatorEv.length), `${salesMonth} ${monthLbl}`) + statTile("Earned", `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV \xB7 ${earnedMonth.toLocaleString()} sat ${monthLbl}`) + statTile("Your resales", String(resellerEv.length), `${resalesMonth} ${monthLbl}`) + statTile("Unique buyers", String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : "across your mints") + "</div>";
+    statusEl.textContent = `${res.events.length} sale event${res.events.length === 1 ? "" : "s"}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}${noHeight ? " \xB7 couldn\u2019t fetch block height, periods unavailable" : ""}`;
+    bodyEl.innerHTML = "";
+    bodyEl.append(salesSection("\u{1F4E4} As creator \u2014 sales of collections you publish", res.asCreator, salesNames, "No sales of your mints yet."));
+    bodyEl.append(salesSection("\u{1F501} As reseller \u2014 your direct resales", res.asReseller, salesNames, "You haven\u2019t resold a copy yet."));
   }
   function salesSection(title, groups, names, empty) {
     const sec = document.createElement("div");
@@ -23267,7 +23311,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       const gh = document.createElement("button");
       gh.type = "button";
       gh.className = "sales-group-head";
-      gh.innerHTML = `<span class="chev">\u25B8</span> <span class="sales-group-name">${escapeHtml(name)}</span><span class="sales-group-meta">${g.sales} sale${g.sales === 1 ? "" : "s"} \xB7 ${g.buyers.length} buyer${g.buyers.length === 1 ? "" : "s"}</span>`;
+      gh.innerHTML = `<span class="chev">\u25B8</span> <span class="sales-group-name">${escapeHtml(name)}</span><span class="sales-group-meta">${g.sales} sale${g.sales === 1 ? "" : "s"} \xB7 ${g.buyers.length} buyer${g.buyers.length === 1 ? "" : "s"} \xB7 ${g.earnings.toLocaleString()} sat</span>`;
       const list = document.createElement("div");
       list.className = "buyers-list";
       list.hidden = true;
@@ -23476,6 +23520,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     } catch {
     }
     if (name === "discussions" && discAnchor == null) renderDiscRooms();
+    if (name === "sales") void renderSalesTab();
   }
   function initTabs() {
     const tabs = Array.from(document.querySelectorAll(".tab"));
@@ -23525,7 +23570,8 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       if (discAnchor != null) void loadDiscThread(discAnchor);
       else renderDiscRooms();
     };
-    $("btnSales").onclick = () => void onSalesDashboard();
+    $("btnSales").onclick = () => activateTab("sales");
+    $("btnSalesRefresh").onclick = () => void renderSalesTab(true);
     $("tokenModalClose").onclick = () => closeTokenModal();
     $("tokenModal").addEventListener("click", (e) => {
       if (e.target === $("tokenModal")) closeTokenModal();

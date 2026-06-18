@@ -75,6 +75,7 @@ function useKey(k: PrivateKey): void {
   pubKeyHex = k.toPublicKey().toString()
   address = k.toAddress()
   provider = new WalletProvider(address)
+  salesCache = null // the Sales scan belongs to the previous key
   renderWallet()
 }
 
@@ -2238,49 +2239,63 @@ async function onViewBuyers(t: StoredToken): Promise<void> {
 
 /** 📊 Sales dashboard: one scan of your address history → all your sales, both as creator (every sale of a
  *  collection you publish) and as reseller (your direct resales), grouped per collection. */
-async function onSalesDashboard(): Promise<void> {
-  const overlay = document.createElement('div')
-  overlay.className = 'modal'
-  overlay.innerHTML =
-    '<div class="modal-box gift-modal-box">' +
-    '<div class="modal-head"><span>📊 Sales</span><span class="row" style="gap:6px">' +
-    '<button class="secondary sales-refresh">🔄 Refresh</button><button class="secondary sales-close">✕ Close</button></span></div>' +
-    '<p class="sales-status muted" style="font-size:12px">Scanning your sales…</p>' +
-    '<div class="sales-body"></div>' +
-    '<p class="muted" style="font-size:11px;margin-top:10px">Sales at point of purchase (replications). Onward transfers aren’t visible, so buyer lists are "who bought," not current owners.</p>' +
-    '</div>'
-  const close = (): void => overlay.remove()
-  overlay.addEventListener('click', e => { if (e.target === overlay) close() })
-  overlay.querySelector('.sales-close')?.addEventListener('click', close)
-  document.body.append(overlay)
-  const statusEl = overlay.querySelector('.sales-status') as HTMLElement
-  const bodyEl = overlay.querySelector('.sales-body') as HTMLElement
-  const refreshBtn = overlay.querySelector('.sales-refresh') as HTMLButtonElement
+// ─── Sales tab (stats + breakdown) ──────────────────────────────────
+let salesCache: MySales | null = null
+let salesHeight = 0
+const salesNames = new Map<string, string>()
+const BLOCKS_PER_DAY = 144
 
-  const scan = async (): Promise<void> => {
-    refreshBtn.disabled = true; bodyEl.innerHTML = ''; statusEl.textContent = 'Scanning your sales…'
-    try {
-      const res = await scanMySales(provider, { myPubKeyHex: pubKeyHex, myHash: myPubKeyHash(),
-        onProgress: (d, t) => { statusEl.textContent = `Scanning your sales… ${d}/${t}` } })
-      // Resolve collection names up front (cached), then render.
-      const cids = [...new Set([...res.asCreator, ...res.asReseller].map(g => g.collectionId))]
-      const names = new Map<string, string>()
-      await Promise.all(cids.map(async c => { try { names.set(c, await resolveCollectionName(c)) } catch { names.set(c, short(c)) } }))
-      renderSales(res, names)
-      const allKeys = [...res.asCreator, ...res.asReseller].flatMap(g => g.buyers.map(b => b.pubKeyHex))
-      if (allKeys.length) resolveAvatarsThen(allKeys, () => { if (document.body.contains(overlay)) renderSales(res, names) })
-    } catch (e) { statusEl.textContent = `Scan failed: ${(e as Error).message}` } finally { refreshBtn.disabled = false }
-  }
-  const renderSales = (res: MySales, names: Map<string, string>): void => {
-    const totalCreator = res.asCreator.reduce((s, g) => s + g.sales, 0)
-    const totalReseller = res.asReseller.reduce((s, g) => s + g.sales, 0)
-    statusEl.textContent = `${totalCreator} sale${totalCreator === 1 ? '' : 's'} of your mints · ${totalReseller} direct resale${totalReseller === 1 ? '' : 's'}${res.capped ? ` · most recent ${res.scanned} txs` : ''}`
-    bodyEl.innerHTML = ''
-    bodyEl.append(salesSection('📤 As creator — sales of collections you publish', res.asCreator, names, 'No sales of your mints yet.'))
-    bodyEl.append(salesSection('🔁 As reseller — your direct resales', res.asReseller, names, 'You haven’t resold a copy yet.'))
-  }
-  refreshBtn.onclick = () => void scan()
-  await scan()
+const fmtBsv = (sats: number): string => (sats / 1e8).toFixed(8).replace(/\.?0+$/, '') || '0'
+
+/** Render the Sales tab. Reuses the last scan unless `force` (or first visit) — the scan is the expensive bit. */
+async function renderSalesTab(force = false): Promise<void> {
+  const statsEl = $('salesStats'); const statusEl = $('salesStatus'); const bodyEl = $('salesBody')
+  const refreshBtn = $('btnSalesRefresh') as HTMLButtonElement
+  if (salesCache != null && !force) { paintSales(salesCache, salesHeight); return }
+  refreshBtn.disabled = true; statsEl.innerHTML = ''; bodyEl.innerHTML = ''; statusEl.textContent = 'Scanning your sales…'
+  try {
+    const height = await provider.getChainHeight().catch(() => 0)
+    const res = await scanMySales(provider, { myPubKeyHex: pubKeyHex, myHash: myPubKeyHash(),
+      onProgress: (d, t) => { statusEl.textContent = `Scanning your sales… ${d}/${t}` } })
+    salesCache = res; salesHeight = height
+    const cids = [...new Set(res.events.map(e => e.collectionId))]
+    await Promise.all(cids.map(async c => { if (!salesNames.has(c)) { try { salesNames.set(c, await resolveCollectionName(c)) } catch { salesNames.set(c, short(c)) } } }))
+    paintSales(res, height)
+    const keys = res.events.map(e => e.buyerPubKeyHex)
+    if (keys.length) resolveAvatarsThen(keys, () => { if (salesCache === res) paintSales(res, height) })
+  } catch (e) { statusEl.textContent = `Scan failed: ${(e as Error).message}` } finally { refreshBtn.disabled = false }
+}
+
+function statTile(label: string, value: string, sub: string): string {
+  return `<div class="stat-tile"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-val">${value}</div><div class="stat-sub muted">${escapeHtml(sub)}</div></div>`
+}
+
+function paintSales(res: MySales, height: number): void {
+  const statsEl = $('salesStats'); const statusEl = $('salesStatus'); const bodyEl = $('salesBody')
+  // Approximate "this month" by block-height delta (unconfirmed counts as recent).
+  const monthFloor = height > 0 ? height - 30 * BLOCKS_PER_DAY : 0
+  const inMonth = (h: number): boolean => height === 0 || h === 0 || h >= monthFloor
+  const creatorEv = res.events.filter(e => e.role === 'creator')
+  const resellerEv = res.events.filter(e => e.role === 'reseller')
+  const earned = res.events.reduce((s, e) => s + e.feeSats, 0)
+  const earnedMonth = res.events.filter(e => inMonth(e.height)).reduce((s, e) => s + e.feeSats, 0)
+  const salesMonth = creatorEv.filter(e => inMonth(e.height)).length
+  const resalesMonth = resellerEv.filter(e => inMonth(e.height)).length
+  const uniqueBuyers = new Set(res.events.map(e => e.buyerPubKeyHex.toLowerCase())).size
+  const top = res.asCreator[0]
+  const noHeight = height === 0
+  const monthLbl = noHeight ? 'period n/a' : 'this month'
+
+  statsEl.innerHTML = '<div class="stat-grid">' +
+    statTile('Sales (your mints)', String(creatorEv.length), `${salesMonth} ${monthLbl}`) +
+    statTile('Earned', `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV · ${earnedMonth.toLocaleString()} sat ${monthLbl}`) +
+    statTile('Your resales', String(resellerEv.length), `${resalesMonth} ${monthLbl}`) +
+    statTile('Unique buyers', String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : 'across your mints') +
+    '</div>'
+  statusEl.textContent = `${res.events.length} sale event${res.events.length === 1 ? '' : 's'}${res.capped ? ` · most recent ${res.scanned} txs` : ''}${noHeight ? ' · couldn’t fetch block height, periods unavailable' : ''}`
+  bodyEl.innerHTML = ''
+  bodyEl.append(salesSection('📤 As creator — sales of collections you publish', res.asCreator, salesNames, 'No sales of your mints yet.'))
+  bodyEl.append(salesSection('🔁 As reseller — your direct resales', res.asReseller, salesNames, 'You haven’t resold a copy yet.'))
 }
 
 /** A collapsible section of sales groups (collections), each expanding to its buyer list. */
@@ -2297,7 +2312,7 @@ function salesSection(title: string, groups: SalesGroup[], names: Map<string, st
     const card = document.createElement('div'); card.className = 'sales-group'
     const gh = document.createElement('button'); gh.type = 'button'; gh.className = 'sales-group-head'
     gh.innerHTML = `<span class="chev">▸</span> <span class="sales-group-name">${escapeHtml(name)}</span>` +
-      `<span class="sales-group-meta">${g.sales} sale${g.sales === 1 ? '' : 's'} · ${g.buyers.length} buyer${g.buyers.length === 1 ? '' : 's'}</span>`
+      `<span class="sales-group-meta">${g.sales} sale${g.sales === 1 ? '' : 's'} · ${g.buyers.length} buyer${g.buyers.length === 1 ? '' : 's'} · ${g.earnings.toLocaleString()} sat</span>`
     const list = document.createElement('div'); list.className = 'buyers-list'; list.hidden = true
     const msgAll = document.createElement('button'); msgAll.className = 'secondary'; msgAll.style.margin = '6px 0'
     msgAll.textContent = `✉ Message all ${g.buyers.length}`
@@ -2485,6 +2500,7 @@ function activateTab(name: string): void {
   try { localStorage.setItem('p:activeTab', name) } catch { /* private mode — ignore */ }
   // Populate the Discussions room list on open (unless a room is already open, so a reload of the tab keeps it).
   if (name === 'discussions' && discAnchor == null) renderDiscRooms()
+  if (name === 'sales') void renderSalesTab() // reuses the cached scan after the first visit
 }
 
 function initTabs(): void {
@@ -2523,7 +2539,8 @@ function init(): void {
   $('btnSortRecent').onclick = () => setNftSort('recent')
   $('btnSortPublisher').onclick = () => setNftSort('publisher')
   $('btnDiscRefresh').onclick = () => { if (discAnchor != null) void loadDiscThread(discAnchor); else renderDiscRooms() }
-  $('btnSales').onclick = () => void onSalesDashboard()
+  $('btnSales').onclick = () => activateTab('sales')
+  $('btnSalesRefresh').onclick = () => void renderSalesTab(true)
   $('tokenModalClose').onclick = () => closeTokenModal()
   $('tokenModal').addEventListener('click', e => { if (e.target === $('tokenModal')) closeTokenModal() })
   // Any action button inside the detail modal navigates or mutates — hide the modal so it doesn't stack over
