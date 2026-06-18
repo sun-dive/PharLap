@@ -1765,9 +1765,9 @@ function renderCollectionView(info: CollectionInfo): void {
   $('cvDesc').textContent = info.description || '(no description provided)'
   if (info.isV2) {
     $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sats</b> <span class="muted">` +
-      `(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sats, plus a small network fee)</span>`
+      `(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sats, plus a small network fee and a refundable bond you reclaim by burning the token)</span>`
   } else if (info.fees) {
-    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.publisher + info.fees.holder} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee)</span>`
+    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.publisher + info.fees.holder} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee and a refundable bond you reclaim by burning the token)</span>`
   } else {
     $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
   }

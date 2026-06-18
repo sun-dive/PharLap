@@ -22695,9 +22695,9 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     }
     $("cvDesc").textContent = info.description || "(no description provided)";
     if (info.isV2) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sats</b> <span class="muted">(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee)</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sats</b> <span class="muted">(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee and a refundable bond you reclaim by burning the token)</span>`;
     } else if (info.fees) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.publisher + info.fees.holder} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee)</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.publisher + info.fees.holder} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee and a refundable bond you reclaim by burning the token)</span>`;
     } else {
       $("cvPrice").innerHTML = '<span class="muted">This collection is not a replicable edition.</span>';
     }
@@ -23565,7 +23565,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"b7f919a"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"104470c"} \xB7 ${"2026-06-18"}`;
     loadAliases();
     useKey(loadKey());
     try {
