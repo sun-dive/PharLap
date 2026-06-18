@@ -21704,6 +21704,78 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return { asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped };
   }
 
+  // src/airgap.ts
+  var AIRGAP_VERSION = 1;
+  function buildAirgapRequest(action, edition, opts = {}) {
+    return {
+      v: AIRGAP_VERSION,
+      action,
+      edition: {
+        txId: edition.txId,
+        outputIndex: edition.outputIndex,
+        satoshis: edition.satoshis,
+        lockHex: utils_exports.toHex(edition.lockBytes),
+        sourceTxHex: edition.sourceTx.toHex()
+      },
+      newOwnerPubKeyHex: opts.newOwnerPubKeyHex,
+      note: opts.note,
+      funding: opts.funding?.map((f2) => ({
+        txId: f2.utxo.txId,
+        outputIndex: f2.utxo.outputIndex,
+        satoshis: f2.utxo.satoshis,
+        sourceTxHex: f2.sourceTx.toHex()
+      })),
+      feePerKb: opts.feePerKb,
+      summary: opts.summary
+    };
+  }
+  async function signAirgapRequest(req, key2) {
+    if (req.v !== AIRGAP_VERSION) throw new Error(`unsupported air-gap request version ${req.v}`);
+    const edition = {
+      txId: req.edition.txId,
+      outputIndex: req.edition.outputIndex,
+      satoshis: req.edition.satoshis,
+      lockBytes: utils_exports.toArray(req.edition.lockHex, "hex"),
+      sourceTx: Transaction.fromHex(req.edition.sourceTxHex)
+    };
+    const owner = utils_exports.toHex(editionOwnerPubKey(edition.lockBytes)).toLowerCase();
+    if (owner !== key2.toPublicKey().toString().toLowerCase()) {
+      throw new Error("this wallet does not own that edition \u2014 cannot sign");
+    }
+    if (req.action === "burn") {
+      const r2 = await buildEditionBurnTx({ edition, ownerKey: key2, feePerKb: req.feePerKb });
+      return { txId: r2.txId, rawTx: r2.tx.toHex() };
+    }
+    if (req.action === "transfer") {
+      if (req.newOwnerPubKeyHex == null || req.newOwnerPubKeyHex.length === 0) throw new Error("transfer request is missing the recipient pubkey");
+      const funding = (req.funding ?? []).map((f2) => ({
+        utxo: { txId: f2.txId, outputIndex: f2.outputIndex, satoshis: f2.satoshis, script: "" },
+        sourceTx: Transaction.fromHex(f2.sourceTxHex)
+      }));
+      const r2 = await buildEditionTransferTx({
+        edition,
+        ownerKey: key2,
+        newOwnerPubKey: utils_exports.toArray(req.newOwnerPubKeyHex, "hex"),
+        funding,
+        note: req.note,
+        feePerKb: req.feePerKb
+      });
+      return { txId: r2.txId, rawTx: r2.tx.toHex() };
+    }
+    throw new Error(`unknown air-gap action: ${String(req.action)}`);
+  }
+  function encodeAirgapRequest(req) {
+    return JSON.stringify(req, null, 2);
+  }
+  function decodeAirgapRequest(json) {
+    const req = JSON.parse(json);
+    if (req == null || typeof req !== "object") throw new Error("not an air-gap request");
+    if (req.v !== AIRGAP_VERSION) throw new Error(`unsupported air-gap request version ${req.v}`);
+    if (req.action !== "transfer" && req.action !== "burn") throw new Error("unknown air-gap action");
+    if (req.edition?.sourceTxHex == null || req.edition.lockHex == null) throw new Error("malformed air-gap request (missing edition data)");
+    return req;
+  }
+
   // src/transfer.ts
   async function buildTransferTx(opts) {
     const sats = opts.outputSats ?? PHARLAP_OUTPUT_SATS;
@@ -23898,6 +23970,126 @@ Proceed?`
       } else {
         setStatus(`Burn failed: ${msg}`, "error");
       }
+    }
+  }
+  function downloadText(filename, text, mime = "text/plain") {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1e3);
+  }
+  function readFileText(input) {
+    const f2 = input.files?.[0];
+    return f2 ? f2.text() : Promise.resolve(null);
+  }
+  function populateAirgapEditions() {
+    const sel = document.getElementById("agEdition");
+    if (sel == null) return;
+    const prev = sel.value;
+    const held = store2.active().filter((t) => t.kind === "edition" && t.lockHex);
+    sel.innerHTML = held.length === 0 ? '<option value="">(no editions held)</option>' : held.map((t) => `<option value="${t.txId}:${t.outputIndex}">${escapeHtml(t.collectionName ?? "Edition")} \xB7 ${short(t.txId, 6)}:${t.outputIndex}</option>`).join("");
+    if (held.some((t) => `${t.txId}:${t.outputIndex}` === prev)) sel.value = prev;
+  }
+  function syncAirgapAction() {
+    const action = document.querySelector('input[name="agAction"]:checked')?.value;
+    const row = document.getElementById("agRecipientRow");
+    if (row != null) row.style.display = action === "burn" ? "none" : "";
+  }
+  async function onAirgapExport() {
+    const t = store2.active().find((x) => `${x.txId}:${x.outputIndex}` === val("agEdition"));
+    if (t == null || !t.lockHex) {
+      setStatus("Select an edition to export.", "error");
+      return;
+    }
+    const action = document.querySelector('input[name="agAction"]:checked')?.value ?? "transfer";
+    const recipient = val("agRecipient");
+    if (action === "transfer" && recipient.length !== 66 && recipient.length !== 130) {
+      setStatus("Enter the recipient's public key (33- or 65-byte hex) to export a transfer.", "error");
+      return;
+    }
+    setStatus("Gathering inputs for the offline signer\u2026");
+    try {
+      const sourceTx = await provider.getSourceTransaction(t.txId);
+      const bond = sourceTx.outputs[t.outputIndex]?.satoshis ?? PHARLAP_OUTPUT_SATS;
+      const edition = { txId: t.txId, outputIndex: t.outputIndex, satoshis: bond, lockBytes: utils_exports.toArray(t.lockHex, "hex"), sourceTx };
+      const name = t.collectionName ?? "edition";
+      let req;
+      if (action === "burn") {
+        req = buildAirgapRequest("burn", edition, {
+          summary: `Burn edition of \u201C${name}\u201D (${short(t.txId, 6)}:${t.outputIndex}); reclaim ~${bond.toLocaleString()} sats to the signer's wallet.`
+        });
+      } else {
+        const note = await noteToPropagate(t);
+        const noteSats = note ? PHARLAP_OUTPUT_SATS : 0;
+        const estFee = Math.ceil(1500 * DEFAULT_FEE_PER_KB / 1e3);
+        const selected = selectFunding(await getSafeUtxos(provider), noteSats + estFee + 1e3);
+        const funding = await toFundingInputs(provider, selected);
+        req = buildAirgapRequest("transfer", edition, {
+          newOwnerPubKeyHex: recipient,
+          note,
+          funding,
+          summary: `Transfer edition of \u201C${name}\u201D (${short(t.txId, 6)}:${t.outputIndex}) to ${short(recipient, 8)}; ${bond.toLocaleString()}-sat bond rides forward.`
+        });
+      }
+      downloadText(`smartnfts-${action}-${t.txId.slice(0, 8)}.airgap-request.json`, encodeAirgapRequest(req), "application/json");
+      setStatus(`\u2705 Exported ${action} request. Move the file to your offline machine and sign it there (step 2).`, "ok");
+    } catch (e) {
+      setStatus(`Export failed: ${e.message}`, "error");
+    }
+  }
+  var pendingSignReq = null;
+  async function onAirgapSignFile() {
+    pendingSignReq = null;
+    const sumEl = $("agSignSummary");
+    const btn = $("btnAgSign");
+    const txt = await readFileText($("agSignFile"));
+    if (txt == null) {
+      sumEl.textContent = "";
+      btn.disabled = true;
+      return;
+    }
+    try {
+      const req = decodeAirgapRequest(txt);
+      pendingSignReq = req;
+      sumEl.textContent = `${req.action.toUpperCase()} \u2014 ${req.summary ?? "(no summary in request)"}`;
+      sumEl.style.color = "";
+      btn.disabled = false;
+    } catch (e) {
+      sumEl.textContent = `\u26A0 Not a valid request: ${e.message}`;
+      sumEl.style.color = "var(--err, #f85149)";
+      btn.disabled = true;
+    }
+  }
+  async function onAirgapSign() {
+    if (pendingSignReq == null) {
+      setStatus("Import a request file first.", "error");
+      return;
+    }
+    setStatus("Signing offline\u2026");
+    try {
+      const { txId, rawTx } = await signAirgapRequest(pendingSignReq, key);
+      downloadText(`smartnfts-signed-${txId.slice(0, 8)}.txt`, rawTx);
+      setStatus(`\u2705 Signed (tx ${short(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, "ok");
+    } catch (e) {
+      setStatus(`Sign failed: ${e.message}`, "error");
+    }
+  }
+  async function onAirgapBroadcast() {
+    let hex = val("agBcHex");
+    if (hex.length === 0) hex = (await readFileText($("agBcFile")) ?? "").trim();
+    if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length < 20) {
+      setStatus("Import or paste the signed raw-tx hex first.", "error");
+      return;
+    }
+    setStatus("Broadcasting signed transaction\u2026");
+    try {
+      const txId = await provider.broadcast(hex);
+      $("agBcHex").value = "";
+      setStatus(`\u2705 Broadcast. Tx ${short(txId)}. Refresh balance / check holdings to see it settle.`, "ok");
+    } catch (e) {
+      setStatus(`Broadcast failed: ${e.message}`, "error");
     }
   }
   async function onSend(txId, outputIndex) {
@@ -26223,7 +26415,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c86b968"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f962b67"} \xB7 ${"2026-06-18"}`;
     loadAliases();
     useKey(loadKey());
     try {
@@ -26316,6 +26508,14 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       $("restoreSeed").value = "";
       setStatus("Wallet restored from seed phrase \u2014 recovering from chain\u2026", "ok");
     };
+    $("advAirgap").addEventListener("toggle", () => {
+      if ($("advAirgap").open) populateAirgapEditions();
+    });
+    document.querySelectorAll('input[name="agAction"]').forEach((r2) => r2.addEventListener("change", syncAirgapAction));
+    $("btnAgExport").onclick = () => void onAirgapExport();
+    $("agSignFile").addEventListener("change", () => void onAirgapSignFile());
+    $("btnAgSign").onclick = () => void onAirgapSign();
+    $("btnAgBroadcast").onclick = () => void onAirgapBroadcast();
     $("btnSeedShow").onclick = () => toggleSeed();
     $("btnSeedCopy").onclick = () => void navigator.clipboard?.writeText($("seedPhrase").value);
     $("btnCopyPub").onclick = () => void navigator.clipboard?.writeText(pubKeyHex);
