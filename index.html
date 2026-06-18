@@ -141,6 +141,10 @@
     .watch-banner { border:1px solid var(--accent); border-radius:10px; padding:10px 12px; margin-bottom:12px;
       background:linear-gradient(180deg, rgba(88,166,255,.14), rgba(88,166,255,.05)); font-size:13px; line-height:1.5; }
     .send-bsv { border-top:1px solid var(--line); margin-top:14px; padding-top:12px; }
+    /* Lead "Send BSV" block — the headline action at the top of the wallet. */
+    .send-bsv-lead { border:1px solid var(--accent); border-radius:12px; padding:12px 14px; margin:10px 0 16px;
+      background:linear-gradient(180deg, rgba(88,166,255,.10), rgba(88,166,255,.03)); }
+    .send-bsv-title { font-size:15px; font-weight:600; color:var(--fg); display:block; margin-bottom:6px; }
     .adv-airgap { border-top:1px solid var(--line); padding-top:12px; }
     .adv-airgap > summary { cursor:pointer; font-weight:600; color:var(--muted); }
     .adv-airgap[open] > summary { color:var(--fg); }
@@ -370,6 +374,28 @@
         requests, and broadcast signed transactions. Signing happens on your offline machine.
         <button id="btnWatchExit" class="secondary" style="margin-top:8px">Exit watch-only (new local wallet)</button>
       </div>
+      <!-- Balance + Send BSV lead the wallet — the everyday action is the first thing you see. -->
+      <div class="kv balance-kv"><b>Balance <span class="muted" style="font-weight:400">(BSV)</span></b>
+        <div class="row" style="align-items:center;gap:8px;margin-top:2px">
+          <span id="balance" class="mono" style="flex:1;min-width:0">—</span>
+          <button id="btnRefresh" class="secondary">↻ Refresh</button>
+        </div>
+      </div>
+
+      <div class="send-bsv send-bsv-lead">
+        <label class="send-bsv-title">⚡ Send BSV</label>
+        <input id="sendBsvAddr" placeholder="recipient BSV address (1…)" autocomplete="off" />
+        <div class="row" style="margin-top:6px; align-items:center; gap:10px">
+          <input id="sendBsvAmount" type="number" min="1" step="1" placeholder="amount (sats)" style="flex:1 1 auto; min-width:0" />
+          <label class="airgap-radio"><input type="checkbox" id="sendBsvMax"> Send max</label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="btnSendBsv" data-needs-key>Send</button>
+          <button id="btnSendBsvExport" class="secondary" title="Export an unsigned request to sign on your offline machine">Export for offline signing →</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">A plain BSV payment to any address. Change returns to this wallet. To sign offline, <b>Export</b> here, then use steps 2–3 in <b>Advanced</b> below.</p>
+      </div>
+
       <div class="kv"><b>Receive address <span class="bsv-tag">BSV ONLY</span></b>
         <div class="row" style="flex-wrap:nowrap;align-items:center;gap:6px;margin-top:2px">
           <span id="address" class="mono" style="flex:1;min-width:0"></span>
@@ -384,25 +410,9 @@
           <button id="btnQrPub" class="secondary">QR</button>
         </div>
       </div>
-      <div class="kv"><b>Balance <span class="muted" style="font-weight:400">(BSV)</span></b><span id="balance" class="mono">—</span></div>
       <p class="wallet-warn">⚠️ Send only <b>Bitcoin SV (BSV)</b> to your address above. BTC, BCH and other coins share this address format but live on a <b>different blockchain</b> — they will not arrive in this wallet.</p>
       <div class="row" style="margin-top:8px">
-        <button id="btnRefresh" class="secondary">Refresh balance</button>
         <button id="btnNewWallet" class="secondary">New wallet</button>
-      </div>
-
-      <div class="send-bsv">
-        <label>Send BSV</label>
-        <input id="sendBsvAddr" placeholder="recipient BSV address (1…)" autocomplete="off" />
-        <div class="row" style="margin-top:6px; align-items:center; gap:10px">
-          <input id="sendBsvAmount" type="number" min="1" step="1" placeholder="amount (sats)" style="flex:1 1 auto; min-width:0" />
-          <label class="airgap-radio"><input type="checkbox" id="sendBsvMax"> Send max</label>
-        </div>
-        <div class="row" style="margin-top:8px">
-          <button id="btnSendBsv" data-needs-key>Send</button>
-          <button id="btnSendBsvExport" class="secondary" title="Export an unsigned request to sign on your offline machine">Export for offline signing →</button>
-        </div>
-        <p class="muted" style="font-size:12px;margin:6px 0 0">A plain BSV payment to any address. Change returns to this wallet. To sign offline, <b>Export</b> here, then use steps 2–3 in <b>Advanced</b> below.</p>
       </div>
 
       <div data-needs-key>
