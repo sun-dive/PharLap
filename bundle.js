@@ -20979,15 +20979,38 @@ Proceed?`
   function chosenBond() {
     return Math.max(1, parseInt(val("edBond") || String(EDITION_BOND_SATS), 10));
   }
+  var feeMode = "fixed";
+  function computeFees() {
+    if (feeMode === "pct") {
+      const price = Math.max(2, parseInt(val("edPrice") || "0", 10) || 0);
+      const pct = Math.min(100, Math.max(0, parseInt(val("edPubPct") || "0", 10) || 0));
+      const publisherFeeSats = Math.min(price - 1, Math.max(1, Math.round(price * pct / 100)));
+      return { publisherFeeSats, holderFeeSats: Math.max(1, price - publisherFeeSats) };
+    }
+    return {
+      publisherFeeSats: Math.max(1, parseInt(val("edPublisherFee") || "1", 10)),
+      holderFeeSats: Math.max(1, parseInt(val("edHolderFee") || "1", 10))
+    };
+  }
   function ownTerms() {
     return {
       publisherPubKeyHash: Hash_exports.hash160(key.toPublicKey().encode(true)),
-      // Floor at 1 sat: a 0-sat fee output is dust (risks rejection) and leaves the publisher/holder with no
-      // sale signal — the fee payment landing in their address is the only purchase notification.
-      publisherFeeSats: Math.max(1, parseInt(val("edPublisherFee") || "1", 10)),
-      holderFeeSats: Math.max(1, parseInt(val("edHolderFee") || "1", 10)),
+      ...computeFees(),
       tokenSats: chosenBond()
     };
+  }
+  function setFeeMode(mode) {
+    feeMode = mode;
+    $("btnFeeFixed").classList.toggle("active", mode === "fixed");
+    $("btnFeePct").classList.toggle("active", mode === "pct");
+    $("feeFixed").hidden = mode !== "fixed";
+    $("feePct").hidden = mode !== "pct";
+    updateFeePctPreview();
+  }
+  function updateFeePctPreview() {
+    if (feeMode !== "pct") return;
+    const f2 = computeFees();
+    $("edPctPreview").textContent = `\u2192 Publisher ${f2.publisherFeeSats.toLocaleString()} sat \xB7 Holder ${f2.holderFeeSats.toLocaleString()} sat per copy`;
   }
   function termsFromToken(t) {
     return {
@@ -23540,7 +23563,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"5c9fd5a"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f1d1f50"} \xB7 ${"2026-06-18"}`;
     loadAliases();
     useKey(loadKey());
     try {
@@ -23584,6 +23607,10 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     $("btnRefresh").onclick = () => void refreshBalance();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
+    $("btnFeeFixed").onclick = () => setFeeMode("fixed");
+    $("btnFeePct").onclick = () => setFeeMode("pct");
+    $("edPrice").addEventListener("input", updateFeePctPreview);
+    $("edPubPct").addEventListener("input", updateFeePctPreview);
     $("btnIncoming").onclick = () => void onCheckIncoming();
     $("btnSendMessage").onclick = () => void onSendMessage();
     $("btnCheckMessages").onclick = () => void onCheckMessages();
