@@ -18694,10 +18694,23 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     for (let i = 0; i < max && consecutiveEmpty < gapLimit; i++) {
       const k = deriveVoucherKey(publisherKey, tx1RefHex, i);
       const script = p2pkhScript(Hash_exports.hash160(k.toPublicKey().encode(true)));
-      let funded = false;
+      let unspent = [];
       try {
-        funded = (await provider2.getAddressHistory(k.toAddress())).length > 0;
+        unspent = await provider2.getUnspentByScriptHash(wocScriptHash(script));
       } catch {
+      }
+      let funded = unspent.length > 0;
+      if (!funded) {
+        try {
+          funded = (await provider2.getAddressHistory(k.toAddress())).length > 0;
+        } catch {
+        }
+        if (!funded) {
+          try {
+            funded = (await provider2.getRecentTxIdsForAddress(k.toAddress())).length > 0;
+          } catch {
+          }
+        }
       }
       if (!funded) {
         consecutiveEmpty++;
@@ -18705,11 +18718,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       }
       consecutiveEmpty = 0;
       nextIndex = i + 1;
-      let unspent = [];
-      try {
-        unspent = await provider2.getUnspentByScriptHash(wocScriptHash(script));
-      } catch {
-      }
       if (unspent.length > 0) live.push({ index: i, wif: k.toWif() });
       else claimedCount++;
     }

@@ -865,13 +865,19 @@ export async function scanGiftVouchers(
   for (let i = 0; i < max && consecutiveEmpty < gapLimit; i++) {
     const k = deriveVoucherKey(publisherKey, tx1RefHex, i)
     const script = p2pkhScript(Hash.hash160(k.toPublicKey().encode(true) as number[]))
-    let funded = false
-    try { funded = (await provider.getAddressHistory(k.toAddress())).length > 0 } catch { /* best-effort */ }
+    // Check the MEMPOOL-AWARE unspent set first — a just-funded (unconfirmed) live voucher appears here but
+    // NOT in confirmed-only getAddressHistory. If it's unspent → live. If not, it may be funded-then-claimed,
+    // so fall back to history (confirmed) + recent (mempool) to keep the gap scan from bailing early.
+    let unspent: Utxo[] = []
+    try { unspent = await provider.getUnspentByScriptHash(wocScriptHash(script)) } catch { /* best-effort */ }
+    let funded = unspent.length > 0
+    if (!funded) {
+      try { funded = (await provider.getAddressHistory(k.toAddress())).length > 0 } catch { /* best-effort */ }
+      if (!funded) { try { funded = (await provider.getRecentTxIdsForAddress(k.toAddress())).length > 0 } catch { /* best-effort */ } }
+    }
     if (!funded) { consecutiveEmpty++; continue }
     consecutiveEmpty = 0
     nextIndex = i + 1
-    let unspent: Utxo[] = []
-    try { unspent = await provider.getUnspentByScriptHash(wocScriptHash(script)) } catch { /* best-effort */ }
     if (unspent.length > 0) live.push({ index: i, wif: k.toWif() })
     else claimedCount++
   }
