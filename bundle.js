@@ -23621,6 +23621,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
 
   // src/app.ts
   var WIF_KEY = "p:wallet:wif";
+  var WATCH_KEY = "p:wallet:watch";
   var key;
   var pubKeyHex;
   var address;
@@ -23675,12 +23676,44 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return key2;
   }
   function useKey(k) {
+    localStorage.removeItem(WATCH_KEY);
     key = k;
     pubKeyHex = k.toPublicKey().toString();
     address = k.toAddress();
     provider = new WalletProvider(address);
     salesCache = null;
     renderWallet();
+  }
+  function useWatchKey(watchPubKeyHex) {
+    const pub = PublicKey.fromString(watchPubKeyHex);
+    key = null;
+    pubKeyHex = pub.toString();
+    address = pub.toAddress();
+    provider = new WalletProvider(address);
+    salesCache = null;
+    renderWallet();
+  }
+  function isWatchOnly() {
+    return key == null;
+  }
+  function requireKey() {
+    if (key == null) {
+      setStatus("This is a watch-only wallet \u2014 it holds no private key. Export the request here, sign it on your offline machine, then broadcast the signed result.", "error");
+      return null;
+    }
+    return key;
+  }
+  function switchToWatch(watchPubKeyHex) {
+    const pub = PublicKey.fromString(watchPubKeyHex);
+    localStorage.setItem(WATCH_KEY, pub.toString());
+    localStorage.removeItem(WIF_KEY);
+    localStorage.removeItem(MNEMONIC_KEY);
+    store2.clear();
+    useWatchKey(pub.toString());
+    renderTokens();
+    void refreshBalance();
+    setStatus("Watch-only wallet loaded \u2014 recovering holdings from chain\u2026");
+    void onCheckIncoming();
   }
   function switchWallet(k, recover, mnemonic) {
     localStorage.setItem(WIF_KEY, k.toWif());
@@ -23709,9 +23742,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     $("pubkey").textContent = pubKeyHex;
     const mine = document.getElementById("myIdenticon");
     if (mine) mine.innerHTML = avatarHtml(pubKeyHex, 22);
-    $("wif").value = key.toWif();
+    document.body.classList.toggle("watch-only", key == null);
+    const watchEl = document.getElementById("watchBanner");
+    if (watchEl != null) watchEl.hidden = key != null;
+    $("wif").value = key != null ? key.toWif() : "";
     const seedEl = document.getElementById("seedPhrase");
-    if (seedEl != null) seedEl.value = localStorage.getItem(MNEMONIC_KEY) ?? "";
+    if (seedEl != null) seedEl.value = key != null ? localStorage.getItem(MNEMONIC_KEY) ?? "" : "";
     hideWif();
     hideSeed();
   }
@@ -23762,6 +23798,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return { mimeType: f2.type || "application/octet-stream", fileName: f2.name, bytes: Array.from(buf) };
   }
   async function onMint() {
+    const k = requireKey();
+    if (k == null) return;
     const name = val("mintName");
     const count = Math.max(1, parseInt(val("mintCount") || "1", 10));
     if (!name) {
@@ -23771,7 +23809,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     setStatus("Preparing the mint transaction\u2026");
     try {
       const file = await readFile($("mintFile"));
-      const result = await createCollection(provider, key, {
+      const result = await createCollection(provider, k, {
         tokenName: name,
         supply: count,
         mintCount: count,
@@ -23817,7 +23855,7 @@ Proceed?`
   }
   function ownTerms() {
     return {
-      publisherPubKeyHash: Hash_exports.hash160(key.toPublicKey().encode(true)),
+      publisherPubKeyHash: Hash_exports.hash160(utils_exports.toArray(pubKeyHex, "hex")),
       ...computeFees(),
       tokenSats: chosenBond()
     };
@@ -23869,6 +23907,8 @@ Proceed?`
     });
   }
   async function onMintEdition() {
+    const k = requireKey();
+    if (k == null) return;
     const name = val("edName");
     if (!name) {
       setStatus("Enter an edition collection name.", "error");
@@ -23886,7 +23926,7 @@ Proceed?`
       }
       const terms = ownTerms();
       setStatus("Preparing the edition mint\u2026");
-      const result = await createEdition(provider, key, {
+      const result = await createEdition(provider, k, {
         tokenName: name,
         terms,
         mintCount: count,
@@ -23937,6 +23977,8 @@ Proceed?`
     }
   }
   async function onReplicate(t) {
+    const k = requireKey();
+    if (k == null) return;
     if (!t.lockHex) {
       setStatus("Missing edition script; cannot replicate.", "error");
       return;
@@ -23946,7 +23988,7 @@ Proceed?`
     setStatus("Preparing the replication\u2026");
     try {
       if (parseEditionScriptV2(LockingScript.fromHex(t.lockHex)) != null) {
-        const r3 = await replicateEditionV2(provider, key, {
+        const r3 = await replicateEditionV2(provider, k, {
           editionTxId: t.txId,
           editionOutputIndex: t.outputIndex,
           editionLockHex: t.lockHex,
@@ -23966,7 +24008,7 @@ Proceed?`
         return;
       }
       const note = await noteToPropagate(t);
-      const r2 = await replicateEdition(provider, key, {
+      const r2 = await replicateEdition(provider, k, {
         editionTxId: t.txId,
         editionOutputIndex: t.outputIndex,
         editionLockHex: t.lockHex,
@@ -24011,6 +24053,8 @@ Proceed?`
     }
   }
   async function onTransferEdition(t) {
+    const k = requireKey();
+    if (k == null) return;
     const recipient = val("sendPubKey");
     if (recipient.length !== 66 && recipient.length !== 130) {
       setStatus("Enter the recipient's public key (33- or 65-byte hex) above.", "error");
@@ -24023,7 +24067,7 @@ Proceed?`
     setStatus("Transferring edition (owner-signed, re-creating covenant)\u2026");
     try {
       const note = await noteToPropagate(t);
-      const r2 = await transferEdition(provider, key, {
+      const r2 = await transferEdition(provider, k, {
         editionTxId: t.txId,
         editionOutputIndex: t.outputIndex,
         editionLockHex: t.lockHex,
@@ -24043,6 +24087,8 @@ Proceed?`
     }
   }
   async function onBurn(t) {
+    const k = requireKey();
+    if (k == null) return;
     if (!t.lockHex) {
       setStatus("Missing edition script; cannot burn.", "error");
       return;
@@ -24054,7 +24100,7 @@ Proceed?`
     )) return;
     setStatus("Burning edition (reclaiming the bond)\u2026");
     try {
-      const r2 = await burnEdition(provider, key, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex });
+      const r2 = await burnEdition(provider, k, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex });
       store2.markSent(t.txId, t.outputIndex);
       renderTokens();
       setStatus(`\u{1F525} Burned. Reclaimed ${r2.reclaimSats.toLocaleString()} sats to your wallet. Tx ${short(r2.txId)}.`, "ok");
@@ -24162,13 +24208,15 @@ Proceed?`
     }
   }
   async function onAirgapSign() {
+    const k = requireKey();
+    if (k == null) return;
     if (pendingSignReq == null) {
       setStatus("Import a request file first.", "error");
       return;
     }
     setStatus("Signing offline\u2026");
     try {
-      const { txId, rawTx } = await signAirgapRequest(pendingSignReq, key);
+      const { txId, rawTx } = await signAirgapRequest(pendingSignReq, k);
       downloadText(`smartnfts-signed-${txId.slice(0, 8)}.txt`, rawTx);
       setStatus(`\u2705 Signed (tx ${short(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, "ok");
     } catch (e) {
@@ -24208,6 +24256,8 @@ Proceed?`
     return { toAddress, amountSats, sendMax };
   }
   async function onSendBsv() {
+    const k = requireKey();
+    if (k == null) return;
     const form = readSendBsvForm();
     if (form == null) return;
     if (!confirm(`Send ${form.sendMax ? "your entire spendable balance" : `${form.amountSats.toLocaleString()} sats`} to
@@ -24216,7 +24266,7 @@ ${form.toAddress}?
 (Minus the network fee. Change returns to this wallet.)`)) return;
     setStatus("Sending BSV\u2026");
     try {
-      const r2 = await sendPayment(provider, key, form);
+      const r2 = await sendPayment(provider, k, form);
       $("sendBsvAddr").value = "";
       $("sendBsvAmount").value = "";
       $("sendBsvMax").checked = false;
@@ -24236,7 +24286,7 @@ ${form.toAddress}?
         setStatus("No spendable funds to send.", "error");
         return;
       }
-      const dry = await buildPaymentTx({ key, funding, ...form });
+      const dry = await buildPaymentTx({ key: PrivateKey.fromRandom(), funding, ...form });
       const req = buildAirgapPaymentRequest({
         ...form,
         funding,
@@ -24249,6 +24299,8 @@ ${form.toAddress}?
     }
   }
   async function onSend(txId, outputIndex) {
+    const k = requireKey();
+    if (k == null) return;
     const recipient = val("sendPubKey");
     if (recipient.length !== 66 && recipient.length !== 130) {
       setStatus("Enter the recipient's public key (33- or 65-byte hex).", "error");
@@ -24256,7 +24308,7 @@ ${form.toAddress}?
     }
     setStatus("Sending NFT\u2026");
     try {
-      const result = await createTransfer(provider, key, { tokenTxId: txId, tokenOutputIndex: outputIndex, recipientPubKeyHex: recipient });
+      const result = await createTransfer(provider, k, { tokenTxId: txId, tokenOutputIndex: outputIndex, recipientPubKeyHex: recipient });
       store2.markSent(txId, outputIndex);
       renderTokens();
       setStatus(`Sent. Transfer tx ${short(result.txId)} (recipient notified at output ${result.notifyVout}).`, "ok");
@@ -24265,6 +24317,8 @@ ${form.toAddress}?
     }
   }
   async function onSendMessage() {
+    const k = requireKey();
+    if (k == null) return;
     const to = val("msgTo");
     if (to.length !== 66 && to.length !== 130) {
       setStatus("Enter the recipient's public key (33- or 65-byte hex).", "error");
@@ -24282,7 +24336,7 @@ ${form.toAddress}?
     }
     setStatus(`Sending ${encrypt ? "encrypted" : "public"} message\u2026`);
     try {
-      const r2 = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt, senderAlias: getMyAlias() });
+      const r2 = await sendMessage(provider, k, { toPubKeyHex: to, parts, encrypt, senderAlias: getMyAlias() });
       $("msgText").value = "";
       setStatus(`Message sent. Tx ${short(r2.txId)}.`, "ok");
     } catch (e) {
@@ -24290,6 +24344,8 @@ ${form.toAddress}?
     }
   }
   async function onPublishProfile() {
+    const k = requireKey();
+    if (k == null) return;
     const alias = getMyAlias();
     const file = await readFile($("profileAvatar"));
     let avatar;
@@ -24316,7 +24372,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     )) return;
     setStatus("Publishing your profile\u2026");
     try {
-      const txId = await publishProfile(provider, key, { alias: alias || void 0, avatar });
+      const txId = await publishProfile(provider, k, { alias: alias || void 0, avatar });
       if (avatar != null) {
         setAvatar(myPubKeyLc(), bytesToDataUrl(avatar.mimeType, avatar.bytes));
         renderWallet();
@@ -24329,9 +24385,11 @@ It's posted to your own address and spends a small network fee. Proceed?`
     }
   }
   async function onCheckMessages() {
+    const k = requireKey();
+    if (k == null) return;
     setStatus("Checking for messages\u2026");
     try {
-      const msgs = await scanIncomingMessages(provider, key);
+      const msgs = await scanIncomingMessages(provider, k);
       applyLatestAliases(msgs.map((m) => ({ pk: m.senderPubKeyHex, alias: m.senderAlias })));
       renderInbox(msgs);
       resolveAvatarsThen(msgs.map((m) => m.senderPubKeyHex), () => renderInbox(lastInbox));
@@ -24616,7 +24674,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       host.innerHTML = '<p class="muted">No NFTs yet. Publish a collection or Check Incoming.</p>';
       return;
     }
-    const myHash = utils_exports.toHex(Hash_exports.hash160(key.toPublicKey().encode(true)));
+    const myHash = myPubKeyHash();
     const groups = /* @__PURE__ */ new Map();
     for (const t of active) {
       const g = groups.get(t.collectionId);
@@ -24774,6 +24832,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
   function tokenActions(t, myHash) {
     const isEdition = t.kind === "edition";
     const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myHash;
+    const ro = isWatchOnly();
     const verify2 = document.createElement("button");
     verify2.textContent = "Verify";
     verify2.className = "secondary";
@@ -24781,13 +24840,6 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const actions = document.createElement("div");
     actions.className = "actions";
     if (isEdition) {
-      const replicate = document.createElement("button");
-      replicate.textContent = "Replicate";
-      replicate.onclick = () => void onReplicate(t);
-      const xfer = document.createElement("button");
-      xfer.textContent = "Transfer";
-      xfer.className = "secondary";
-      xfer.onclick = () => void onTransferEdition(t);
       const view = document.createElement("button");
       view.textContent = "View";
       view.className = "secondary";
@@ -24796,8 +24848,18 @@ It's posted to your own address and spends a small network fee. Proceed?`
       sales.textContent = "Sales page";
       sales.className = "secondary";
       sales.onclick = () => onOpenSalesPage(t);
-      actions.append(replicate, xfer, view, sales, verify2);
-      if (t.lockHex != null && editionSupportsBurn(utils_exports.toArray(t.lockHex, "hex"))) {
+      if (!ro) {
+        const replicate = document.createElement("button");
+        replicate.textContent = "Replicate";
+        replicate.onclick = () => void onReplicate(t);
+        const xfer = document.createElement("button");
+        xfer.textContent = "Transfer";
+        xfer.className = "secondary";
+        xfer.onclick = () => void onTransferEdition(t);
+        actions.append(replicate, xfer);
+      }
+      actions.append(view, sales, verify2);
+      if (!ro && t.lockHex != null && editionSupportsBurn(utils_exports.toArray(t.lockHex, "hex"))) {
         const burn = document.createElement("button");
         burn.textContent = "\u{1F525} Burn";
         burn.className = "secondary";
@@ -24805,37 +24867,43 @@ It's posted to your own address and spends a small network fee. Proceed?`
         actions.append(burn);
       }
       if (iAmPublisher) {
-        const bc = document.createElement("button");
-        bc.textContent = "\u{1F4E3} Broadcast";
-        bc.className = "secondary";
-        bc.onclick = () => void onBroadcast(t);
-        const gift = document.createElement("button");
-        gift.textContent = "\u{1F381} Gift";
-        gift.className = "secondary";
-        gift.onclick = () => void onGiftCopies(t);
-        const links = document.createElement("button");
-        links.textContent = "\u{1F4E5} Gift links";
-        links.className = "secondary";
-        links.onclick = () => void onViewGiftLinks(t);
-        const reclaim = document.createElement("button");
-        reclaim.textContent = "\u267B Reclaim gifts";
-        reclaim.className = "secondary";
-        reclaim.onclick = () => void onReclaimGifts(t);
         const buyers = document.createElement("button");
         buyers.textContent = "\u{1F465} Buyers";
         buyers.className = "secondary";
         buyers.onclick = () => void onViewBuyers(t);
-        actions.append(bc, gift, links, reclaim, buyers);
+        if (!ro) {
+          const bc = document.createElement("button");
+          bc.textContent = "\u{1F4E3} Broadcast";
+          bc.className = "secondary";
+          bc.onclick = () => void onBroadcast(t);
+          const gift = document.createElement("button");
+          gift.textContent = "\u{1F381} Gift";
+          gift.className = "secondary";
+          gift.onclick = () => void onGiftCopies(t);
+          const links = document.createElement("button");
+          links.textContent = "\u{1F4E5} Gift links";
+          links.className = "secondary";
+          links.onclick = () => void onViewGiftLinks(t);
+          const reclaim = document.createElement("button");
+          reclaim.textContent = "\u267B Reclaim gifts";
+          reclaim.className = "secondary";
+          reclaim.onclick = () => void onReclaimGifts(t);
+          actions.append(bc, gift, links, reclaim);
+        }
+        actions.append(buyers);
       }
     } else {
-      const send = document.createElement("button");
-      send.textContent = "Send";
-      send.onclick = () => void onSend(t.txId, t.outputIndex);
       const view = document.createElement("button");
       view.textContent = "View";
       view.className = "secondary";
       view.onclick = () => void onView(t.collectionId, t.collectionName ?? "Collection");
-      actions.append(send, verify2, view);
+      if (!ro) {
+        const send = document.createElement("button");
+        send.textContent = "Send";
+        send.onclick = () => void onSend(t.txId, t.outputIndex);
+        actions.append(send);
+      }
+      actions.append(verify2, view);
     }
     return actions;
   }
@@ -25224,7 +25292,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
   }
   var publisherKeyInFlight = /* @__PURE__ */ new Map();
   function myPubKeyHash() {
-    return utils_exports.toHex(Hash_exports.hash160(key.toPublicKey().encode(true)));
+    return utils_exports.toHex(Hash_exports.hash160(utils_exports.toArray(pubKeyHex, "hex")));
   }
   async function recoverPublisherKey(collectionId, publisherHashHex) {
     try {
@@ -25297,6 +25365,8 @@ It's posted to your own address and spends a small network fee. Proceed?`
     };
     textEl.addEventListener("input", updatePreview);
     sendBtn.onclick = () => void (async () => {
+      const k = requireKey();
+      if (k == null) return;
       const text = textEl.value;
       const file = await readFile(fileEl);
       if (!text.trim() && file == null) {
@@ -25319,7 +25389,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
         if (file) parts.push({ kind: "file", mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes });
         if (parts.length === 0) continue;
         try {
-          await sendMessage(provider, key, { toPubKeyHex: r2, parts, encrypt: encEl.checked, senderAlias: getMyAlias() });
+          await sendMessage(provider, k, { toPubKeyHex: r2, parts, encrypt: encEl.checked, senderAlias: getMyAlias() });
           ok++;
         } catch {
           failed++;
@@ -25406,6 +25476,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     el.textContent = at === 0 ? Object.keys(contacts).length ? "Not backed up yet." : "Nothing to back up yet." : n > 0 ? `\u26A0 ${n} change${n > 1 ? "s" : ""} since last backup (${fmtTime(at)}).` : `\u2713 Backed up ${fmtTime(at)}.`;
   }
   async function onConfigBackup() {
+    const myKey = requireKey();
+    if (myKey == null) return;
     const btn = $("btnCfgBackup");
     btn.disabled = true;
     setStatus("Backing up your config (encrypted to your key)\u2026");
@@ -25428,7 +25500,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       })();
       const txId = await publishConfigBackup(
         provider,
-        key,
+        myKey,
         { alias: getMyAlias() || void 0, aliasAt, contacts, contactsAt, prefs },
         nowMs()
       );
@@ -25446,7 +25518,9 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     }
   }
   async function restoreConfigFromChain(quiet = false) {
-    const blob = await resolveConfigBackup(provider, key);
+    const myKey = requireKey();
+    if (myKey == null) return 0;
+    const blob = await resolveConfigBackup(provider, myKey);
     if (blob == null) {
       if (!quiet) setStatus("No config backup found for this key.");
       return 0;
@@ -25873,6 +25947,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     }
   }
   async function onSaveSellerNote() {
+    const k = requireKey();
+    if (k == null) return;
     if (!currentCollection) return;
     const text = $("cvNoteText").value.trim();
     const bonusKindRaw = $("cvBonusKind").value;
@@ -25889,7 +25965,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     const note = { text, bonusKind, bonusValue: bonusValue || void 0 };
     $("cvNoteStatus").textContent = "Publishing your note\u2026";
     try {
-      const txId = await publishSellerNote(provider, key, currentCollection.info.tx1Ref, note);
+      const txId = await publishSellerNote(provider, k, currentCollection.info.tx1Ref, note);
       cvNote = note;
       if (text) {
         $("cvNote").textContent = `\u{1F4DD} Seller\u2019s note: ${text}`;
@@ -25915,6 +25991,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
   var buying = false;
   async function onGetCopy() {
     if (buying || !currentCollection) return;
+    const k = requireKey();
+    if (k == null) return;
     const { info, holderPubKey } = currentCollection;
     if (!info.fees && !info.isV2 || !info.covenantHex) {
       setCvStatus("This collection is not a buyable edition.", "error");
@@ -25943,7 +26021,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
           }
         }
         setCvStatus("\u{1F381} Claiming your free copy\u2026");
-        const claimed = await claimGiftEdition(provider, key, {
+        const claimed = await claimGiftEdition(provider, k, {
           giftWif: cvGiftWif,
           editionTxId: tip.txId,
           editionOutputIndex: tip.outputIndex,
@@ -25995,7 +26073,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       let bought = null;
       for (let attempt = 0; attempt <= 2; attempt++) {
         try {
-          bought = tip.isV2 ? await replicateEditionV2(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? void 0 }) : await replicateEdition(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? void 0 });
+          bought = tip.isV2 ? await replicateEditionV2(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? void 0 }) : await replicateEdition(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? void 0 });
           break;
         } catch (e) {
           if (attempt === 2) throw e;
@@ -26029,6 +26107,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     }
   }
   async function onBroadcast(t) {
+    const k = requireKey();
+    if (k == null) return;
     const text = prompt(`Announce to all holders of \u201C${t.collectionName ?? "this collection"}\u201D.
 
 Public, one transaction, reaches every current holder. Message:`);
@@ -26040,7 +26120,7 @@ Public, one transaction, reaches every current holder. Message:`);
     }
     setStatus("Publishing announcement to holders\u2026");
     try {
-      const txId = await publishBroadcast(provider, key, t.collectionId, trimmed, getMyAlias());
+      const txId = await publishBroadcast(provider, k, t.collectionId, trimmed, getMyAlias());
       latestBroadcast.set(t.collectionId, { text: trimmed, txId, height: 0 });
       renderTokens();
       setStatus(`\u{1F4E3} Announcement published (${short(txId)}). Holders see it when they check Updates.`, "ok");
@@ -26049,6 +26129,8 @@ Public, one transaction, reaches every current holder. Message:`);
     }
   }
   async function onGiftCopies(t) {
+    const k = requireKey();
+    if (k == null) return;
     let claimCost = 0;
     try {
       const ed = parseEditionAny(LockingScript.fromHex(t.lockHex ?? ""));
@@ -26069,8 +26151,8 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     if (!confirm(`Fund ${count} gift link(s) at ~${fundEach.toLocaleString()} sats each (~${total.toLocaleString()} sats from your wallet). Proceed?`)) return;
     setStatus(`Creating ${count} funded gift link(s)\u2026`);
     try {
-      const { nextIndex } = await scanGiftVouchers(provider, key, t.collectionId);
-      const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach });
+      const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId);
+      const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, k, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach });
       const links = voucherWifs.map((wif) => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`);
       setStatus(`\u2705 ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, "ok");
       showGiftLinksModal(t.collectionName ?? "Free gift", links);
@@ -26079,9 +26161,11 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     }
   }
   async function onViewGiftLinks(t) {
+    const k = requireKey();
+    if (k == null) return;
     setStatus("Recovering your gift links from chain\u2026");
     try {
-      const scan = await scanGiftVouchers(provider, key, t.collectionId);
+      const scan = await scanGiftVouchers(provider, k, t.collectionId);
       const links = scan.live.map((v) => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`);
       if (links.length === 0) {
         setStatus(scan.claimedCount > 0 ? `No unclaimed gift links left \u2014 all ${scan.claimedCount} have been claimed.` : "No gift links found for this collection yet.", "info");
@@ -26094,10 +26178,12 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     }
   }
   async function onReclaimGifts(t) {
+    const k = requireKey();
+    if (k == null) return;
     setStatus("Scanning for unclaimed gift links\u2026");
     let scan;
     try {
-      scan = await scanGiftVouchers(provider, key, t.collectionId);
+      scan = await scanGiftVouchers(provider, k, t.collectionId);
     } catch (e) {
       setStatus(`Scan failed: ${e.message}`, "error");
       return;
@@ -26113,7 +26199,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     )) return;
     setStatus("Reclaiming unclaimed gifts\u2026");
     try {
-      const r2 = await sweepGiftVouchers(provider, key, scan.live);
+      const r2 = await sweepGiftVouchers(provider, k, scan.live);
       if (r2 == null) {
         setStatus("Nothing to reclaim \u2014 the links may have just been claimed.", "ok");
         return;
@@ -26447,6 +26533,8 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     }
     targetEl.innerHTML = opts.map((o, i) => `<option value="${i}">${escapeHtml(o.label)}</option>`).join("");
     sendBtn.onclick = () => void (async () => {
+      const k = requireKey();
+      if (k == null) return;
       const text = textEl.value.trim();
       if (text === "") {
         statusEl.textContent = "Write something first.";
@@ -26462,7 +26550,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       sendBtn.disabled = true;
       statusEl.textContent = "Posting\u2026";
       try {
-        await postToNodeFeed(provider, key, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias(), downBreadcrumbs });
+        await postToNodeFeed(provider, k, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias(), downBreadcrumbs });
         textEl.value = "";
         statusEl.textContent = "\u2705 Posted.";
         setTimeout(() => {
@@ -26544,6 +26632,8 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     ).join("");
   }
   function activateTab(name) {
+    const navBtn = document.querySelector(`.tab[data-tab="${name}"]`);
+    if (isWatchOnly() && navBtn?.hasAttribute("data-needs-key")) name = "wallet";
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
     document.querySelectorAll(".tabpanel").forEach((p) => p.classList.toggle("is-active", p.id === `tab-${name}`));
     try {
@@ -26571,9 +26661,17 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"8446606"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"951f838"} \xB7 ${"2026-06-18"}`;
     loadAliases();
-    useKey(loadKey());
+    const watch = localStorage.getItem(WATCH_KEY);
+    if (watch != null) {
+      try {
+        useWatchKey(watch);
+      } catch {
+        localStorage.removeItem(WATCH_KEY);
+        useKey(loadKey());
+      }
+    } else useKey(loadKey());
     try {
       if (localStorage.getItem("p:nftview") === "grid") nftView = "grid";
     } catch {
@@ -26663,6 +26761,25 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       switchWallet(k, true, phrase);
       $("restoreSeed").value = "";
       setStatus("Wallet restored from seed phrase \u2014 recovering from chain\u2026", "ok");
+    };
+    $("btnWatchLoad").onclick = () => {
+      const pk = val("watchPubKey");
+      try {
+        switchToWatch(pk);
+      } catch {
+        setStatus("Enter a valid public key (33- or 65-byte hex) from your offline wallet.", "error");
+        return;
+      }
+      ;
+      $("watchPubKey").value = "";
+      setStatus("Watch-only wallet loaded. Signing actions are disabled here \u2014 sign on your offline machine.", "ok");
+    };
+    $("btnWatchExit").onclick = () => {
+      if (!confirm("Leave watch-only mode? This creates a fresh local wallet on this device (your watched wallet is unaffected \u2014 re-load it any time with its public key).")) return;
+      const { mnemonic, key: key2 } = newSeedWallet();
+      switchWallet(key2, false, mnemonic);
+      setStatus("Exited watch-only \u2014 a fresh local wallet was created. Back up its seed phrase.", "ok");
+      showSeedModal(mnemonic);
     };
     $("btnSendBsv").onclick = () => void onSendBsv();
     $("btnSendBsvExport").onclick = () => void onSendBsvExport();

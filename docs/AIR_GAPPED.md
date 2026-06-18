@@ -4,13 +4,13 @@ A guide to generating and holding a PHAR LAP wallet on a permanently-offline mac
 (your 12-word seed phrase) is never exposed to an internet-connected device. Pattern adapted from the
 classic cold-storage split (offline signer / online watcher / clean transfer medium).
 
-> **Status:** **Phase 0 (cold key generation + storage)** and **Phase 1a (the file-based signing loop)** both
-> ship today. Phase 1a adds the **Advanced — air-gapped signing** panel in the Wallet tab: the online box
-> **exports an unsigned request**, the offline box **signs it**, and the online box **broadcasts** the result —
-> for **plain BSV payments** and edition **transfers / burns**. The remaining piece is a keyless online
-> **watch-only mode** (Phase 1b) so the online box need not hold a key at all; see **Roadmap**. Until then, the
-> online instance still has a key loaded — the air gap protects the *offline signer's* key, which is the one
-> that matters.
+> **Status:** **Phase 0** (cold key generation + storage), **Phase 1a** (the file-based signing loop), and
+> **Phase 1b** (keyless **watch-only mode**) all ship today. The online box can now run **with no private key at
+> all**: load a wallet by its public key (Wallet tab → *Watch a wallet*), and the app shows holdings + balance,
+> **exports unsigned requests**, and **broadcasts** signed transactions, with every signing action disabled. The
+> offline box (which holds the key) does the signing. This completes the air-gapped transaction loop for
+> **plain BSV payments** and edition **transfers / burns**. Remaining: offline signing of covenant
+> **replicate / mint** and **QR** transfer — see **Roadmap**.
 
 ## Threat model
 
@@ -82,11 +82,17 @@ In the Wallet tab, open **⚙ Advanced — air-gapped signing**. The flow moves 
 Because the builders are deterministic given their inputs, the offline-built transaction is exactly what the
 online wallet would have produced — the online side only relays it.
 
+### Watch-only mode (Phase 1b — shipped)
+
+On the online box, go to **Wallet → 👁 Watch a wallet** and paste the **public key** recorded during cold
+generation. The app drops any local private key (`p:wallet:wif` / mnemonic are cleared), loads the wallet by
+public key, and recovers its holdings from chain. In this mode the seed/WIF backup, the **Publish** and **DMs**
+tabs, the **Send** button, the **Sign offline** step, and every on-card signing action (replicate / transfer /
+burn / gift / etc.) are hidden — only viewing, **Export**, and **Broadcast** remain. A banner marks the mode;
+*Exit watch-only* creates a fresh local wallet (the watched wallet is untouched and can be re-loaded any time).
+
 ## Roadmap — remaining work
 
-- **Phase 1b:** a keyless **watch-only mode** (load by address/pubkey) so the *online* box holds no key at all —
-  it would scan holdings, export requests, and broadcast, with every signing action disabled. This closes the
-  last gap: today the online instance still has a key loaded.
 - **Phase 2:** extend offline signing to the **covenant replicate / mint** operations (the OP_PUSH_TX preimage
   signed offline; edition transfer + burn already work), and add **multi-frame QR** transfer as an alternative
   to USB.

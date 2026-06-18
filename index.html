@@ -137,6 +137,9 @@
     .app-version { text-align:center; font-size:11px; color:var(--muted); margin:18px 0 8px; }
     .grid2[hidden] { display:none; } /* [hidden] alone loses to .grid2{display:grid}; this restores hiding */
     #seedPhrase.blurred { filter:blur(6px); }
+    body.watch-only [data-needs-key] { display:none !important; }
+    .watch-banner { border:1px solid var(--accent); border-radius:10px; padding:10px 12px; margin-bottom:12px;
+      background:linear-gradient(180deg, rgba(88,166,255,.14), rgba(88,166,255,.05)); font-size:13px; line-height:1.5; }
     .send-bsv { border-top:1px solid var(--line); margin-top:14px; padding-top:12px; }
     .adv-airgap { border-top:1px solid var(--line); padding-top:12px; }
     .adv-airgap > summary { cursor:pointer; font-weight:600; color:var(--muted); }
@@ -314,11 +317,11 @@
       <!-- Plain-token "Mint" tab hidden for the first-time-user UI (Editions is the single mint path).
            The #tab-mint panel below is kept in the DOM so btnMint wiring stays intact — re-add this
            button to surface it again. -->
-      <button class="tab" data-tab="editions" role="tab">Publish</button>
+      <button class="tab" data-tab="editions" role="tab" data-needs-key>Publish</button>
       <button class="tab" data-tab="tokens" role="tab">My NFTs</button>
       <button class="tab" data-tab="sales" role="tab">Sales</button>
       <button class="tab" data-tab="discussions" role="tab">Threads</button>
-      <button class="tab" data-tab="messages" role="tab">DMs</button>
+      <button class="tab" data-tab="messages" role="tab" data-needs-key>DMs</button>
       <button class="tab" data-tab="updates" role="tab">Updates</button>
       <button class="tab" data-tab="help" role="tab">Help</button>
     </nav>
@@ -362,6 +365,11 @@
 
     <section class="tabpanel" id="tab-wallet" role="tabpanel">
     <div class="card">
+      <div id="watchBanner" class="watch-banner" hidden>
+        👁 <b>Watch-only wallet</b> — this device holds no private key. You can view holdings, export unsigned
+        requests, and broadcast signed transactions. Signing happens on your offline machine.
+        <button id="btnWatchExit" class="secondary" style="margin-top:8px">Exit watch-only (new local wallet)</button>
+      </div>
       <div class="kv"><b>Receive address <span class="bsv-tag">BSV ONLY</span></b>
         <div class="row" style="flex-wrap:nowrap;align-items:center;gap:6px;margin-top:2px">
           <span id="address" class="mono" style="flex:1;min-width:0"></span>
@@ -391,12 +399,13 @@
           <label class="airgap-radio"><input type="checkbox" id="sendBsvMax"> Send max</label>
         </div>
         <div class="row" style="margin-top:8px">
-          <button id="btnSendBsv">Send</button>
+          <button id="btnSendBsv" data-needs-key>Send</button>
           <button id="btnSendBsvExport" class="secondary" title="Export an unsigned request to sign on your offline machine">Export for offline signing →</button>
         </div>
         <p class="muted" style="font-size:12px;margin:6px 0 0">A plain BSV payment to any address. Change returns to this wallet. To sign offline, <b>Export</b> here, then use steps 2–3 in <b>Advanced</b> below.</p>
       </div>
 
+      <div data-needs-key>
       <label>Seed phrase (your backup — write the words down, keep them secret)</label>
       <div class="row" style="flex-wrap:nowrap; align-items:stretch">
         <textarea id="seedPhrase" readonly rows="2" autocomplete="off" class="blurred" placeholder="(this wallet was imported from a WIF — it has no seed phrase; back up the WIF below)" style="flex:1 1 auto; min-width:0; resize:none"></textarea>
@@ -411,6 +420,7 @@
         <button id="btnWifShow" class="secondary" style="white-space:nowrap">👁 Show</button>
         <button id="btnWifCopy" class="secondary">Copy</button>
       </div>
+      </div>
 
       <label style="margin-top:12px">Restore from seed phrase</label>
       <div class="grid2">
@@ -423,6 +433,13 @@
         <button id="btnRestore" class="secondary">Restore</button>
       </div>
       <p class="muted" style="font-size:12px;margin:6px 0 0">Restoring rebuilds your wallet <b>and recovers your purchases from chain</b> — works on any browser or device.</p>
+
+      <label style="margin-top:12px">👁 Watch a wallet (public key only — keyless)</label>
+      <div class="grid2">
+        <input id="watchPubKey" placeholder="33-/65-byte hex public key from your offline wallet" autocomplete="off" />
+        <button id="btnWatchLoad" class="secondary">Watch</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:6px 0 0">Loads holdings + balance by public key with <b>no private key on this device</b>. Use it as the online half of an air-gapped setup: view, export unsigned requests, and broadcast — signing stays on your offline machine.</p>
 
       <details id="advAirgap" class="adv-airgap" style="margin-top:16px">
         <summary>⚙ Advanced — air-gapped signing</summary>
@@ -449,7 +466,7 @@
           <div class="row" style="margin-top:8px"><button id="btnAgExport" class="secondary">Export request →</button></div>
         </div>
 
-        <div class="airgap-step">
+        <div class="airgap-step" data-needs-key>
           <div class="airgap-h"><b>2 · Sign offline</b> <span class="muted">offline box — holds your key</span></div>
           <label>Import request file</label>
           <input id="agSignFile" type="file" accept=".json,application/json" />
