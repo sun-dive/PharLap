@@ -8,7 +8,7 @@
  * verification via verifyTokenLineage. Tokens are tracked locally (PharLapStore) since PushDrop
  * outputs are not WoC-address-indexed.
  */
-import { PrivateKey, Utils, Hash, LockingScript, Mnemonic, HD } from '@bsv/sdk'
+import { PrivateKey, PublicKey, Utils, Hash, LockingScript, Mnemonic, HD } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, selectFunding, PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, SPEND_CANCELLED } from './collectionBuilder.ts'
@@ -38,8 +38,9 @@ declare const __BUILD_ID__: string
 declare const __BUILD_DATE__: string
 
 const WIF_KEY = 'p:wallet:wif'
+const WATCH_KEY = 'p:wallet:watch' // present → watch-only: pubkey hex, no private key on this box
 
-let key: PrivateKey
+let key: PrivateKey | null // null in watch-only mode (the online box holds no key)
 let pubKeyHex: string
 let address: string
 let provider: WalletProvider
@@ -97,12 +98,52 @@ function loadKey(): PrivateKey {
 }
 
 function useKey(k: PrivateKey): void {
+  localStorage.removeItem(WATCH_KEY) // a real key supersedes any watch-only state
   key = k
   pubKeyHex = k.toPublicKey().toString()
   address = k.toAddress()
   provider = new WalletProvider(address)
   salesCache = null // the Sales scan belongs to the previous key
   renderWallet()
+}
+
+/** Load a WATCH-ONLY wallet: holdings/balance/exports/broadcast by public key alone — no private key on
+ *  this box. Signing happens on the offline machine; here every signing action is blocked. */
+function useWatchKey(watchPubKeyHex: string): void {
+  const pub = PublicKey.fromString(watchPubKeyHex)
+  key = null
+  pubKeyHex = pub.toString()
+  address = pub.toAddress()
+  provider = new WalletProvider(address)
+  salesCache = null
+  renderWallet()
+}
+
+/** True when no private key is loaded (watch-only). */
+function isWatchOnly(): boolean { return key == null }
+
+/** Gate a signing action: returns the key, or null (after a status message) when watch-only. */
+function requireKey(): PrivateKey | null {
+  if (key == null) {
+    setStatus('This is a watch-only wallet — it holds no private key. Export the request here, sign it on your offline machine, then broadcast the signed result.', 'error')
+    return null
+  }
+  return key
+}
+
+/** Enter watch-only mode for `watchPubKeyHex`: wipe any local key, clear the (previous wallet's) holdings
+ *  cache, and recover the watched wallet's holdings from chain. */
+function switchToWatch(watchPubKeyHex: string): void {
+  const pub = PublicKey.fromString(watchPubKeyHex) // throws on bad input → caller catches
+  localStorage.setItem(WATCH_KEY, pub.toString())
+  localStorage.removeItem(WIF_KEY)      // no private key lives on a watch-only box
+  localStorage.removeItem(MNEMONIC_KEY)
+  store.clear()
+  useWatchKey(pub.toString())
+  renderTokens()
+  void refreshBalance()
+  setStatus('Watch-only wallet loaded — recovering holdings from chain…')
+  void onCheckIncoming()
 }
 
 /**
@@ -134,9 +175,11 @@ function renderWallet(): void {
   $('pubkey').textContent = pubKeyHex
   const mine = document.getElementById('myIdenticon')
   if (mine) mine.innerHTML = avatarHtml(pubKeyHex, 22) // your own avatar (or identicon)
-  ;($('wif') as HTMLInputElement).value = key.toWif()
+  document.body.classList.toggle('watch-only', key == null) // CSS hides key-only controls
+  const watchEl = document.getElementById('watchBanner'); if (watchEl != null) watchEl.hidden = key != null
+  ;($('wif') as HTMLInputElement).value = key != null ? key.toWif() : ''
   const seedEl = document.getElementById('seedPhrase') as HTMLTextAreaElement | null
-  if (seedEl != null) seedEl.value = localStorage.getItem(MNEMONIC_KEY) ?? '' // empty → placeholder (WIF-imported)
+  if (seedEl != null) seedEl.value = key != null ? (localStorage.getItem(MNEMONIC_KEY) ?? '') : '' // watch-only → no secret
   hideWif() // re-mask on every wallet (re)load so a switched-in key is never left exposed
   hideSeed()
 }
@@ -199,13 +242,14 @@ async function readFile(input: HTMLInputElement): Promise<{ mimeType: string; fi
 }
 
 async function onMint(): Promise<void> {
+  const k = requireKey(); if (k == null) return
   const name = val('mintName')
   const count = Math.max(1, parseInt(val('mintCount') || '1', 10))
   if (!name) { setStatus('Enter a collection name.', 'error'); return }
   setStatus('Preparing the mint transaction…')
   try {
     const file = await readFile($('mintFile') as HTMLInputElement)
-    const result = await createCollection(provider, key, {
+    const result = await createCollection(provider, k, {
       tokenName: name, supply: count, mintCount: count, file,
       confirmSpend: total => confirm(
         `Mint ${count} NFT${count > 1 ? 's' : ''} in “${name}”${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ''}?\n\n` +
@@ -253,7 +297,7 @@ function computeFees(): { publisherFeeSats: number; holderFeeSats: number } {
 
 function ownTerms(): EditionTerms {
   return {
-    publisherPubKeyHash: Hash.hash160(key.toPublicKey().encode(true) as number[]),
+    publisherPubKeyHash: Hash.hash160(Utils.toArray(pubKeyHex, 'hex')),
     ...computeFees(),
     tokenSats: chosenBond(),
   }
@@ -306,6 +350,7 @@ function storeEdition(o: { txId: string; outputIndex: number; lockHex: string },
 }
 
 async function onMintEdition(): Promise<void> {
+  const k = requireKey(); if (k == null) return
   const name = val('edName')
   if (!name) { setStatus('Enter an edition collection name.', 'error'); return }
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
@@ -319,7 +364,7 @@ async function onMintEdition(): Promise<void> {
     // (createEditionV2 / replicateEditionV2 / parseEditionScriptV2) but is hidden from the UI until built out.
     const terms = ownTerms()
     setStatus('Preparing the edition mint…')
-    const result = await createEdition(provider, key, {
+    const result = await createEdition(provider, k, {
       tokenName: name, terms, mintCount: count, file, encrypt, description, cover,
       confirmSpend: total => confirm(
         `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ''}?\n\n` +
@@ -362,6 +407,7 @@ async function pruneIfEditionSpent(t: StoredToken): Promise<boolean> {
 }
 
 async function onReplicate(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return
   if (!t.lockHex) { setStatus('Missing edition script; cannot replicate.', 'error'); return }
   const name = t.collectionName ?? 'this edition'
   // A bonded edition's replica carries the same refundable bond — the dominant non-fee cost — so call it out.
@@ -371,7 +417,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
   try {
     // v2 (percentage pricing) editions go through the computed-split replicate.
     if (parseEditionScriptV2(LockingScript.fromHex(t.lockHex)) != null) {
-      const r = await replicateEditionV2(provider, key, {
+      const r = await replicateEditionV2(provider, k, {
         editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex,
         confirmSpend: total => confirm(
           `Replicate a copy of “${name}”?\n\nThis spends ${total.toLocaleString()} sats from your wallet (${bondNote}the seller’s price + network fee).\n\nProceed?`),
@@ -384,7 +430,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
       return
     }
     const note = await noteToPropagate(t)
-    const r = await replicateEdition(provider, key, {
+    const r = await replicateEdition(provider, k, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex, terms: termsFromToken(t),
       note,
       confirmSpend: total => confirm(
@@ -412,6 +458,7 @@ async function onReplicate(t: StoredToken): Promise<void> {
 }
 
 async function onTransferEdition(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return
   const recipient = val('sendPubKey')
   if (recipient.length !== 66 && recipient.length !== 130) {
     setStatus("Enter the recipient's public key (33- or 65-byte hex) above.", 'error'); return
@@ -420,7 +467,7 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
   setStatus('Transferring edition (owner-signed, re-creating covenant)…')
   try {
     const note = await noteToPropagate(t)
-    const r = await transferEdition(provider, key, {
+    const r = await transferEdition(provider, k, {
       editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex,
       newOwnerPubKey: Utils.toArray(recipient, 'hex'), note,
     })
@@ -438,13 +485,14 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
 
 /** Burn an owned edition: owner-signed spend that destroys the token and reclaims its bond to your wallet. */
 async function onBurn(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return
   if (!t.lockHex) { setStatus('Missing edition script; cannot burn.', 'error'); return }
   if (!confirm(
     `Burn your edition of “${t.collectionName ?? 'this collection'}” and reclaim its ~${(t.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond ` +
     `(minus a small network fee) to your wallet?\n\n⚠ This DESTROYS the token permanently — it cannot be undone. Proceed?`)) return
   setStatus('Burning edition (reclaiming the bond)…')
   try {
-    const r = await burnEdition(provider, key, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex })
+    const r = await burnEdition(provider, k, { editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex })
     store.markSent(t.txId, t.outputIndex) // the token is destroyed
     renderTokens()
     setStatus(`🔥 Burned. Reclaimed ${r.reclaimSats.toLocaleString()} sats to your wallet. Tx ${short(r.txId)}.`, 'ok')
@@ -559,10 +607,11 @@ async function onAirgapSignFile(): Promise<void> {
 }
 /** Step 2b (offline): sign the imported request with this wallet's key and download the signed raw tx. */
 async function onAirgapSign(): Promise<void> {
+  const k = requireKey(); if (k == null) return // signing happens on the offline (keyed) box, not a watch-only one
   if (pendingSignReq == null) { setStatus('Import a request file first.', 'error'); return }
   setStatus('Signing offline…')
   try {
-    const { txId, rawTx } = await signAirgapRequest(pendingSignReq, key)
+    const { txId, rawTx } = await signAirgapRequest(pendingSignReq, k)
     downloadText(`smartnfts-signed-${txId.slice(0, 8)}.txt`, rawTx)
     setStatus(`✅ Signed (tx ${short(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, 'ok')
   } catch (e) {
@@ -600,12 +649,13 @@ function readSendBsvForm(): { toAddress: string; amountSats: number; sendMax: bo
 
 /** Online: build, sign and broadcast a plain BSV payment. */
 async function onSendBsv(): Promise<void> {
+  const k = requireKey(); if (k == null) return
   const form = readSendBsvForm()
   if (form == null) return
   if (!confirm(`Send ${form.sendMax ? 'your entire spendable balance' : `${form.amountSats.toLocaleString()} sats`} to\n${form.toAddress}?\n\n(Minus the network fee. Change returns to this wallet.)`)) return
   setStatus('Sending BSV…')
   try {
-    const r = await sendPayment(provider, key, form)
+    const r = await sendPayment(provider, k, form)
     ;($('sendBsvAddr') as HTMLInputElement).value = ''
     ;($('sendBsvAmount') as HTMLInputElement).value = ''
     ;($('sendBsvMax') as HTMLInputElement).checked = false
@@ -624,8 +674,10 @@ async function onSendBsvExport(): Promise<void> {
   try {
     const funding = await gatherPaymentFunding(provider, form)
     if (funding.length === 0) { setStatus('No spendable funds to send.', 'error'); return }
-    // Dry-run the build to surface the exact figure (and catch insufficient funds) before exporting.
-    const dry = await buildPaymentTx({ key, funding, ...form })
+    // Dry-run the build to surface the exact figure (and catch insufficient funds) before exporting. Uses a
+    // throwaway key purely for SIZING — the tx is never broadcast and the real signer rebuilds it — so this
+    // works even in watch-only mode where no private key is present.
+    const dry = await buildPaymentTx({ key: PrivateKey.fromRandom(), funding, ...form })
     const req = buildAirgapPaymentRequest({
       ...form, funding,
       summary: `Send ${dry.sentSats.toLocaleString()} sats to ${form.toAddress}${form.sendMax ? ' (entire balance, minus fee)' : ''}.`,
@@ -639,13 +691,14 @@ async function onSendBsvExport(): Promise<void> {
 
 // ─── send ───────────────────────────────────────────────────────────
 async function onSend(txId: string, outputIndex: number): Promise<void> {
+  const k = requireKey(); if (k == null) return
   const recipient = val('sendPubKey')
   if (recipient.length !== 66 && recipient.length !== 130) {
     setStatus("Enter the recipient's public key (33- or 65-byte hex).", 'error'); return
   }
   setStatus('Sending NFT…')
   try {
-    const result = await createTransfer(provider, key, { tokenTxId: txId, tokenOutputIndex: outputIndex, recipientPubKeyHex: recipient })
+    const result = await createTransfer(provider, k, { tokenTxId: txId, tokenOutputIndex: outputIndex, recipientPubKeyHex: recipient })
     store.markSent(txId, outputIndex)
     renderTokens()
     setStatus(`Sent. Transfer tx ${short(result.txId)} (recipient notified at output ${result.notifyVout}).`, 'ok')
@@ -656,6 +709,7 @@ async function onSend(txId: string, outputIndex: number): Promise<void> {
 
 // ─── messaging ──────────────────────────────────────────────────────
 async function onSendMessage(): Promise<void> {
+  const k = requireKey(); if (k == null) return
   const to = val('msgTo')
   if (to.length !== 66 && to.length !== 130) {
     setStatus("Enter the recipient's public key (33- or 65-byte hex).", 'error'); return
@@ -669,7 +723,7 @@ async function onSendMessage(): Promise<void> {
   if (parts.length === 0) { setStatus('Write a message or attach a file first.', 'error'); return }
   setStatus(`Sending ${encrypt ? 'encrypted' : 'public'} message…`)
   try {
-    const r = await sendMessage(provider, key, { toPubKeyHex: to, parts, encrypt, senderAlias: getMyAlias() })
+    const r = await sendMessage(provider, k, { toPubKeyHex: to, parts, encrypt, senderAlias: getMyAlias() })
     ;($('msgText') as HTMLTextAreaElement).value = ''
     setStatus(`Message sent. Tx ${short(r.txId)}.`, 'ok')
   } catch (e) {
@@ -679,6 +733,7 @@ async function onSendMessage(): Promise<void> {
 
 /** Publish your profile (alias + optional avatar) on-chain so others resolve your @name + face by pubkey. */
 async function onPublishProfile(): Promise<void> {
+  const k = requireKey(); if (k == null) return
   const alias = getMyAlias()
   const file = await readFile($('profileAvatar') as HTMLInputElement)
   let avatar: { mimeType: string; bytes: number[] } | undefined
@@ -694,7 +749,7 @@ async function onPublishProfile(): Promise<void> {
     `It's posted to your own address and spends a small network fee. Proceed?`)) return
   setStatus('Publishing your profile…')
   try {
-    const txId = await publishProfile(provider, key, { alias: alias || undefined, avatar })
+    const txId = await publishProfile(provider, k, { alias: alias || undefined, avatar })
     if (avatar != null) { setAvatar(myPubKeyLc(), bytesToDataUrl(avatar.mimeType, avatar.bytes)); renderWallet() }
     ;($('profileAvatar') as HTMLInputElement).value = ''
     setStatus(`✅ Profile published. Tx ${short(txId)} — others now resolve your @name + avatar by your key.`, 'ok')
@@ -704,9 +759,10 @@ async function onPublishProfile(): Promise<void> {
 }
 
 async function onCheckMessages(): Promise<void> {
+  const k = requireKey(); if (k == null) return // messages are encrypted to the key; can't read them watch-only
   setStatus('Checking for messages…')
   try {
-    const msgs = await scanIncomingMessages(provider, key)
+    const msgs = await scanIncomingMessages(provider, k)
     // Apply only each sender's LATEST self-claim. msgs are newest-first, so the first alias seen per sender
     // is the newest — applying every message would let an older one revert a more recent rename.
     applyLatestAliases(msgs.map(m => ({ pk: m.senderPubKeyHex, alias: m.senderAlias })))
@@ -990,7 +1046,7 @@ function renderTokens(skipWarm = false): void {
     return (b.addedAt ?? '').localeCompare(a.addedAt ?? '')
   })
   if (active.length === 0) { host.innerHTML = '<p class="muted">No NFTs yet. Publish a collection or Check Incoming.</p>'; return }
-  const myHash = Utils.toHex(Hash.hash160(key.toPublicKey().encode(true) as number[]))
+  const myHash = myPubKeyHash()
   // Group identical holdings (same collection = interchangeable copies/editions), preserving sort order
   // by first appearance. A single copy renders as a normal card; multiples collapse into one group card.
   const groups = new Map<string, StoredToken[]>()
@@ -1180,58 +1236,68 @@ function tokenExtrasHtml(t: StoredToken): string {
 function tokenActions(t: StoredToken, myHash: string): HTMLElement {
   const isEdition = t.kind === 'edition'
   const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myHash
+  const ro = isWatchOnly() // watch-only: read/explore only, no signing buttons
   const verify = document.createElement('button')
   verify.textContent = 'Verify'; verify.className = 'secondary'
   verify.onclick = () => void onVerify(t.txId, t.outputIndex)
   const actions = document.createElement('div')
   actions.className = 'actions'
   if (isEdition) {
-    const replicate = document.createElement('button')
-    replicate.textContent = 'Replicate'
-    replicate.onclick = () => void onReplicate(t)
-    const xfer = document.createElement('button')
-    xfer.textContent = 'Transfer'; xfer.className = 'secondary'
-    xfer.onclick = () => void onTransferEdition(t)
     const view = document.createElement('button')
     view.textContent = 'View'; view.className = 'secondary'
     view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Edition')
     const sales = document.createElement('button')
     sales.textContent = 'Sales page'; sales.className = 'secondary'
     sales.onclick = () => onOpenSalesPage(t)
-    actions.append(replicate, xfer, view, sales, verify)
+    if (!ro) {
+      const replicate = document.createElement('button')
+      replicate.textContent = 'Replicate'
+      replicate.onclick = () => void onReplicate(t)
+      const xfer = document.createElement('button')
+      xfer.textContent = 'Transfer'; xfer.className = 'secondary'
+      xfer.onclick = () => void onTransferEdition(t)
+      actions.append(replicate, xfer)
+    }
+    actions.append(view, sales, verify)
     // 🔥 Burn — only for burn-capable (bonded) editions; reclaims the bond and destroys the token.
-    if (t.lockHex != null && editionSupportsBurn(Utils.toArray(t.lockHex, 'hex'))) {
+    if (!ro && t.lockHex != null && editionSupportsBurn(Utils.toArray(t.lockHex, 'hex'))) {
       const burn = document.createElement('button')
       burn.textContent = '🔥 Burn'; burn.className = 'secondary'
       burn.onclick = () => void onBurn(t)
       actions.append(burn)
     }
     if (iAmPublisher) {
-      const bc = document.createElement('button')
-      bc.textContent = '📣 Broadcast'; bc.className = 'secondary'
-      bc.onclick = () => void onBroadcast(t)
-      const gift = document.createElement('button')
-      gift.textContent = '🎁 Gift'; gift.className = 'secondary'
-      gift.onclick = () => void onGiftCopies(t)
-      const links = document.createElement('button')
-      links.textContent = '📥 Gift links'; links.className = 'secondary'
-      links.onclick = () => void onViewGiftLinks(t)
-      const reclaim = document.createElement('button')
-      reclaim.textContent = '♻ Reclaim gifts'; reclaim.className = 'secondary'
-      reclaim.onclick = () => void onReclaimGifts(t)
       const buyers = document.createElement('button')
       buyers.textContent = '👥 Buyers'; buyers.className = 'secondary'
       buyers.onclick = () => void onViewBuyers(t)
-      actions.append(bc, gift, links, reclaim, buyers)
+      if (!ro) {
+        const bc = document.createElement('button')
+        bc.textContent = '📣 Broadcast'; bc.className = 'secondary'
+        bc.onclick = () => void onBroadcast(t)
+        const gift = document.createElement('button')
+        gift.textContent = '🎁 Gift'; gift.className = 'secondary'
+        gift.onclick = () => void onGiftCopies(t)
+        const links = document.createElement('button')
+        links.textContent = '📥 Gift links'; links.className = 'secondary'
+        links.onclick = () => void onViewGiftLinks(t)
+        const reclaim = document.createElement('button')
+        reclaim.textContent = '♻ Reclaim gifts'; reclaim.className = 'secondary'
+        reclaim.onclick = () => void onReclaimGifts(t)
+        actions.append(bc, gift, links, reclaim)
+      }
+      actions.append(buyers)
     }
   } else {
-    const send = document.createElement('button')
-    send.textContent = 'Send'
-    send.onclick = () => void onSend(t.txId, t.outputIndex)
     const view = document.createElement('button')
     view.textContent = 'View'; view.className = 'secondary'
     view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Collection')
-    actions.append(send, verify, view)
+    if (!ro) {
+      const send = document.createElement('button')
+      send.textContent = 'Send'
+      send.onclick = () => void onSend(t.txId, t.outputIndex)
+      actions.append(send)
+    }
+    actions.append(verify, view)
   }
   return actions
 }
@@ -1584,7 +1650,7 @@ function resolveAvatarsThen(pubKeys: string[], rerender: () => void): void {
 // then cached on every held copy of that collection.
 const publisherKeyInFlight = new Map<string, Promise<string | null>>()
 
-function myPubKeyHash(): string { return Utils.toHex(Hash.hash160(key.toPublicKey().encode(true) as number[])) }
+function myPubKeyHash(): string { return Utils.toHex(Hash.hash160(Utils.toArray(pubKeyHex, 'hex'))) }
 
 async function recoverPublisherKey(collectionId: string, publisherHashHex: string): Promise<string | null> {
   try {
@@ -1678,6 +1744,7 @@ function openCompose(recipients: string[], opts: { who: string } & ComposeCtx): 
   }
   textEl.addEventListener('input', updatePreview)
   sendBtn.onclick = () => void (async () => {
+    const k = requireKey(); if (k == null) return
     const text = textEl.value
     const file = await readFile(fileEl)
     if (!text.trim() && file == null) { statusEl.textContent = 'Write a message or attach a file first.'; return }
@@ -1695,7 +1762,7 @@ function openCompose(recipients: string[], opts: { who: string } & ComposeCtx): 
       if (filled.trim()) parts.push({ kind: 'text', text: filled })
       if (file) parts.push({ kind: 'file', mimeType: file.mimeType, fileName: file.fileName, bytes: file.bytes })
       if (parts.length === 0) continue
-      try { await sendMessage(provider, key, { toPubKeyHex: r, parts, encrypt: encEl.checked, senderAlias: getMyAlias() }); ok++ }
+      try { await sendMessage(provider, k, { toPubKeyHex: r, parts, encrypt: encEl.checked, senderAlias: getMyAlias() }); ok++ }
       catch { failed++ }
     }
     statusEl.textContent = failed === 0
@@ -1769,13 +1836,14 @@ function updateCfgBackupNote(): void {
 }
 
 async function onConfigBackup(): Promise<void> {
+  const myKey = requireKey(); if (myKey == null) return
   const btn = $('btnCfgBackup') as HTMLButtonElement
   btn.disabled = true; setStatus('Backing up your config (encrypted to your key)…')
   try {
     let prefs: Record<string, string> = {}
     try { for (const k of ['p:nftview', 'p:nftsort']) { const v = localStorage.getItem(k); if (v != null) prefs[k] = v } } catch { prefs = {} }
     const aliasAt = (() => { try { return parseInt(localStorage.getItem('p:myaliasAt') ?? '0', 10) || 0 } catch { return 0 } })()
-    const txId = await publishConfigBackup(provider, key,
+    const txId = await publishConfigBackup(provider, myKey,
       { alias: getMyAlias() || undefined, aliasAt, contacts, contactsAt, prefs }, nowMs())
     try { localStorage.setItem('p:cfgBackupAt', String(nowMs())); localStorage.setItem('p:cfgDirty', '0') } catch { /* fine */ }
     updateCfgBackupNote()
@@ -1787,7 +1855,8 @@ async function onConfigBackup(): Promise<void> {
 
 /** Restore the latest backup and merge it in (newest-wins). Returns how many entries the backup contributed. */
 async function restoreConfigFromChain(quiet = false): Promise<number> {
-  const blob = await resolveConfigBackup(provider, key)
+  const myKey = requireKey(); if (myKey == null) return 0
+  const blob = await resolveConfigBackup(provider, myKey)
   if (blob == null) { if (!quiet) setStatus('No config backup found for this key.'); return 0 }
   const aliasAt = (() => { try { return parseInt(localStorage.getItem('p:myaliasAt') ?? '0', 10) || 0 } catch { return 0 } })()
   const merged = mergeConfig({ alias: getMyAlias() || undefined, aliasAt, contacts, contactsAt }, blob)
@@ -2171,6 +2240,7 @@ async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): P
 }
 
 async function onSaveSellerNote(): Promise<void> {
+  const k = requireKey(); if (k == null) return
   if (!currentCollection) return
   const text = ($('cvNoteText') as HTMLTextAreaElement).value.trim()
   const bonusKindRaw = ($('cvBonusKind') as HTMLSelectElement).value
@@ -2181,7 +2251,7 @@ async function onSaveSellerNote(): Promise<void> {
   const note: SellerNote = { text, bonusKind, bonusValue: bonusValue || undefined }
   $('cvNoteStatus').textContent = 'Publishing your note…'
   try {
-    const txId = await publishSellerNote(provider, key, currentCollection.info.tx1Ref, note)
+    const txId = await publishSellerNote(provider, k, currentCollection.info.tx1Ref, note)
     cvNote = note
     if (text) { $('cvNote').textContent = `📝 Seller’s note: ${text}`; $('cvNote').style.display = 'block' }
     showBonus(note, true)
@@ -2206,6 +2276,7 @@ function hideFundPrompt(): void { $('cvFund').style.display = 'none' }
 let buying = false
 async function onGetCopy(): Promise<void> {
   if (buying || !currentCollection) return
+  const k = requireKey(); if (k == null) return
   const { info, holderPubKey } = currentCollection
   if ((!info.fees && !info.isV2) || !info.covenantHex) { setCvStatus('This collection is not a buyable edition.', 'error'); return }
   const sellerPub = holderPubKey ?? info.publisherPubKeyHex
@@ -2224,7 +2295,7 @@ async function onGetCopy(): Promise<void> {
       let giftNote: SellerNote | null = cvNote
       if (!giftNote) { try { giftNote = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref) } catch { /* best-effort */ } }
       setCvStatus('🎁 Claiming your free copy…')
-      const claimed = await claimGiftEdition(provider, key, {
+      const claimed = await claimGiftEdition(provider, k, {
         giftWif: cvGiftWif, editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: giftNote ?? undefined,
       })
       storeEdition({ txId: claimed.replicaOutpoint.txId, outputIndex: claimed.replicaOutpoint.outputIndex, lockHex: claimed.lockHex },
@@ -2266,8 +2337,8 @@ async function onGetCopy(): Promise<void> {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         bought = tip.isV2
-          ? await replicateEditionV2(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? undefined })
-          : await replicateEdition(provider, key, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? undefined })
+          ? await replicateEditionV2(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? undefined })
+          : await replicateEdition(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? undefined })
         break
       } catch (e) {
         if (attempt === 2) throw e
@@ -2302,13 +2373,14 @@ async function onGetCopy(): Promise<void> {
 
 /** Publisher: broadcast a public announcement to all holders of a collection (one tx, pull-delivered). */
 async function onBroadcast(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return
   const text = prompt(`Announce to all holders of “${t.collectionName ?? 'this collection'}”.\n\nPublic, one transaction, reaches every current holder. Message:`)
   if (text == null) return
   const trimmed = text.trim()
   if (!trimmed) { setStatus('Announcement was empty.', 'error'); return }
   setStatus('Publishing announcement to holders…')
   try {
-    const txId = await publishBroadcast(provider, key, t.collectionId, trimmed, getMyAlias())
+    const txId = await publishBroadcast(provider, k, t.collectionId, trimmed, getMyAlias())
     latestBroadcast.set(t.collectionId, { text: trimmed, txId, height: 0 })
     renderTokens()
     setStatus(`📣 Announcement published (${short(txId)}). Holders see it when they check Updates.`, 'ok')
@@ -2319,6 +2391,7 @@ async function onBroadcast(t: StoredToken): Promise<void> {
 
 /** Publisher: create N pre-funded free-gift links for a collection (each single-use). */
 async function onGiftCopies(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return
   // Per-voucher funding = the recipient's replica BOND + the claim's price/fees (which return to you as
   // holder) + miner fee + a small starter. The bond stays with the recipient (their reclaimable copy), so
   // your real cost ≈ the bond + miner fee per claim.
@@ -2340,8 +2413,8 @@ async function onGiftCopies(t: StoredToken): Promise<void> {
   setStatus(`Creating ${count} funded gift link(s)…`)
   try {
     // Deterministic keys: scan for the next free index so a new batch doesn't collide with existing vouchers.
-    const { nextIndex } = await scanGiftVouchers(provider, key, t.collectionId)
-    const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, key, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach })
+    const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId)
+    const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, k, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach })
     const links = voucherWifs.map(wif => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`)
     setStatus(`✅ ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, 'ok')
     showGiftLinksModal(t.collectionName ?? 'Free gift', links)
@@ -2353,9 +2426,10 @@ async function onGiftCopies(t: StoredToken): Promise<void> {
 /** Recover this collection's UNCLAIMED gift links from your key + chain (deterministic vouchers), and re-show
  *  them — so you never lose access to links you didn't save. */
 async function onViewGiftLinks(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return // voucher keys derive from the wallet key
   setStatus('Recovering your gift links from chain…')
   try {
-    const scan = await scanGiftVouchers(provider, key, t.collectionId)
+    const scan = await scanGiftVouchers(provider, k, t.collectionId)
     const links = scan.live.map(v => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`)
     if (links.length === 0) {
       setStatus(scan.claimedCount > 0
@@ -2373,9 +2447,10 @@ async function onViewGiftLinks(t: StoredToken): Promise<void> {
 /** Publisher: reclaim UNCLAIMED gift links — sweep their pre-funded sats back to your wallet (invalidating
  *  those links). Already-claimed gifts are untouched. */
 async function onReclaimGifts(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return
   setStatus('Scanning for unclaimed gift links…')
   let scan
-  try { scan = await scanGiftVouchers(provider, key, t.collectionId) }
+  try { scan = await scanGiftVouchers(provider, k, t.collectionId) }
   catch (e) { setStatus(`Scan failed: ${(e as Error).message}`, 'error'); return }
   if (scan.live.length === 0) {
     setStatus(scan.claimedCount > 0 ? `Nothing to reclaim — all ${scan.claimedCount} gift links were claimed.` : 'No unclaimed gift links to reclaim.', 'ok')
@@ -2387,7 +2462,7 @@ async function onReclaimGifts(t: StoredToken): Promise<void> {
     `Already-claimed gifts are unaffected.`)) return
   setStatus('Reclaiming unclaimed gifts…')
   try {
-    const r = await sweepGiftVouchers(provider, key, scan.live)
+    const r = await sweepGiftVouchers(provider, k, scan.live)
     if (r == null) { setStatus('Nothing to reclaim — the links may have just been claimed.', 'ok'); return }
     setStatus(`♻ Reclaimed ${r.swept} unclaimed gift${r.swept > 1 ? 's' : ''} — ${r.reclaimedSats.toLocaleString()} sats back to your wallet. Tx ${short(r.txId)}.`, 'ok')
     void refreshBalance()
@@ -2672,6 +2747,7 @@ async function loadDiscThread(t: StoredToken): Promise<void> {
   }
   targetEl.innerHTML = opts.map((o, i) => `<option value="${i}">${escapeHtml(o.label)}</option>`).join('')
   sendBtn.onclick = () => void (async () => {
+    const k = requireKey(); if (k == null) return
     const text = textEl.value.trim()
     if (text === '') { statusEl.textContent = 'Write something first.'; return }
     const target = opts[parseInt(targetEl.value || '0', 10)]?.node
@@ -2682,7 +2758,7 @@ async function loadDiscThread(t: StoredToken): Promise<void> {
     const downBreadcrumbs = result.nodes.slice(0, targetIdx < 0 ? 0 : targetIdx).map(n => n.downHash160)
     sendBtn.disabled = true; statusEl.textContent = 'Posting…'
     try {
-      await postToNodeFeed(provider, key, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias(), downBreadcrumbs })
+      await postToNodeFeed(provider, k, { feedHash160: target.feedHash160, ref: target.ref, text, senderAlias: getMyAlias(), downBreadcrumbs })
       textEl.value = ''; statusEl.textContent = '✅ Posted.'
       setTimeout(() => { if (discAnchor === t) void loadDiscThread(t) }, 900)
     } catch (e) { statusEl.textContent = `Post failed: ${(e as Error).message}`; sendBtn.disabled = false }
@@ -2770,6 +2846,9 @@ function renderUpdatesFeed(feed: UpdateItem[]): void {
 /** Wire the wallet section tabs (show one panel at a time) and restore the last-viewed tab. */
 /** Switch the active wallet tab (also reachable programmatically, e.g. "Message publisher" → Messages). */
 function activateTab(name: string): void {
+  // Watch-only: never land on a key-only tab (Publish / DMs) — fall back to the Wallet tab.
+  const navBtn = document.querySelector(`.tab[data-tab="${name}"]`)
+  if (isWatchOnly() && navBtn?.hasAttribute('data-needs-key')) name = 'wallet'
   document.querySelectorAll<HTMLElement>('.tab').forEach(t => t.classList.toggle('is-active', t.dataset.tab === name))
   document.querySelectorAll<HTMLElement>('.tabpanel').forEach(p => p.classList.toggle('is-active', p.id === `tab-${name}`))
   try { localStorage.setItem('p:activeTab', name) } catch { /* private mode — ignore */ }
@@ -2794,7 +2873,9 @@ function init(): void {
   store = new PharLapStore()
   const ver = $('appVersion'); if (ver != null) ver.textContent = `Smart NFTs · v${__APP_VERSION__} · ${__BUILD_ID__} · ${__BUILD_DATE__}`
   loadAliases() // before useKey(): renderWallet() draws your own avatar, which reads the loaded p:avatars cache
-  useKey(loadKey())
+  const watch = localStorage.getItem(WATCH_KEY)
+  if (watch != null) { try { useWatchKey(watch) } catch { localStorage.removeItem(WATCH_KEY); useKey(loadKey()) } }
+  else useKey(loadKey())
   try { if (localStorage.getItem('p:nftview') === 'grid') nftView = 'grid' } catch { /* default list */ }
   try { if (localStorage.getItem('p:nftsort') === 'publisher') nftSort = 'publisher' } catch { /* default recent */ }
   updateViewToggle()
@@ -2864,6 +2945,19 @@ function init(): void {
     switchWallet(k, true, phrase) // recover purchases from chain + keep the phrase
     ;($('restoreSeed') as HTMLInputElement).value = ''
     setStatus('Wallet restored from seed phrase — recovering from chain…', 'ok')
+  }
+  $('btnWatchLoad').onclick = () => {
+    const pk = val('watchPubKey')
+    try { switchToWatch(pk) } catch { setStatus('Enter a valid public key (33- or 65-byte hex) from your offline wallet.', 'error'); return }
+    ;($('watchPubKey') as HTMLInputElement).value = ''
+    setStatus('Watch-only wallet loaded. Signing actions are disabled here — sign on your offline machine.', 'ok')
+  }
+  $('btnWatchExit').onclick = () => {
+    if (!confirm('Leave watch-only mode? This creates a fresh local wallet on this device (your watched wallet is unaffected — re-load it any time with its public key).')) return
+    const { mnemonic, key } = newSeedWallet()
+    switchWallet(key, false, mnemonic)
+    setStatus('Exited watch-only — a fresh local wallet was created. Back up its seed phrase.', 'ok')
+    showSeedModal(mnemonic)
   }
   // Send BSV (plain payment) + air-gap export
   $('btnSendBsv').onclick = () => void onSendBsv()
