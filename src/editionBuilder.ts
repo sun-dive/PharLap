@@ -1259,8 +1259,21 @@ export interface SalesGroup {
   collectionId: string
   /** Total replications (sum of buyer purchase counts). */
   sales: number
+  /** Sats you earned from this group (publisher fees as creator, holder fees as reseller). */
+  earnings: number
   /** Unique buyers, newest-first. */
   buyers: BuyerRecord[]
+}
+
+/** One sale you were paid on, for time-bucketed stats. */
+export interface SaleEvent {
+  collectionId: string
+  role: 'creator' | 'reseller'
+  /** Sats you earned on this sale (the fee output paid to you). */
+  feeSats: number
+  /** Block height of the sale (0 = unconfirmed/unknown). */
+  height: number
+  buyerPubKeyHex: string
 }
 
 export interface MySales {
@@ -1268,6 +1281,8 @@ export interface MySales {
   asCreator: SalesGroup[]
   /** Items where YOU were the cloning source — your direct buyers (you earned the holder fee). */
   asReseller: SalesGroup[]
+  /** Flat per-sale list (both roles) for time-bucketed statistics. */
+  events: SaleEvent[]
   scanned: number
   capped: boolean
 }
@@ -1298,15 +1313,19 @@ export async function scanMySales(
   try { for (const u of await provider.getUtxos()) if (!candidates.has(u.txId)) candidates.set(u.txId, 0) } catch { /* best-effort */ }
   const entries = [...candidates.entries()]
 
-  // collectionId -> (buyerPubLc -> BuyerRecord)
+  // collectionId -> (buyerPubLc -> BuyerRecord), plus per-collection earnings + flat events.
   const creator = new Map<string, Map<string, BuyerRecord>>()
   const reseller = new Map<string, Map<string, BuyerRecord>>()
+  const creatorEarn = new Map<string, number>()
+  const resellerEarn = new Map<string, number>()
+  const events: SaleEvent[] = []
   const bump = (g: Map<string, Map<string, BuyerRecord>>, cid: string, buyerHex: string, h: number): void => {
     let m = g.get(cid); if (m == null) { m = new Map(); g.set(cid, m) }
     const k = buyerHex.toLowerCase(); const rec = m.get(k)
     if (rec != null) { rec.count++; if (h) { rec.lastHeight = Math.max(rec.lastHeight, h); rec.firstHeight = rec.firstHeight ? Math.min(rec.firstHeight, h) : h } }
     else m.set(k, { pubKeyHex: buyerHex, count: 1, firstHeight: h, lastHeight: h })
   }
+  const addEarn = (m: Map<string, number>, cid: string, v: number): void => { m.set(cid, (m.get(cid) ?? 0) + v) }
   let done = 0
   for (const [txId, blockHeight] of entries) {
     params.onProgress?.(done, entries.length); done++
@@ -1315,18 +1334,27 @@ export async function scanMySales(
     const ed = tx.outputs[1] != null ? parseEditionAny(tx.outputs[1].lockingScript) : null
     if (ed == null) continue // a replication mints the replica at out[1]; transfers don't
     const buyerHex = ed.ownerPubKeyHex
+    const cid = ed.tx1RefHex
     const publisherHash = Utils.toHex(ed.terms.publisherPubKeyHash).toLowerCase()
     if (Utils.toHex(Hash.hash160(Utils.toArray(buyerHex, 'hex'))).toLowerCase() === publisherHash) continue // genesis/self
     const h = blockHeight || 0
-    if (publisherHash === myHash) bump(creator, ed.tx1RefHex, buyerHex, h) // I publish this collection
+    if (publisherHash === myHash) { // I publish this collection — I got the publisher fee (out[2])
+      const fee = tx.outputs[2]?.satoshis ?? 0
+      bump(creator, cid, buyerHex, h); addEarn(creatorEarn, cid, fee)
+      events.push({ collectionId: cid, role: 'creator', feeSats: fee, height: h, buyerPubKeyHex: buyerHex })
+    }
     const source = tx.outputs[0] != null ? parseEditionAny(tx.outputs[0].lockingScript) : null
-    if (source != null && source.ownerPubKeyHex.toLowerCase() === me) bump(reseller, ed.tx1RefHex, buyerHex, h) // I was the source
+    if (source != null && source.ownerPubKeyHex.toLowerCase() === me) { // I was the source — I got the holder fee (out[3])
+      const fee = tx.outputs[3]?.satoshis ?? 0
+      bump(reseller, cid, buyerHex, h); addEarn(resellerEarn, cid, fee)
+      events.push({ collectionId: cid, role: 'reseller', feeSats: fee, height: h, buyerPubKeyHex: buyerHex })
+    }
   }
   params.onProgress?.(entries.length, entries.length)
-  const toGroups = (g: Map<string, Map<string, BuyerRecord>>): SalesGroup[] =>
+  const toGroups = (g: Map<string, Map<string, BuyerRecord>>, earn: Map<string, number>): SalesGroup[] =>
     [...g.entries()].map(([collectionId, m]) => {
       const buyers = [...m.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity))
-      return { collectionId, sales: buyers.reduce((s, b) => s + b.count, 0), buyers }
+      return { collectionId, sales: buyers.reduce((s, b) => s + b.count, 0), earnings: earn.get(collectionId) ?? 0, buyers }
     }).sort((a, b) => b.sales - a.sales)
-  return { asCreator: toGroups(creator), asReseller: toGroups(reseller), scanned: entries.length, capped }
+  return { asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped }
 }

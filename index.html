@@ -141,6 +141,12 @@
     .sales-group-name { font-weight:600; flex:1 1 auto; min-width:0; }
     .sales-group-meta { color:var(--muted); font-size:12px; flex:0 0 auto; }
     .sales-group .buyers-list { padding:6px 10px 10px; }
+    .stat-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; margin-bottom:12px; }
+    .stat-tile { border:1px solid var(--line); border-radius:10px; padding:11px 13px; background:#13181f; }
+    .stat-label { color:var(--muted); font-size:12px; }
+    .stat-val { font-size:22px; font-weight:700; margin:3px 0; }
+    .stat-val .stat-unit { font-size:13px; font-weight:500; color:var(--muted); }
+    .stat-sub { font-size:11px; }
     .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
     .token-tile { display:flex; flex-direction:column; gap:6px; padding:8px; background:#0d1117; border:1px solid var(--line);
                   border-radius:8px; cursor:pointer; text-align:left; color:var(--fg); font:inherit; }
@@ -293,6 +299,7 @@
            button to surface it again. -->
       <button class="tab" data-tab="editions" role="tab">Publish</button>
       <button class="tab" data-tab="tokens" role="tab">My NFTs</button>
+      <button class="tab" data-tab="sales" role="tab">Sales</button>
       <button class="tab" data-tab="discussions" role="tab">Threads</button>
       <button class="tab" data-tab="messages" role="tab">DMs</button>
       <button class="tab" data-tab="updates" role="tab">Updates</button>
@@ -319,6 +326,10 @@
         <button class="home-card" data-goto="tokens">
           <div class="home-art" style="--g1:#9e6a03;--g2:#5a3c02">🎴</div>
           <div class="home-card-body"><h3>My NFTs</h3><p>Your collection — share a sales page, transfer, or view.</p></div>
+        </button>
+        <button class="home-card" data-goto="sales">
+          <div class="home-art" style="--g1:#b3791f;--g2:#5c3c0a">📊</div>
+          <div class="home-card-body"><h3>Sales</h3><p>Your sales stats, buyers &amp; earnings — as creator and reseller.</p></div>
         </button>
         <button class="home-card" data-goto="discussions">
           <div class="home-art" style="--g1:#1f9e8f;--g2:#0d4f48">💬</div>
@@ -437,6 +448,19 @@
       <div id="tokens"></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Enter a recipient public key above, then click <b>Send</b> on the NFT you want to transfer.</p>
     </div>
+    </section>
+
+    <section class="tabpanel" id="tab-sales" role="tabpanel">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
+          <h3 style="margin:0">📊 Sales</h3>
+          <button id="btnSalesRefresh" class="secondary">🔄 Refresh</button>
+        </div>
+        <div id="salesStats"></div>
+        <p id="salesStatus" class="muted" style="font-size:12px"></p>
+        <div id="salesBody"></div>
+        <p class="muted" style="font-size:11px;margin-top:10px">Counts &amp; earnings are at point of purchase (replications); onward transfers aren’t visible. Periods are approximate (by block height). Capped to the most recent transactions.</p>
+      </div>
     </section>
 
     <section class="tabpanel" id="tab-discussions" role="tabpanel">
