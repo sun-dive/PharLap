@@ -21704,6 +21704,62 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return { asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped };
   }
 
+  // src/payment.ts
+  function assertValidAddress(addr) {
+    try {
+      new P2PKH().lock(addr);
+    } catch {
+      throw new Error("Invalid BSV address");
+    }
+  }
+  async function buildPaymentTx(opts) {
+    assertValidAddress(opts.toAddress);
+    if (opts.funding.length === 0) throw new Error("No spendable funds");
+    if (!opts.sendMax && (!Number.isFinite(opts.amountSats) || opts.amountSats < 1)) {
+      throw new Error("Enter an amount of at least 1 sat");
+    }
+    const selfAddress = opts.key.toAddress();
+    const tx = new Transaction();
+    for (const f2 of opts.funding) {
+      tx.addInput({
+        sourceTransaction: f2.sourceTx,
+        sourceOutputIndex: f2.utxo.outputIndex,
+        unlockingScriptTemplate: new P2PKH().unlock(opts.key)
+      });
+    }
+    let changeVout = null;
+    if (opts.sendMax) {
+      tx.addOutput({ lockingScript: new P2PKH().lock(opts.toAddress), change: true });
+    } else {
+      tx.addOutput({ lockingScript: new P2PKH().lock(opts.toAddress), satoshis: opts.amountSats });
+      changeVout = tx.outputs.length;
+      tx.addOutput({ lockingScript: new P2PKH().lock(selfAddress), change: true });
+    }
+    await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB));
+    await tx.sign();
+    const sentSats = opts.sendMax ? tx.outputs[0]?.satoshis ?? 0 : opts.amountSats;
+    if (sentSats < 1) throw new Error("Funds too small to cover the network fee");
+    const changeSats = changeVout != null ? tx.outputs[changeVout]?.satoshis ?? 0 : 0;
+    return { tx, txId: tx.id("hex"), sentSats, changeVout: changeSats > 0 ? changeVout : null, changeSats };
+  }
+  async function gatherPaymentFunding(provider2, opts) {
+    const safe = await getSafeUtxos(provider2);
+    const feeHeadroom = Math.ceil(400 * (opts.feePerKb ?? DEFAULT_FEE_PER_KB) / 1e3) + 200;
+    const selected = opts.sendMax ? safe : selectFunding(safe, opts.amountSats + feeHeadroom);
+    return Promise.all(selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) })));
+  }
+  async function sendPayment(provider2, key2, opts) {
+    const funding = await gatherPaymentFunding(provider2, opts);
+    const result = await buildPaymentTx({ key: key2, funding, ...opts });
+    await provider2.broadcast(result.tx.toHex());
+    provider2.registerPendingTx(
+      result.txId,
+      funding.map((f2) => ({ txId: f2.utxo.txId, outputIndex: f2.utxo.outputIndex })),
+      result.changeVout != null ? { outputIndex: result.changeVout, satoshis: result.changeSats } : void 0
+    );
+    return result;
+  }
+
   // src/airgap.ts
   var AIRGAP_VERSION = 1;
   function buildAirgapRequest(action, edition, opts = {}) {
@@ -21729,8 +21785,49 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       summary: opts.summary
     };
   }
+  function buildAirgapPaymentRequest(opts) {
+    return {
+      v: AIRGAP_VERSION,
+      action: "payment",
+      payment: { toAddress: opts.toAddress, amountSats: opts.amountSats, sendMax: opts.sendMax },
+      funding: opts.funding.map((f2) => ({
+        txId: f2.utxo.txId,
+        outputIndex: f2.utxo.outputIndex,
+        satoshis: f2.utxo.satoshis,
+        sourceTxHex: f2.sourceTx.toHex()
+      })),
+      feePerKb: opts.feePerKb,
+      summary: opts.summary
+    };
+  }
+  function fundingFromRequest(req) {
+    return (req.funding ?? []).map((f2) => ({
+      utxo: { txId: f2.txId, outputIndex: f2.outputIndex, satoshis: f2.satoshis, script: "" },
+      sourceTx: Transaction.fromHex(f2.sourceTxHex)
+    }));
+  }
   async function signAirgapRequest(req, key2) {
     if (req.v !== AIRGAP_VERSION) throw new Error(`unsupported air-gap request version ${req.v}`);
+    if (req.action === "payment") {
+      if (req.payment == null) throw new Error("payment request is missing payment details");
+      const funding = fundingFromRequest(req);
+      const mine = new P2PKH().lock(key2.toAddress()).toHex();
+      for (const f2 of funding) {
+        if (f2.sourceTx.outputs[f2.utxo.outputIndex]?.lockingScript.toHex() !== mine) {
+          throw new Error("this wallet does not own one of the funding inputs \u2014 cannot sign");
+        }
+      }
+      const r2 = await buildPaymentTx({
+        key: key2,
+        toAddress: req.payment.toAddress,
+        amountSats: req.payment.amountSats,
+        sendMax: req.payment.sendMax,
+        funding,
+        feePerKb: req.feePerKb
+      });
+      return { txId: r2.txId, rawTx: r2.tx.toHex() };
+    }
+    if (req.edition == null) throw new Error("request is missing the edition to spend");
     const edition = {
       txId: req.edition.txId,
       outputIndex: req.edition.outputIndex,
@@ -21748,10 +21845,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     if (req.action === "transfer") {
       if (req.newOwnerPubKeyHex == null || req.newOwnerPubKeyHex.length === 0) throw new Error("transfer request is missing the recipient pubkey");
-      const funding = (req.funding ?? []).map((f2) => ({
-        utxo: { txId: f2.txId, outputIndex: f2.outputIndex, satoshis: f2.satoshis, script: "" },
-        sourceTx: Transaction.fromHex(f2.sourceTxHex)
-      }));
+      const funding = fundingFromRequest(req);
       const r2 = await buildEditionTransferTx({
         edition,
         ownerKey: key2,
@@ -21771,8 +21865,13 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const req = JSON.parse(json);
     if (req == null || typeof req !== "object") throw new Error("not an air-gap request");
     if (req.v !== AIRGAP_VERSION) throw new Error(`unsupported air-gap request version ${req.v}`);
-    if (req.action !== "transfer" && req.action !== "burn") throw new Error("unknown air-gap action");
-    if (req.edition?.sourceTxHex == null || req.edition.lockHex == null) throw new Error("malformed air-gap request (missing edition data)");
+    if (req.action !== "transfer" && req.action !== "burn" && req.action !== "payment") throw new Error("unknown air-gap action");
+    if (req.action === "payment") {
+      if (req.payment?.toAddress == null) throw new Error("malformed air-gap request (missing payment details)");
+      if ((req.funding ?? []).length === 0) throw new Error("malformed air-gap request (payment has no funding inputs)");
+    } else if (req.edition?.sourceTxHex == null || req.edition.lockHex == null) {
+      throw new Error("malformed air-gap request (missing edition data)");
+    }
     return req;
   }
 
@@ -24090,6 +24189,63 @@ Proceed?`
       setStatus(`\u2705 Broadcast. Tx ${short(txId)}. Refresh balance / check holdings to see it settle.`, "ok");
     } catch (e) {
       setStatus(`Broadcast failed: ${e.message}`, "error");
+    }
+  }
+  function readSendBsvForm() {
+    const toAddress = val("sendBsvAddr");
+    const sendMax = $("sendBsvMax").checked;
+    try {
+      assertValidAddress(toAddress);
+    } catch {
+      setStatus("Enter a valid recipient BSV address.", "error");
+      return null;
+    }
+    const amountSats = sendMax ? 0 : Math.floor(Number(val("sendBsvAmount")));
+    if (!sendMax && (!Number.isFinite(amountSats) || amountSats < 1)) {
+      setStatus("Enter an amount of at least 1 sat (or tick \u201CSend max\u201D).", "error");
+      return null;
+    }
+    return { toAddress, amountSats, sendMax };
+  }
+  async function onSendBsv() {
+    const form = readSendBsvForm();
+    if (form == null) return;
+    if (!confirm(`Send ${form.sendMax ? "your entire spendable balance" : `${form.amountSats.toLocaleString()} sats`} to
+${form.toAddress}?
+
+(Minus the network fee. Change returns to this wallet.)`)) return;
+    setStatus("Sending BSV\u2026");
+    try {
+      const r2 = await sendPayment(provider, key, form);
+      $("sendBsvAddr").value = "";
+      $("sendBsvAmount").value = "";
+      $("sendBsvMax").checked = false;
+      setStatus(`\u2705 Sent ${r2.sentSats.toLocaleString()} sats. Tx ${short(r2.txId)}.`, "ok");
+      void refreshBalance();
+    } catch (e) {
+      setStatus(`Send failed: ${e.message}`, "error");
+    }
+  }
+  async function onSendBsvExport() {
+    const form = readSendBsvForm();
+    if (form == null) return;
+    setStatus("Gathering funds for the offline signer\u2026");
+    try {
+      const funding = await gatherPaymentFunding(provider, form);
+      if (funding.length === 0) {
+        setStatus("No spendable funds to send.", "error");
+        return;
+      }
+      const dry = await buildPaymentTx({ key, funding, ...form });
+      const req = buildAirgapPaymentRequest({
+        ...form,
+        funding,
+        summary: `Send ${dry.sentSats.toLocaleString()} sats to ${form.toAddress}${form.sendMax ? " (entire balance, minus fee)" : ""}.`
+      });
+      downloadText(`smartnfts-payment-${dry.txId.slice(0, 8)}.airgap-request.json`, encodeAirgapRequest(req), "application/json");
+      setStatus(`\u2705 Exported payment request (${dry.sentSats.toLocaleString()} sats). Sign it on your offline machine (step 2 in Advanced), then broadcast (step 3).`, "ok");
+    } catch (e) {
+      setStatus(`Export failed: ${e.message}`, "error");
     }
   }
   async function onSend(txId, outputIndex) {
@@ -26415,7 +26571,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f962b67"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"8446606"} \xB7 ${"2026-06-18"}`;
     loadAliases();
     useKey(loadKey());
     try {
@@ -26508,6 +26664,14 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       $("restoreSeed").value = "";
       setStatus("Wallet restored from seed phrase \u2014 recovering from chain\u2026", "ok");
     };
+    $("btnSendBsv").onclick = () => void onSendBsv();
+    $("btnSendBsvExport").onclick = () => void onSendBsvExport();
+    $("sendBsvMax").addEventListener("change", () => {
+      const max = $("sendBsvMax").checked;
+      const amt = $("sendBsvAmount");
+      amt.disabled = max;
+      if (max) amt.value = "";
+    });
     $("advAirgap").addEventListener("toggle", () => {
       if ($("advAirgap").open) populateAirgapEditions();
     });
