@@ -21010,7 +21010,9 @@ Proceed?`
   function updateFeePctPreview() {
     if (feeMode !== "pct") return;
     const f2 = computeFees();
-    $("edPctPreview").textContent = `\u2192 Publisher ${f2.publisherFeeSats.toLocaleString()} sat \xB7 Holder ${f2.holderFeeSats.toLocaleString()} sat per copy`;
+    const bond = chosenBond();
+    const buyerTotal = f2.publisherFeeSats + f2.holderFeeSats + bond;
+    $("edPctPreview").innerHTML = `\u2192 Publisher <b>${f2.publisherFeeSats.toLocaleString()}</b> \xB7 Holder <b>${f2.holderFeeSats.toLocaleString()}</b> \xB7 bond <b>${bond.toLocaleString()}</b> (refundable)<br>Buyer pays \u2248 <b>${buyerTotal.toLocaleString()} sat</b> per copy <span class="muted">(+ a small network fee; the ${bond.toLocaleString()}-sat bond is reclaimable by burning)</span>`;
   }
   function termsFromToken(t) {
     return {
@@ -23563,7 +23565,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f1d1f50"} \xB7 ${"2026-06-18"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"b7f919a"} \xB7 ${"2026-06-18"}`;
     loadAliases();
     useKey(loadKey());
     try {
@@ -23611,6 +23613,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     $("btnFeePct").onclick = () => setFeeMode("pct");
     $("edPrice").addEventListener("input", updateFeePctPreview);
     $("edPubPct").addEventListener("input", updateFeePctPreview);
+    $("edBond").addEventListener("input", updateFeePctPreview);
     $("btnIncoming").onclick = () => void onCheckIncoming();
     $("btnSendMessage").onclick = () => void onSendMessage();
     $("btnCheckMessages").onclick = () => void onCheckMessages();

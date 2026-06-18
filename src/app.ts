@@ -213,7 +213,11 @@ function setFeeMode(mode: 'fixed' | 'pct'): void {
 function updateFeePctPreview(): void {
   if (feeMode !== 'pct') return
   const f = computeFees()
-  $('edPctPreview').textContent = `→ Publisher ${f.publisherFeeSats.toLocaleString()} sat · Holder ${f.holderFeeSats.toLocaleString()} sat per copy`
+  const bond = chosenBond()
+  const buyerTotal = f.publisherFeeSats + f.holderFeeSats + bond
+  $('edPctPreview').innerHTML =
+    `→ Publisher <b>${f.publisherFeeSats.toLocaleString()}</b> · Holder <b>${f.holderFeeSats.toLocaleString()}</b> · bond <b>${bond.toLocaleString()}</b> (refundable)` +
+    `<br>Buyer pays ≈ <b>${buyerTotal.toLocaleString()} sat</b> per copy <span class="muted">(+ a small network fee; the ${bond.toLocaleString()}-sat bond is reclaimable by burning)</span>`
 }
 
 function termsFromToken(t: StoredToken): EditionTerms {
@@ -2593,6 +2597,7 @@ function init(): void {
   $('btnFeePct').onclick = () => setFeeMode('pct')
   ;($('edPrice') as HTMLInputElement).addEventListener('input', updateFeePctPreview)
   ;($('edPubPct') as HTMLInputElement).addEventListener('input', updateFeePctPreview)
+  ;($('edBond') as HTMLInputElement).addEventListener('input', updateFeePctPreview) // bond feeds the buyer-total preview
   $('btnIncoming').onclick = () => void onCheckIncoming()
   $('btnSendMessage').onclick = () => void onSendMessage()
   $('btnCheckMessages').onclick = () => void onCheckMessages()
