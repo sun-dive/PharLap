@@ -30,6 +30,11 @@ import { publishConfigBackup, resolveConfigBackup, mergeConfig } from './configB
 import { unwrapContentKey, decryptContent } from './contentCrypto.ts'
 import { decompress } from './compress.ts'
 
+// Injected by build.mjs (esbuild define). Base version is manual; build id + date auto-update each build.
+declare const __APP_VERSION__: string
+declare const __BUILD_ID__: string
+declare const __BUILD_DATE__: string
+
 const WIF_KEY = 'p:wallet:wif'
 
 let key: PrivateKey
@@ -2517,6 +2522,7 @@ function initTabs(): void {
 
 function init(): void {
   store = new PharLapStore()
+  const ver = $('appVersion'); if (ver != null) ver.textContent = `Smart NFTs · v${__APP_VERSION__} · ${__BUILD_ID__} · ${__BUILD_DATE__}`
   loadAliases() // before useKey(): renderWallet() draws your own avatar, which reads the loaded p:avatars cache
   useKey(loadKey())
   try { if (localStorage.getItem('p:nftview') === 'grid') nftView = 'grid' } catch { /* default list */ }
