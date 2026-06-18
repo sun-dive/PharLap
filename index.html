@@ -134,6 +134,13 @@
     .disc-badge.creator { color:#04140a; background:#f0c674; border-color:#f0c674; font-weight:600; }
     .disc-badge.senior { color:var(--accent); border-color:var(--accent); }
     .cfg-backup { border-top:1px solid var(--line); padding-top:12px; margin-bottom:12px; }
+    /* 📊 Sales dashboard */
+    .sales-group { border:1px solid var(--line); border-radius:8px; margin:6px 0; overflow:hidden; }
+    .sales-group-head { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:#161b22; color:var(--fg); border:none; padding:9px 11px; cursor:pointer; font:inherit; }
+    .sales-group-head:hover { background:#1b212b; }
+    .sales-group-name { font-weight:600; flex:1 1 auto; min-width:0; }
+    .sales-group-meta { color:var(--muted); font-size:12px; flex:0 0 auto; }
+    .sales-group .buyers-list { padding:6px 10px 10px; }
     .token-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
     .token-tile { display:flex; flex-direction:column; gap:6px; padding:8px; background:#0d1117; border:1px solid var(--line);
                   border-radius:8px; cursor:pointer; text-align:left; color:var(--fg); font:inherit; }
@@ -417,6 +424,7 @@
       <input id="sendPubKey" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
       <div class="row" style="margin:10px 0"><button id="btnIncoming" class="secondary">Check incoming / recover</button></div>
       <div class="nft-toolbar">
+        <button id="btnSales" class="secondary" type="button" style="margin-right:auto">📊 Sales</button>
         <div class="view-toggle">
           <button id="btnSortRecent" type="button">🕑 Recent</button>
           <button id="btnSortPublisher" type="button">📤 Publisher</button>

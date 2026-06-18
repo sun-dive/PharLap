@@ -1213,3 +1213,79 @@ export async function scanCollectionBuyers(
   const buyers = [...byBuyer.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity)) // newest/unconfirmed first
   return { buyers, scanned: entries.length, capped }
 }
+
+export interface SalesGroup {
+  collectionId: string
+  /** Total replications (sum of buyer purchase counts). */
+  sales: number
+  /** Unique buyers, newest-first. */
+  buyers: BuyerRecord[]
+}
+
+export interface MySales {
+  /** Collections you PUBLISH — every sale across the whole tree (you earn the publisher fee on each). */
+  asCreator: SalesGroup[]
+  /** Items where YOU were the cloning source — your direct buyers (you earned the holder fee). */
+  asReseller: SalesGroup[]
+  scanned: number
+  capped: boolean
+}
+
+/**
+ * One pass over YOUR address history → your whole sales picture. Every replication pays the publisher fee to
+ * the publisher and the holder fee to the source (returning their token on out[0]), so a single scan of your
+ * address surfaces both roles: sales of collections you publish (publisherHash == you) and resales where you
+ * were the source (out[0] owner == you). Grouped per collection, buyers deduped with counts.
+ *
+ * Honest limit (as elsewhere): buyers at point of sale; onward transfers aren't visible. Capped to the most
+ * recent `maxTxs` history txs (unioned with the mempool-aware UTXO set so unconfirmed sales show immediately).
+ */
+export async function scanMySales(
+  provider: WalletProvider,
+  params: { myPubKeyHex: string; myHash: string; maxTxs?: number; onProgress?: (done: number, total: number) => void },
+): Promise<MySales> {
+  const me = params.myPubKeyHex.toLowerCase()
+  const myHash = params.myHash.toLowerCase()
+  const cap = params.maxTxs ?? 500
+  const candidates = new Map<string, number>()
+  let capped = false
+  try {
+    let hist = await provider.getAddressHistory()
+    if (hist.length > cap) { capped = true; hist = hist.slice(hist.length - cap) }
+    for (const h of hist) candidates.set(h.txId, h.blockHeight || 0)
+  } catch { /* best-effort */ }
+  try { for (const u of await provider.getUtxos()) if (!candidates.has(u.txId)) candidates.set(u.txId, 0) } catch { /* best-effort */ }
+  const entries = [...candidates.entries()]
+
+  // collectionId -> (buyerPubLc -> BuyerRecord)
+  const creator = new Map<string, Map<string, BuyerRecord>>()
+  const reseller = new Map<string, Map<string, BuyerRecord>>()
+  const bump = (g: Map<string, Map<string, BuyerRecord>>, cid: string, buyerHex: string, h: number): void => {
+    let m = g.get(cid); if (m == null) { m = new Map(); g.set(cid, m) }
+    const k = buyerHex.toLowerCase(); const rec = m.get(k)
+    if (rec != null) { rec.count++; if (h) { rec.lastHeight = Math.max(rec.lastHeight, h); rec.firstHeight = rec.firstHeight ? Math.min(rec.firstHeight, h) : h } }
+    else m.set(k, { pubKeyHex: buyerHex, count: 1, firstHeight: h, lastHeight: h })
+  }
+  let done = 0
+  for (const [txId, blockHeight] of entries) {
+    params.onProgress?.(done, entries.length); done++
+    let tx: Transaction
+    try { tx = await provider.getSourceTransaction(txId) } catch { continue }
+    const ed = tx.outputs[1] != null ? parseEditionAny(tx.outputs[1].lockingScript) : null
+    if (ed == null) continue // a replication mints the replica at out[1]; transfers don't
+    const buyerHex = ed.ownerPubKeyHex
+    const publisherHash = Utils.toHex(ed.terms.publisherPubKeyHash).toLowerCase()
+    if (Utils.toHex(Hash.hash160(Utils.toArray(buyerHex, 'hex'))).toLowerCase() === publisherHash) continue // genesis/self
+    const h = blockHeight || 0
+    if (publisherHash === myHash) bump(creator, ed.tx1RefHex, buyerHex, h) // I publish this collection
+    const source = tx.outputs[0] != null ? parseEditionAny(tx.outputs[0].lockingScript) : null
+    if (source != null && source.ownerPubKeyHex.toLowerCase() === me) bump(reseller, ed.tx1RefHex, buyerHex, h) // I was the source
+  }
+  params.onProgress?.(entries.length, entries.length)
+  const toGroups = (g: Map<string, Map<string, BuyerRecord>>): SalesGroup[] =>
+    [...g.entries()].map(([collectionId, m]) => {
+      const buyers = [...m.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity))
+      return { collectionId, sales: buyers.reduce((s, b) => s + b.count, 0), buyers }
+    }).sort((a, b) => b.sales - a.sales)
+  return { asCreator: toGroups(creator), asReseller: toGroups(reseller), scanned: entries.length, capped }
+}
