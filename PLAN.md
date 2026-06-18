@@ -797,3 +797,43 @@ these are worth doing now, while the user is the only tester.
       see the design discussion 2026-06-15. (Block-date in the verified line = deferred cosmetic; needs a tx
       block-time lookup.)
 - (add further pre-launch items here as they surface: onboarding, deploy/host decision, WoC-terms check, etc.)
+
+## Addendum H — Alternative blockchain-data provider: BananaBlocks (evaluated 2026-06-18)
+
+PharLap currently uses **WhatsOnChain** (`api.whatsonchain.com/v1/bsv/main`) via `walletProvider.ts`, called
+directly from the browser (no key, CORS). Evaluated **BananaBlocks** (`bananablocks.com`) as an alternative.
+**Decision (2026-06-18): stay on WoC for now.** BananaBlocks recorded here as a **viable migration path** if WoC
+rate limits / terms ever bite.
+
+**What PharLap needs from a provider:** UTXOs by **script hash** (mempool-aware) — *the* critical one, since
+covenant editions / gift vouchers / Thread feeds / profiles are non-standard scripts with no address; UTXOs by
+address (mempool-aware); raw-tx by txid; address history; TSC merkle proof + block headers (SPV); chain tip;
+raw-tx broadcast. Browser-friendly (CORS, no key).
+
+**Native BananaBlocks API — NOT a fit.** It offers UTXO/history **by address only** (+ `/address/<a>/scripts`,
+and a realtime WS `lock:scripthash:<hex>` — monitoring, not historical). No by-script-hash UTXO/history query,
+so covenant-edition discovery can't be served. Moot, though, because of the mirror:
+
+**BananaBlocks WoC-compatible mirror — near drop-in.** Documented at `…/api/v1/bsv/main` ("drop-in replacement
+for the WoC API"). Same path layout as PharLap's `WOC_BASE`, so migration ≈ **one line** (`WOC_BASE`) + the dev
+`serve.mjs` `/woc` proxy target. **Empirically verified 2026-06-18** that every endpoint PharLap calls responds,
+WoC-shaped: `chain/info` ✓, `script/{sh}/unspent/all` ✓ (**the make-or-break — same JSON shape**),
+`address/{a}/unspent/all` ✓, `address/{a}/unconfirmed/unspent` ✓, `address/{a}/history` ✓, `tx/{txid}/hex` ✓,
+`tx/{txid}/proof/tsc` ✓, `POST /tx/raw` ✓ (route exists — 400 on garbage). (Plain `/script/{sh}/unspent` 404s,
+but PharLap calls `/unspent/all` first, so irrelevant.)
+
+**Two things to handle before any switch:**
+1. **`status` vs `isSpentInMempoolTx`.** WoC unspent rows carry `isSpentInMempoolTx:false`, which
+   `getUtxos`/`getUnspentByScriptHash` filter on to avoid spending a mempool-spent output (txn-mempool-conflict).
+   The mirror returns a **`status`** field (e.g. `"confirmed"`) and **omits `isSpentInMempoolTx`** → `mapRows`
+   would stop excluding mempool-spent UTXOs. Need to learn the mirror's full `status` vocabulary and update
+   `mapRows` to honor it (a few lines). Local `pendingUtxos`/`spentOutpoints` cover same-session; the gap is
+   cross-device / post-reload.
+2. **Broadcast cap.** Native docs cap broadcast at **10/min**; the mirror's `/tx/raw` cap is unstated. Fine for
+   normal use (mint = 2 tx, replicate/transfer/burn/post/DM = 1), but a **bulk-DM blast** (1 tx/recipient) could
+   throttle. Mitigation: their `/tx/broadcast/multi`, or stagger the sends.
+
+**Rate limits (vs what PharLap needs):** reads **240/min (~4/s)** vs PharLap's self-throttle of 350 ms (~3/s,
+WoC free tier) → ~33% more read headroom (could lower the pacing → faster scans, which are read-heavy).
+Broadcast 10/min (native). No key for reads; CORS open; mainnet + testnet. **Net: modestly better for the
+read-heavy scan workload; potentially tighter only on broadcast bursts.**
