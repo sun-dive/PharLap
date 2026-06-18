@@ -4,11 +4,13 @@ A guide to generating and holding a PHAR LAP wallet on a permanently-offline mac
 (your 12-word seed phrase) is never exposed to an internet-connected device. Pattern adapted from the
 classic cold-storage split (offline signer / online watcher / clean transfer medium).
 
-> **Status:** This documents **Phase 0 — air-gapped key generation + cold storage**, which works **today** with
-> no code changes (PHAR LAP is a self-contained client-side app that runs offline). The full air-gapped
-> *transaction loop* (a keyless online "watch-only" mode + export-unsigned / sign-offline / import-signed) is a
-> planned build — see **Roadmap** at the end. Until then, *using* the wallet still requires importing the key
-> into an online instance, so Phase 0 alone = **cold generation + storage**, not cold operation.
+> **Status:** **Phase 0 (cold key generation + storage)** and **Phase 1a (the file-based signing loop)** both
+> ship today. Phase 1a adds the **Advanced — air-gapped signing** panel in the Wallet tab: the online box
+> **exports an unsigned request**, the offline box **signs it**, and the online box **broadcasts** the result —
+> for **plain BSV payments** and edition **transfers / burns**. The remaining piece is a keyless online
+> **watch-only mode** (Phase 1b) so the online box need not hold a key at all; see **Roadmap**. Until then, the
+> online instance still has a key loaded — the air gap protects the *offline signer's* key, which is the one
+> that matters.
 
 ## Threat model
 
@@ -64,16 +66,27 @@ To defend against tampered app files, compare what you carry to a known-good, on
 - Use a **fresh, dedicated USB** for transfers; treat unknown USB media as hostile.
 - Keep paper backups offline, redundant, and physically secured.
 
-## Roadmap — full air-gapped operation (planned, not yet built)
+## The signing loop (Phase 1a — shipped)
 
-To *transact* without ever exposing the key, PHAR LAP needs the sign-from-network split:
-- **Phase 1:** a keyless **watch-only mode** (load by address/pubkey) that scans holdings and **builds unsigned
-  transactions**, exporting them with their input context (a BEEF-style bundle: tx + input source-txs, since
-  BSV's BIP-143 sighash needs each input's value + script); an **offline signer** that imports the bundle,
-  signs with the seed-derived key, and exports the **signed** tx; and broadcast on the online side. File/USB
-  transfer first. Targets ordinary spends + edition **transfers**.
-- **Phase 2:** extend offline signing to the **covenant** operations (replicate / mint / burn — the OP_PUSH_TX
-  preimage signed offline), and add **multi-frame QR** transfer as an alternative to USB.
+In the Wallet tab, open **⚙ Advanced — air-gapped signing**. The flow moves only files across the gap:
 
-Until Phase 1 ships, treat Phase 0 as cold *generation and storage*: the moment you need to spend, importing
-the key into an online instance ends the air gap.
+1. **Export an unsigned request** *(online box)* — for a **BSV payment** use the **Send BSV → Export for offline
+   signing** button; for an **edition** use the Advanced panel's edition picker (transfer or burn). The online
+   box gathers the inputs (the UTXOs to spend + each input's source transaction, which BSV's BIP-143 sighash
+   needs for value + script) and writes a `*.airgap-request.json`. **No key is read.**
+2. **Sign offline** *(offline box — holds your key)* — import the request. PHAR LAP re-runs the *same* builder
+   the online wallet would have used and signs it, after checking the key actually owns the inputs. It writes a
+   `*-signed.txt` (the raw transaction). The request contains no secrets, and the signed tx leaks no key.
+3. **Broadcast signed** *(online box)* — import/paste the signed raw tx and broadcast.
+
+Because the builders are deterministic given their inputs, the offline-built transaction is exactly what the
+online wallet would have produced — the online side only relays it.
+
+## Roadmap — remaining work
+
+- **Phase 1b:** a keyless **watch-only mode** (load by address/pubkey) so the *online* box holds no key at all —
+  it would scan holdings, export requests, and broadcast, with every signing action disabled. This closes the
+  last gap: today the online instance still has a key loaded.
+- **Phase 2:** extend offline signing to the **covenant replicate / mint** operations (the OP_PUSH_TX preimage
+  signed offline; edition transfer + burn already work), and add **multi-frame QR** transfer as an alternative
+  to USB.

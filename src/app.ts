@@ -13,7 +13,8 @@ import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, selectFunding, PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, SPEND_CANCELLED } from './collectionBuilder.ts'
 import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type SalesGroup } from './editionBuilder.ts'
-import { buildAirgapRequest, signAirgapRequest, encodeAirgapRequest, decodeAirgapRequest, type AirgapAction, type AirgapRequest } from './airgap.ts'
+import { buildAirgapRequest, buildAirgapPaymentRequest, signAirgapRequest, encodeAirgapRequest, decodeAirgapRequest, type AirgapAction, type AirgapRequest } from './airgap.ts'
+import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress } from './payment.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
@@ -581,6 +582,58 @@ async function onAirgapBroadcast(): Promise<void> {
     setStatus(`✅ Broadcast. Tx ${short(txId)}. Refresh balance / check holdings to see it settle.`, 'ok')
   } catch (e) {
     setStatus(`Broadcast failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+// ─── Send BSV (plain P2PKH payment) ─────────────────────────────────
+/** Read + validate the Send-BSV form. Returns null (after setting an error status) if invalid. */
+function readSendBsvForm(): { toAddress: string; amountSats: number; sendMax: boolean } | null {
+  const toAddress = val('sendBsvAddr')
+  const sendMax = ($('sendBsvMax') as HTMLInputElement).checked
+  try { assertValidAddress(toAddress) } catch { setStatus('Enter a valid recipient BSV address.', 'error'); return null }
+  const amountSats = sendMax ? 0 : Math.floor(Number(val('sendBsvAmount')))
+  if (!sendMax && (!Number.isFinite(amountSats) || amountSats < 1)) {
+    setStatus('Enter an amount of at least 1 sat (or tick “Send max”).', 'error'); return null
+  }
+  return { toAddress, amountSats, sendMax }
+}
+
+/** Online: build, sign and broadcast a plain BSV payment. */
+async function onSendBsv(): Promise<void> {
+  const form = readSendBsvForm()
+  if (form == null) return
+  if (!confirm(`Send ${form.sendMax ? 'your entire spendable balance' : `${form.amountSats.toLocaleString()} sats`} to\n${form.toAddress}?\n\n(Minus the network fee. Change returns to this wallet.)`)) return
+  setStatus('Sending BSV…')
+  try {
+    const r = await sendPayment(provider, key, form)
+    ;($('sendBsvAddr') as HTMLInputElement).value = ''
+    ;($('sendBsvAmount') as HTMLInputElement).value = ''
+    ;($('sendBsvMax') as HTMLInputElement).checked = false
+    setStatus(`✅ Sent ${r.sentSats.toLocaleString()} sats. Tx ${short(r.txId)}.`, 'ok')
+    void refreshBalance()
+  } catch (e) {
+    setStatus(`Send failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Air-gap: gather the funding online and export an unsigned payment request to sign offline. */
+async function onSendBsvExport(): Promise<void> {
+  const form = readSendBsvForm()
+  if (form == null) return
+  setStatus('Gathering funds for the offline signer…')
+  try {
+    const funding = await gatherPaymentFunding(provider, form)
+    if (funding.length === 0) { setStatus('No spendable funds to send.', 'error'); return }
+    // Dry-run the build to surface the exact figure (and catch insufficient funds) before exporting.
+    const dry = await buildPaymentTx({ key, funding, ...form })
+    const req = buildAirgapPaymentRequest({
+      ...form, funding,
+      summary: `Send ${dry.sentSats.toLocaleString()} sats to ${form.toAddress}${form.sendMax ? ' (entire balance, minus fee)' : ''}.`,
+    })
+    downloadText(`smartnfts-payment-${dry.txId.slice(0, 8)}.airgap-request.json`, encodeAirgapRequest(req), 'application/json')
+    setStatus(`✅ Exported payment request (${dry.sentSats.toLocaleString()} sats). Sign it on your offline machine (step 2 in Advanced), then broadcast (step 3).`, 'ok')
+  } catch (e) {
+    setStatus(`Export failed: ${(e as Error).message}`, 'error')
   }
 }
 
@@ -2812,6 +2865,15 @@ function init(): void {
     ;($('restoreSeed') as HTMLInputElement).value = ''
     setStatus('Wallet restored from seed phrase — recovering from chain…', 'ok')
   }
+  // Send BSV (plain payment) + air-gap export
+  $('btnSendBsv').onclick = () => void onSendBsv()
+  $('btnSendBsvExport').onclick = () => void onSendBsvExport()
+  $('sendBsvMax').addEventListener('change', () => {
+    const max = ($('sendBsvMax') as HTMLInputElement).checked
+    const amt = $('sendBsvAmount') as HTMLInputElement
+    amt.disabled = max
+    if (max) amt.value = ''
+  })
   // Air-gapped signing (Advanced panel)
   $('advAirgap').addEventListener('toggle', () => { if (($('advAirgap') as HTMLDetailsElement).open) populateAirgapEditions() })
   document.querySelectorAll('input[name="agAction"]').forEach(r => r.addEventListener('change', syncAirgapAction))

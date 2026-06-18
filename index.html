@@ -137,6 +137,7 @@
     .app-version { text-align:center; font-size:11px; color:var(--muted); margin:18px 0 8px; }
     .grid2[hidden] { display:none; } /* [hidden] alone loses to .grid2{display:grid}; this restores hiding */
     #seedPhrase.blurred { filter:blur(6px); }
+    .send-bsv { border-top:1px solid var(--line); margin-top:14px; padding-top:12px; }
     .adv-airgap { border-top:1px solid var(--line); padding-top:12px; }
     .adv-airgap > summary { cursor:pointer; font-weight:600; color:var(--muted); }
     .adv-airgap[open] > summary { color:var(--fg); }
@@ -381,6 +382,21 @@
         <button id="btnRefresh" class="secondary">Refresh balance</button>
         <button id="btnNewWallet" class="secondary">New wallet</button>
       </div>
+
+      <div class="send-bsv">
+        <label>Send BSV</label>
+        <input id="sendBsvAddr" placeholder="recipient BSV address (1…)" autocomplete="off" />
+        <div class="row" style="margin-top:6px; align-items:center; gap:10px">
+          <input id="sendBsvAmount" type="number" min="1" step="1" placeholder="amount (sats)" style="flex:1 1 auto; min-width:0" />
+          <label class="airgap-radio"><input type="checkbox" id="sendBsvMax"> Send max</label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="btnSendBsv">Send</button>
+          <button id="btnSendBsvExport" class="secondary" title="Export an unsigned request to sign on your offline machine">Export for offline signing →</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">A plain BSV payment to any address. Change returns to this wallet. To sign offline, <b>Export</b> here, then use steps 2–3 in <b>Advanced</b> below.</p>
+      </div>
+
       <label>Seed phrase (your backup — write the words down, keep them secret)</label>
       <div class="row" style="flex-wrap:nowrap; align-items:stretch">
         <textarea id="seedPhrase" readonly rows="2" autocomplete="off" class="blurred" placeholder="(this wallet was imported from a WIF — it has no seed phrase; back up the WIF below)" style="flex:1 1 auto; min-width:0; resize:none"></textarea>
