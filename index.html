@@ -424,11 +424,11 @@
       </div>
       <div id="feePct" hidden>
         <div class="grid2" style="grid-template-columns:1fr 1fr">
-          <div><label>Copy price (sats)</label><input id="edPrice" type="number" min="2" value="6000" /></div>
-          <div><label>Publisher share (%)</label><input id="edPubPct" type="number" min="0" max="100" value="80" /></div>
+          <div><label>Final price a buyer pays (sats, incl. bond)</label><input id="edPrice" type="number" min="3" value="8000" /></div>
+          <div><label>Reseller's net share (%)</label><input id="edResellerPct" type="number" min="0" max="100" value="20" /></div>
         </div>
         <p id="edPctPreview" class="muted" style="font-size:12px;margin:4px 0 0"></p>
-        <p class="muted" style="font-size:11px;margin:2px 0 0">A convenience: from your price &amp; share we set the <b>fixed</b> publisher + holder fees that get minted — the publisher keeps the share, the holder (reseller) keeps the rest, on every copy.</p>
+        <p class="muted" style="font-size:11px;margin:2px 0 0">A convenience: from the final price minus the bond, the <b>reseller (holder)</b> keeps the share you set and the <b>publisher</b> keeps the rest — minted as the <b>fixed</b> publisher + holder fees. (The bond is the buyer's own refundable deposit, not part of the split.)</p>
       </div>
       <label>Editions to mint now</label>
       <input id="edCount" type="number" min="1" value="1" />
