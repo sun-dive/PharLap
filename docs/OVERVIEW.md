@@ -189,6 +189,8 @@ and keep working unchanged — each collection embeds its own covenant, so the t
 | **Replicate** | Permissionlessly mint your own copy of an edition (pays the fees + posts a fresh bond). |
 | **Burn** | Destroy a copy you hold and reclaim its bonded sats to your wallet (owner-signed, irreversible). |
 | **Gift links** | Pre-fund claimable copies of your edition as shareable links; recoverable from your key alone. |
+| **Reclaim gifts** | Sweep the funds from your **unclaimed** gift links back to your wallet (invalidates those links). |
+| **Sales** | A dashboard of your sales — stats (count, earnings, this-month), buyers, and earnings per collection, as **creator** and **reseller**. |
 | **Sales page / Share** | Open a collection's public storefront and copy a postable link to it. |
 | **Get a copy** | Buy an edition in one click from a sales link (resolve → fund → replicate → reveal). |
 | **Seller note / bonus** | Attach a public promo note (+ optional link/code bonus) buyers receive at purchase. |
@@ -198,6 +200,7 @@ and keep working unchanged — each collection embeds its own covenant, so the t
 | **Message publisher** | From an NFT card, DM the collection's publisher (their key is recovered from chain). |
 | **Threads** | Open a collection's **members-only lineage discussion** — read your corridor, post to your line, reply up, or (publisher) announce to everyone. |
 | **Alias / Profile** | Name your key (`@you`) and publish an on-chain avatar; others resolve your name + face by pubkey. |
+| **Back up config** | Post an **encrypted** copy of your address book + alias + prefs to your own address; restores on any device. |
 | **Check incoming / recover** | Discover tokens / editions / messages sent to you, and rebuild your holdings from chain. |
 | **Restore from WIF** | Recover your wallet **and** purchases on any browser/device from your private key. |
 | **Verify** | Confirm a token/edition is structurally valid and which collection it belongs to. |
@@ -298,18 +301,36 @@ The bonus value is **public on the chain** (it's part of the note), so gating is
 for links and shareable coupons; don't put a one-time secret there. On-chain (encrypted) and *time-locked*
 bonuses are designed for later.
 
-## Know your buyers (publisher)
+## Sales: buyers, earnings & stats
 
-Because every replication pays the publisher fee to the publisher's address, **each sale lands in the
-publisher's own transaction history** — and the buyer's public key is the owner of the replica it minted.
-So a publisher can press **👥 Buyers** on a collection and get a list of everyone who bought a copy (with
-avatar/alias and a purchase count), then **DM one, several, or all** of them (see the mail-merge above). The
-scan is mempool-aware, so a brand-new sale shows up before it even confirms.
+Because every replication pays the **publisher fee** to the publisher's address *and* the **holder fee** to
+the seller (the cloning source), **a single scan of your own transaction history reconstructs your whole
+sales picture** — and the buyer's public key is the owner of the replica each sale minted. From that one
+scan, the **📊 Sales** tab shows, in two roles:
 
-Honest limit: this is **buyers at point of sale**. Onward *transfers* are owner-signed, free, and notify
-only the new owner, so the publisher never sees them — the list is "who bought," not a guaranteed
-current-owner roster. (And there's no separate "you made a sale" ping: the fee landing in your wallet *is*
-the notification — which is why a 1-sat minimum fee matters.)
+- **As creator** — every collection you publish: total **sales**, **earnings**, and the full **buyer list**
+  per collection.
+- **As reseller** — every item you resold: your **direct buyers** and your earnings on each.
+
+On top sits a lean **statistics** header — sales of your mints, total **earned** (in sats + BSV), your
+resales, unique buyers and your top collection — each with a **this-month** figure (bucketed cheaply by
+block height, so no extra lookups). Every buyer list has **DM / Message-all** (the personalized mail-merge),
+and the per-collection **👥 Buyers** button still gives a single collection's list in place.
+
+The scan is **mempool-aware**, so a brand-new sale shows up before it even confirms. Honest limits: figures
+are **at point of purchase** — onward *transfers* are owner-signed, free, and notify only the new owner, so
+they're invisible to you (it's "who bought," not a current-owner roster); periods are **approximate** (block
+height); and the scan is capped to recent transactions. (There's also no separate "you made a sale" ping —
+the fee landing in your wallet *is* the notification, which is why a 1-sat minimum fee matters.)
+
+## Encrypted config backup
+
+The one piece of local state that *isn't* rebuildable from your key + chain is your **address book** — your
+private labels for other people's keys. **Back up config** posts an **encrypted-to-yourself** copy of your
+address book (plus your alias and UI prefs) to your own address; only your key can read it. On a new device,
+**Restore from WIF** pulls it back automatically and merges it (newest label wins per contact). So
+"everything recoverable from the key alone" now includes your contacts. (Honest limit: no delete-sync yet —
+a contact you delete on one device can reappear from an older backup elsewhere.)
 
 ## Threads — members-only lineage discussions
 
@@ -392,7 +413,7 @@ Validated on **BSV mainnet**:
   owner-signed **burn** branch that reclaims it; bond preserved through replicate/transfer
   (mainnet-validated mint → replicate → transfer → burn-reclaim)
 - ✅ **Recoverable gift links**: pre-funded claimable copies with deterministic keys, recoverable from
-  the publisher's WIF + chain alone
+  the publisher's WIF + chain alone, with **reclaim** of unclaimed links
 - ✅ **Provenance** — public embedded files committed by plaintext hash, verified as a **timestamped
   exact replica** on view
 - ✅ **Smart compression** of embedded files + messages (gzip, keep-only-if-smaller, compress-before-encrypt)
@@ -402,6 +423,10 @@ Validated on **BSV mainnet**:
   address book
 - ✅ **Publisher tools** — publisher avatar/alias on cards + sort-by-publisher, **buyer list + DM** (incl.
   unconfirmed sales)
+- ✅ **Sales dashboard + stats** — one history scan → creator & reseller buyer lists, earnings per
+  collection, and a stats header (count / earned in sats+BSV / this-month / unique buyers)
+- ✅ **Encrypted config backup** — address book + alias + prefs, encrypted-to-self on-chain, auto-restored
+  + merged on WIF restore
 - ✅ **Threads** — members-only lineage discussions: read your corridor (upline + creator), post to your
   line / reply up / announce-to-everyone, **downstream visibility** via push-up breadcrumbs, and
   **un-spoofable creator / holder / seniority badges**
@@ -415,5 +440,5 @@ Validated on **BSV mainnet**:
 Still experimental — treat it as a working prototype, and use small amounts. Stronger encrypted-content
 tiers (live per-recipient key delivery; a server with per-buyer watermarking), on-chain / time-locked
 bonuses, edition deep-verify (full lineage proof), Threads replies/threading + deeper downstream-holder
-verification, and an encrypted **config backup** (alias/contacts/prefs recoverable from the WIF alone) are
+verification, a sales **spent/net P&L** + trend chart, and config-backup **delete-sync** (tombstones) are
 designed but not yet built.
