@@ -81,6 +81,10 @@ async function fetchWithRetry(url: string, init?: RequestInit, maxRetries = 3): 
 export class WalletProvider {
   private address: string
   private txCache = new Map<string, string>()
+  // Parsed-tx cache: Transaction.fromHex is O(tx size) and re-parsing a big file-bearing TX1 (e.g. an
+  // app-snapshot collection, ~300 KB) on every meta/name/publisher lookup can freeze the page. A tx's bytes
+  // never change once broadcast, so caching the parsed object (parsed once) is safe and removes the hot spot.
+  private parsedTxCache = new Map<string, Transaction>()
 
   /**
    * v05.22: Local pending UTXO tracking for consecutive transfers.
@@ -252,8 +256,12 @@ export class WalletProvider {
   }
 
   async getSourceTransaction(txId: string): Promise<Transaction> {
+    const cached = this.parsedTxCache.get(txId)
+    if (cached) return cached
     const hex = await this.getRawTransaction(txId)
-    return Transaction.fromHex(hex)
+    const tx = Transaction.fromHex(hex)
+    this.parsedTxCache.set(txId, tx)
+    return tx
   }
 
   // ── Block Headers (feeds into SPV verification) ───────────────
