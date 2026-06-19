@@ -258,6 +258,17 @@ export class WalletProvider {
 
   // ── Block Headers (feeds into SPV verification) ───────────────
 
+  /** WoC-reported confirmation of a tx: its block height + block time (unix seconds), or null if unconfirmed
+   *  (mempool) or not found. For provenance display only — not an SPV proof (use getMerkleProof for that). */
+  async getTxConfirmation(txId: string): Promise<{ blockHeight: number; time: number } | null> {
+    const resp = await fetchWithRetry(`${WOC_BASE}/tx/hash/${txId}`)
+    if (!resp.ok) return null
+    const d = await resp.json()
+    const h = (d?.blockheight ?? 0) as number
+    if (h <= 0) return null // unconfirmed / mempool
+    return { blockHeight: h, time: (d?.blocktime ?? d?.time ?? 0) as number }
+  }
+
   /** Current chain tip height (for approximate time-bucketing of activity by block-height delta). */
   async getChainHeight(): Promise<number> {
     const resp = await fetchWithRetry(`${WOC_BASE}/chain/info`)

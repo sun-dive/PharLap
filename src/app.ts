@@ -1078,7 +1078,13 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
       const r = await verifyEditionCovenant(tx, outputIndex, { getRawTransaction: id => provider.getSourceTransaction(id) })
       if (!r.valid) { setStatus(`❌ ${r.reason}${r.collectionName ? ` — “${r.collectionName}”` : ''}`, 'error'); return }
       const econ = r.isV2 ? `publisher ${((r.pBps ?? 0) / 100).toFixed(2)}% · price ${r.priceSats} sats` : `fees ${r.publisherFeeSats}/${r.holderFeeSats} sats`
-      setStatus(`✅ ${r.reason}${r.collectionName ? ` — “${r.collectionName}”` : ''} · ${econ} (verified against TX1).`, 'ok')
+      // Provenance: the collection's on-chain anchor (TX1) — its txid + when it was mined (best-effort).
+      let anchor = `TX1 ${short(r.collectionId ?? '')}`
+      try {
+        const conf = await provider.getTxConfirmation(r.collectionId ?? '')
+        anchor += conf != null ? ` · anchored at block ${conf.blockHeight.toLocaleString()} (${fmtTime(conf.time * 1000)})` : ' · pending confirmation'
+      } catch { /* provenance is best-effort */ }
+      setStatus(`✅ ${r.reason}${r.collectionName ? ` — “${r.collectionName}”` : ''} · ${econ} (verified against ${anchor}).`, 'ok')
       return
     }
     const deps = { getRawTransaction: (id: string) => provider.getSourceTransaction(id) }
