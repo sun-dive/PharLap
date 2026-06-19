@@ -1325,7 +1325,10 @@ function renderTokens(skipWarm = false): void {
   if (pending?.length) host.append(sectionEl('⏳ Identifying type…', pending, myHash))
 
   if (anyPending) void warmAndRerender([...groups.keys()])
-  resolvePublisherIdentitiesThen(active, () => renderTokens(true))
+  // Watch-only skips publisher-identity/avatar resolution: that path scans each publisher's full address
+  // history (a busy publisher → many large content-mint txs) and drives a resolve→re-render cycle that can
+  // hang the page. A monitoring view doesn't need publisher names/avatars — cards show identicons.
+  if (!isWatchOnly()) resolvePublisherIdentitiesThen(active, () => renderTokens(true))
 }
 
 /** "Sort by publisher" view: collections grouped under their publisher (avatar + @alias) instead of by type. */
@@ -1356,7 +1359,10 @@ function renderTokensByPublisher(host: HTMLElement, active: StoredToken[], group
       : nameChip(k)
     host.append(sectionEl(label, items, myHash))
   }
-  resolvePublisherIdentitiesThen(active, () => renderTokens(true))
+  // Watch-only skips publisher-identity/avatar resolution: that path scans each publisher's full address
+  // history (a busy publisher → many large content-mint txs) and drives a resolve→re-render cycle that can
+  // hang the page. A monitoring view doesn't need publisher names/avatars — cards show identicons.
+  if (!isWatchOnly()) resolvePublisherIdentitiesThen(active, () => renderTokens(true))
 }
 
 function card(collectionId: string, copies: StoredToken[], myHash: string): HTMLElement {
