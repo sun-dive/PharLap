@@ -23710,6 +23710,13 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       return "";
     }
   };
+  var fmtUtc = (ms) => {
+    try {
+      return new Date(ms).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+    } catch {
+      return "";
+    }
+  };
   function setStatus(msg, kind = "info") {
     const el = $("status");
     el.textContent = msg;
@@ -24789,7 +24796,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
         let anchor = `TX1 ${short(r2.collectionId ?? "")}`;
         try {
           const conf = await provider.getTxConfirmation(r2.collectionId ?? "");
-          anchor += conf != null ? ` \xB7 anchored at block ${conf.blockHeight.toLocaleString()} (${fmtTime(conf.time * 1e3)})` : " \xB7 pending confirmation";
+          anchor += conf != null ? ` \xB7 anchored at block ${conf.blockHeight.toLocaleString()} (${fmtUtc(conf.time * 1e3)})` : " \xB7 pending confirmation";
         } catch {
         }
         setStatus(`\u2705 ${r2.reason}${r2.collectionName ? ` \u2014 \u201C${r2.collectionName}\u201D` : ""} \xB7 ${econ} (verified against ${anchor}).`, "ok");
@@ -26954,7 +26961,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"221c5e5"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f939655"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

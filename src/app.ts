@@ -61,6 +61,8 @@ const short = (s: string, n = 10): string => (s.length > 2 * n ? `${s.slice(0, n
 const kb = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`)
 /** Format a UTC epoch-ms timestamp in the viewer's OWN local timezone (the stored value is timezone-free). */
 const fmtTime = (ms: number): string => { try { return new Date(ms).toLocaleString() } catch { return '' } }
+/** Format a UTC epoch-ms timestamp as a fixed UTC string (same for every viewer) — e.g. on-chain provenance. */
+const fmtUtc = (ms: number): string => { try { return new Date(ms).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') } catch { return '' } }
 function setStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
   const el = $('status')
   el.textContent = msg
@@ -1082,7 +1084,7 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
       let anchor = `TX1 ${short(r.collectionId ?? '')}`
       try {
         const conf = await provider.getTxConfirmation(r.collectionId ?? '')
-        anchor += conf != null ? ` · anchored at block ${conf.blockHeight.toLocaleString()} (${fmtTime(conf.time * 1000)})` : ' · pending confirmation'
+        anchor += conf != null ? ` · anchored at block ${conf.blockHeight.toLocaleString()} (${fmtUtc(conf.time * 1000)})` : ' · pending confirmation'
       } catch { /* provenance is best-effort */ }
       setStatus(`✅ ${r.reason}${r.collectionName ? ` — “${r.collectionName}”` : ''} · ${econ} (verified against ${anchor}).`, 'ok')
       return
