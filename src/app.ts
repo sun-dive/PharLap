@@ -221,6 +221,17 @@ function showSeedModal(mnemonic: string): void {
   document.body.append(overlay)
 }
 
+// ─── Buy BSV (on-ramp) ──────────────────────────────────────────────
+// Orange Gateway signup referral — the app's affiliate link onboards new users (and earns a signup
+// referral). A local override (p:buyBsvUrl) can replace it; a future share-link `aff` param could too.
+const BUY_BSV_DEFAULT = 'https://exchange.orangegateway.com/signup?ref-code=13a59b79-e805-4a01-a2f6-4eb3e936d8cd'
+function buyBsvUrl(): string {
+  try { return localStorage.getItem('p:buyBsvUrl') || BUY_BSV_DEFAULT } catch { return BUY_BSV_DEFAULT }
+}
+function onBuyBsv(): void {
+  window.open(buyBsvUrl(), '_blank', 'noopener,noreferrer')
+}
+
 async function refreshBalance(): Promise<void> {
   setStatus('Fetching balance…')
   try {
@@ -2907,6 +2918,7 @@ function init(): void {
   }, true)
 
   $('btnRefresh').onclick = () => void refreshBalance()
+  $('btnBuyBsv').onclick = () => onBuyBsv()
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
   $('btnFeeFixed').onclick = () => setFeeMode('fixed')

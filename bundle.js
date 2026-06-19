@@ -23780,6 +23780,17 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     overlay.querySelector(".seed-copy")?.addEventListener("click", () => void navigator.clipboard?.writeText(mnemonic));
     document.body.append(overlay);
   }
+  var BUY_BSV_DEFAULT = "https://exchange.orangegateway.com/signup?ref-code=13a59b79-e805-4a01-a2f6-4eb3e936d8cd";
+  function buyBsvUrl() {
+    try {
+      return localStorage.getItem("p:buyBsvUrl") || BUY_BSV_DEFAULT;
+    } catch {
+      return BUY_BSV_DEFAULT;
+    }
+  }
+  function onBuyBsv() {
+    window.open(buyBsvUrl(), "_blank", "noopener,noreferrer");
+  }
   async function refreshBalance() {
     setStatus("Fetching balance\u2026");
     try {
@@ -26661,7 +26672,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"bae20b2"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"d57e083"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -26711,6 +26722,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       if (e.target.closest("button") != null) $("tokenModal").style.display = "none";
     }, true);
     $("btnRefresh").onclick = () => void refreshBalance();
+    $("btnBuyBsv").onclick = () => onBuyBsv();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
     $("btnFeeFixed").onclick = () => setFeeMode("fixed");
