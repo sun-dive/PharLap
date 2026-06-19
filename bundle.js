@@ -24354,6 +24354,62 @@ Proceed?`
       setStatus(`Transfer failed: ${msg}`, "error");
     }
   }
+  async function onOnboardPartner(t) {
+    const k = requireKey();
+    if (k == null) return;
+    if (!t.lockHex) {
+      setStatus("Missing edition script; cannot onboard.", "error");
+      return;
+    }
+    const name = t.collectionName ?? "this collection";
+    const partner = (prompt(
+      `Onboard a listing partner for \u201C${name}\u201D.
+
+Paste the partner site's PUBLIC KEY (66-hex, compressed). You'll transfer THIS copy to them \u2014 they list it and earn the reseller fee on every sale they drive, while you keep earning your publisher fee. (You can mint/keep other copies.)`
+    ) ?? "").trim().toLowerCase();
+    if (partner === "") return;
+    if (!/^0[23][0-9a-f]{64}$/.test(partner)) {
+      setStatus("That isn\u2019t a 33-byte compressed public key (66 hex, starting 02 or 03).", "error");
+      return;
+    }
+    if (!confirm(`Transfer one copy of \u201C${name}\u201D to partner ${short(partner)}? This hands over THIS copy \u2014 they hold and resell it.`)) return;
+    setStatus("Onboarding partner (transferring a copy)\u2026");
+    try {
+      const note = await noteToPropagate(t);
+      const r2 = await transferEdition(provider, k, {
+        editionTxId: t.txId,
+        editionOutputIndex: t.outputIndex,
+        editionLockHex: t.lockHex,
+        newOwnerPubKey: utils_exports.toArray(partner, "hex"),
+        note
+      });
+      store2.markSent(t.txId, t.outputIndex);
+      renderTokens();
+      const link = `${location.origin}${location.pathname}#c=${t.collectionId}&h=${partner}`;
+      setStatus(`\u2705 Partner onboarded. Tx ${short(r2.txId)} \u2014 share their listing link.`, "ok");
+      showPartnerLinkModal(name, link, partner);
+    } catch (e) {
+      const msg = e.message;
+      if (/missing inputs|missingorspent/i.test(msg) && await pruneIfEditionSpent(t)) {
+        setStatus("That copy had already been spent (moved or burned elsewhere) \u2014 removed it from your holdings.", "ok");
+        return;
+      }
+      setStatus(`Onboarding failed: ${msg}`, "error");
+    }
+  }
+  function showPartnerLinkModal(name, link, partnerPubKey) {
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = `<div class="modal-box" style="max-width:520px"><div class="modal-head"><span>\u{1F91D} Listing partner onboarded</span><button class="secondary pl-close">\u2715 Close</button></div><p class="muted" style="font-size:13px;margin:0 0 10px">The partner now holds a copy of \u201C${escapeHtml(name)}\u201D. Give them this listing link \u2014 buyers who open it replicate from the partner\u2019s copy, so the <b>partner earns the reseller fee</b> and <b>you keep earning your publisher fee</b> on every sale.</p><label>Partner listing link</label><div class="row" style="flex-wrap:nowrap;gap:6px"><input class="pl-link mono" readonly value="${escapeHtml(link)}" style="flex:1 1 auto;min-width:0" /><button class="secondary pl-copy">Copy</button><button class="secondary pl-qr">QR</button></div><p class="muted" style="font-size:11px;margin:10px 0 0">Partner key: <span class="mono">${escapeHtml(partnerPubKey)}</span></p></div>`;
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector(".pl-close")?.addEventListener("click", close);
+    overlay.querySelector(".pl-copy")?.addEventListener("click", () => void navigator.clipboard?.writeText(link));
+    overlay.querySelector(".pl-qr")?.addEventListener("click", () => showQrModal("Partner listing link", link));
+    document.body.append(overlay);
+  }
   async function onBurn(t) {
     const k = requireKey();
     if (k == null) return;
@@ -25158,7 +25214,11 @@ It's posted to your own address and spends a small network fee. Proceed?`
         reclaim.textContent = "\u267B Reclaim gifts";
         reclaim.className = "secondary";
         reclaim.onclick = () => void onReclaimGifts(t);
-        actions.append(gift, links, reclaim);
+        const partner = document.createElement("button");
+        partner.textContent = "\u{1F91D} Onboard partner";
+        partner.className = "secondary";
+        partner.onclick = () => void onOnboardPartner(t);
+        actions.append(gift, links, reclaim, partner);
       }
       if (iAmPublisher) {
         if (!ro) {
@@ -26961,7 +27021,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f939655"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"d618c57"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
