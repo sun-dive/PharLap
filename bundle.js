@@ -25048,7 +25048,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const pending = buckets.get("pending");
     if (pending?.length) host.append(sectionEl("\u23F3 Identifying type\u2026", pending, myHash));
     if (anyPending) void warmAndRerender([...groups.keys()]);
-    resolvePublisherIdentitiesThen(active, () => renderTokens(true));
+    if (!isWatchOnly()) resolvePublisherIdentitiesThen(active, () => renderTokens(true));
   }
   function renderTokensByPublisher(host, active, groups, myHash) {
     const buckets = /* @__PURE__ */ new Map();
@@ -25071,7 +25071,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       const label = k === "you" ? "\u{1F4E4} Published by you" : k === "pending" ? "\u23F3 Resolving publisher\u2026" : k === "none" ? "\u{1FA99} No publisher" : nameChip(k);
       host.append(sectionEl(label, items, myHash));
     }
-    resolvePublisherIdentitiesThen(active, () => renderTokens(true));
+    if (!isWatchOnly()) resolvePublisherIdentitiesThen(active, () => renderTokens(true));
   }
   function card(collectionId, copies, myHash) {
     return copies.length === 1 ? singleCard(copies[0], myHash) : groupCard(collectionId, copies, myHash);
@@ -27029,7 +27029,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"08e4112"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"4f59d1c"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
