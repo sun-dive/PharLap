@@ -23780,16 +23780,61 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     overlay.querySelector(".seed-copy")?.addEventListener("click", () => void navigator.clipboard?.writeText(mnemonic));
     document.body.append(overlay);
   }
-  var BUY_BSV_DEFAULT = "https://exchange.orangegateway.com/signup?ref-code=13a59b79-e805-4a01-a2f6-4eb3e936d8cd";
-  function buyBsvUrl() {
+  var ORANGE_SIGNUP = "https://exchange.orangegateway.com/signup?ref-code=";
+  var DEFAULT_REF_CODE = "13a59b79-e805-4a01-a2f6-4eb3e936d8cd";
+  var incomingAff = null;
+  function extractRefCode(input) {
+    const s2 = input.trim();
+    if (s2 === "") return null;
+    const m = s2.match(/[?&]ref-code=([^&\s]+)/i);
+    if (m) return decodeURIComponent(m[1]);
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s2)) return s2;
+    return null;
+  }
+  function myRefCode() {
     try {
-      return localStorage.getItem("p:buyBsvUrl") || BUY_BSV_DEFAULT;
+      return localStorage.getItem("p:affRefCode");
     } catch {
-      return BUY_BSV_DEFAULT;
+      return null;
     }
+  }
+  function buyBsvUrl() {
+    const code = incomingAff ?? myRefCode() ?? DEFAULT_REF_CODE;
+    return ORANGE_SIGNUP + encodeURIComponent(code);
   }
   function onBuyBsv() {
     window.open(buyBsvUrl(), "_blank", "noopener,noreferrer");
+  }
+  function withAff(url) {
+    const code = myRefCode();
+    return code != null && code !== "" ? `${url}&aff=${encodeURIComponent(code)}` : url;
+  }
+  function renderAffField() {
+    const el = document.getElementById("affRefCode");
+    if (el != null) el.value = myRefCode() ?? "";
+  }
+  function onSaveAff() {
+    const raw = val("affRefCode");
+    if (raw === "") {
+      try {
+        localStorage.removeItem("p:affRefCode");
+      } catch {
+      }
+      setStatus("Referral code cleared \u2014 your shared links use the app default.", "ok");
+      return;
+    }
+    const code = extractRefCode(raw);
+    if (code == null) {
+      setStatus("That doesn\u2019t look like an Orange Gateway link or ref-code.", "error");
+      return;
+    }
+    try {
+      localStorage.setItem("p:affRefCode", code);
+    } catch {
+    }
+    ;
+    $("affRefCode").value = code;
+    setStatus("Saved \u2014 your shared sales pages now carry your Buy-BSV referral.", "ok");
   }
   async function refreshBalance() {
     setStatus("Fetching balance\u2026");
@@ -25703,6 +25748,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
     if (!raw) return null;
     const params = new URLSearchParams(raw);
+    const aff = params.get("aff");
+    if (aff != null && aff !== "") incomingAff = aff;
     const c = params.get("c");
     if (!c) return null;
     return { c, h: params.get("h"), g: params.get("g") };
@@ -25851,7 +25898,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     if (!currentCollection) return null;
     const { info, holderPubKey } = currentCollection;
     const h = holderPubKey ?? pubKeyHex;
-    return `${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`;
+    return withAff(`${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`);
   }
   function shareCollectionLink() {
     const link = currentShareLink();
@@ -26164,7 +26211,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     try {
       const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId);
       const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, k, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach });
-      const links = voucherWifs.map((wif) => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`);
+      const links = voucherWifs.map((wif) => withAff(`${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`));
       setStatus(`\u2705 ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, "ok");
       showGiftLinksModal(t.collectionName ?? "Free gift", links);
     } catch (e) {
@@ -26177,7 +26224,7 @@ How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price
     setStatus("Recovering your gift links from chain\u2026");
     try {
       const scan = await scanGiftVouchers(provider, k, t.collectionId);
-      const links = scan.live.map((v) => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`);
+      const links = scan.live.map((v) => withAff(`${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`));
       if (links.length === 0) {
         setStatus(scan.claimedCount > 0 ? `No unclaimed gift links left \u2014 all ${scan.claimedCount} have been claimed.` : "No gift links found for this collection yet.", "info");
         return;
@@ -26672,7 +26719,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"d57e083"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c8e5fb3"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -26723,6 +26770,8 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     }, true);
     $("btnRefresh").onclick = () => void refreshBalance();
     $("btnBuyBsv").onclick = () => onBuyBsv();
+    $("btnSaveAff").onclick = () => onSaveAff();
+    renderAffField();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
     $("btnFeeFixed").onclick = () => setFeeMode("fixed");
