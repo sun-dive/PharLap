@@ -242,9 +242,20 @@ function extractRefCode(input: string): string | null {
 function myRefCode(): string | null {
   try { return localStorage.getItem('p:affRefCode') } catch { return null }
 }
-/** The Buy-BSV signup URL for the active context (a share link's aff overrides your own, then default). */
+/** Persisted ref-code of whoever GIFTED this wallet (set on a gift claim; rides in the config backup so it
+ *  survives a wallet restore on a new device). Lets a gifter keep earning from a user they onboarded. */
+function refByCode(): string | null {
+  try { return localStorage.getItem('p:refBy') } catch { return null }
+}
+/** On a gift claim, remember the gifter's ref-code so their referral persists for this (often new) wallet. */
+function rememberGifter(): void {
+  if (incomingAff == null || incomingAff === '') return
+  try { if (localStorage.getItem('p:refBy') == null) localStorage.setItem('p:refBy', incomingAff) } catch { /* ignore */ }
+}
+/** The Buy-BSV signup URL for the active context. Precedence: a share link's aff (current page) → your own
+ *  saved code → who gifted you (persisted) → app default. */
 function buyBsvUrl(): string {
-  const code = incomingAff ?? myRefCode() ?? DEFAULT_REF_CODE
+  const code = incomingAff ?? myRefCode() ?? refByCode() ?? DEFAULT_REF_CODE
   return ORANGE_SIGNUP + encodeURIComponent(code)
 }
 function onBuyBsv(): void { window.open(buyBsvUrl(), '_blank', 'noopener,noreferrer') }
@@ -2016,7 +2027,9 @@ async function onConfigBackup(): Promise<void> {
   btn.disabled = true; setStatus('Backing up your config (encrypted to your key)…')
   try {
     let prefs: Record<string, string> = {}
-    try { for (const k of ['p:nftview', 'p:nftsort']) { const v = localStorage.getItem(k); if (v != null) prefs[k] = v } } catch { prefs = {} }
+    // p:refBy (who gifted this wallet) + p:affRefCode (your own ref-code) ride along so referral attribution
+    // survives a wallet restore on a new device (option-1 cross-device carry).
+    try { for (const k of ['p:nftview', 'p:nftsort', 'p:refBy', 'p:affRefCode']) { const v = localStorage.getItem(k); if (v != null) prefs[k] = v } } catch { prefs = {} }
     const aliasAt = (() => { try { return parseInt(localStorage.getItem('p:myaliasAt') ?? '0', 10) || 0 } catch { return 0 } })()
     const txId = await publishConfigBackup(provider, myKey,
       { alias: getMyAlias() || undefined, aliasAt, contacts, contactsAt, prefs }, nowMs())
@@ -2478,6 +2491,7 @@ async function onGetCopy(): Promise<void> {
       storeEdition({ txId: claimed.replicaOutpoint.txId, outputIndex: claimed.replicaOutpoint.outputIndex, lockHex: claimed.lockHex },
         info.tx1Ref, info.name, tip.terms, giftNote)
       renderTokens()
+      rememberGifter() // persist the gifter's Buy-BSV referral on this (often brand-new) wallet
       showViewButton(info, true)
       setCvStatus('🎁 It’s yours! Your free copy is now in My NFTs.', 'ok')
       cvGiftWif = null // single-use — the voucher is now spent
