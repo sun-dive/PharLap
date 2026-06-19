@@ -24922,30 +24922,33 @@ It's posted to your own address and spends a small network fee. Proceed?`
         burn.onclick = () => void onBurn(t);
         actions.append(burn);
       }
+      if (!ro) {
+        const gift = document.createElement("button");
+        gift.textContent = "\u{1F381} Gift";
+        gift.className = "secondary";
+        gift.onclick = () => void onGiftCopies(t);
+        const links = document.createElement("button");
+        links.textContent = "\u{1F4E5} Gift links";
+        links.className = "secondary";
+        links.onclick = () => void onViewGiftLinks(t);
+        const reclaim = document.createElement("button");
+        reclaim.textContent = "\u267B Reclaim gifts";
+        reclaim.className = "secondary";
+        reclaim.onclick = () => void onReclaimGifts(t);
+        actions.append(gift, links, reclaim);
+      }
       if (iAmPublisher) {
-        const buyers = document.createElement("button");
-        buyers.textContent = "\u{1F465} Buyers";
-        buyers.className = "secondary";
-        buyers.onclick = () => void onViewBuyers(t);
         if (!ro) {
           const bc = document.createElement("button");
           bc.textContent = "\u{1F4E3} Broadcast";
           bc.className = "secondary";
           bc.onclick = () => void onBroadcast(t);
-          const gift = document.createElement("button");
-          gift.textContent = "\u{1F381} Gift";
-          gift.className = "secondary";
-          gift.onclick = () => void onGiftCopies(t);
-          const links = document.createElement("button");
-          links.textContent = "\u{1F4E5} Gift links";
-          links.className = "secondary";
-          links.onclick = () => void onViewGiftLinks(t);
-          const reclaim = document.createElement("button");
-          reclaim.textContent = "\u267B Reclaim gifts";
-          reclaim.className = "secondary";
-          reclaim.onclick = () => void onReclaimGifts(t);
-          actions.append(bc, gift, links, reclaim);
+          actions.append(bc);
         }
+        const buyers = document.createElement("button");
+        buyers.textContent = "\u{1F465} Buyers";
+        buyers.className = "secondary";
+        buyers.onclick = () => void onViewBuyers(t);
         actions.append(buyers);
       }
     } else {
@@ -26189,24 +26192,39 @@ Public, one transaction, reaches every current holder. Message:`);
   async function onGiftCopies(t) {
     const k = requireKey();
     if (k == null) return;
-    let claimCost = 0;
+    let claimCost = 0, publisherCut = 0;
     try {
       const ed = parseEditionAny(LockingScript.fromHex(t.lockHex ?? ""));
-      if (ed) claimCost = ed.isV2 ? ed.priceSats : ed.terms.publisherFeeSats + ed.terms.holderFeeSats;
+      if (ed) {
+        claimCost = ed.isV2 ? ed.priceSats : ed.terms.publisherFeeSats + ed.terms.holderFeeSats;
+        publisherCut = ed.isV2 ? Math.floor(ed.priceSats * ed.terms.pBps / 1e4) : ed.terms.publisherFeeSats;
+      }
     } catch {
     }
     const bond = t.tokenSats ?? EDITION_BOND_SATS;
-    const fundEach = bond + claimCost + 700 + 800;
+    const MINER = 700;
+    const fundEach = bond + claimCost + MINER + 800;
+    const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myPubKeyHash();
+    const netEach = bond + MINER + (iAmPublisher ? 0 : publisherCut);
+    const roleLine = iAmPublisher ? `You're the publisher: your price + fees return on each claim, so a claimed gift nets \u2248 ${netEach.toLocaleString()} sats (the ${bond.toLocaleString()}-sat bond moves to the recipient, + miner fee).` : `As a reseller: your share returns, but the publisher's ${publisherCut.toLocaleString()}-sat cut and the ${bond.toLocaleString()}-sat bond don't \u2014 so a claimed gift nets \u2248 ${netEach.toLocaleString()} sats (think of it as marketing spend).`;
     const countStr = prompt(
       `Create free-gift links for \u201C${t.collectionName ?? "this collection"}\u201D.
 
-How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price + fees come back to you, but the ${bond.toLocaleString()}-sat bond stays with the recipient (their reclaimable copy) \u2014 so your real cost \u2248 the bond + miner fee per claim.`,
+How many?  Each voucher is pre-funded with ~${fundEach.toLocaleString()} sats now; unclaimed links are fully recoverable via \u201C\u267B Reclaim gifts\u201D.
+
+${roleLine}`,
       "10"
     );
     if (countStr == null) return;
     const count = Math.max(1, Math.min(500, parseInt(countStr, 10) || 0));
     const total = count * fundEach;
-    if (!confirm(`Fund ${count} gift link(s) at ~${fundEach.toLocaleString()} sats each (~${total.toLocaleString()} sats from your wallet). Proceed?`)) return;
+    if (!confirm(
+      `Fund ${count} gift link(s):
+\u2022 ~${total.toLocaleString()} sats locked now (recoverable if unclaimed)
+\u2022 net \u2248 ${(count * netEach).toLocaleString()} sats once all ${count} are claimed
+
+Proceed?`
+    )) return;
     setStatus(`Creating ${count} funded gift link(s)\u2026`);
     try {
       const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId);
@@ -26719,7 +26737,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c8e5fb3"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f7d8c24"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
