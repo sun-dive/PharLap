@@ -23798,8 +23798,22 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       return null;
     }
   }
+  function refByCode() {
+    try {
+      return localStorage.getItem("p:refBy");
+    } catch {
+      return null;
+    }
+  }
+  function rememberGifter() {
+    if (incomingAff == null || incomingAff === "") return;
+    try {
+      if (localStorage.getItem("p:refBy") == null) localStorage.setItem("p:refBy", incomingAff);
+    } catch {
+    }
+  }
   function buyBsvUrl() {
-    const code = incomingAff ?? myRefCode() ?? DEFAULT_REF_CODE;
+    const code = incomingAff ?? myRefCode() ?? refByCode() ?? DEFAULT_REF_CODE;
     return ORANGE_SIGNUP + encodeURIComponent(code);
   }
   function onBuyBsv() {
@@ -25670,7 +25684,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     try {
       let prefs = {};
       try {
-        for (const k of ["p:nftview", "p:nftsort"]) {
+        for (const k of ["p:nftview", "p:nftsort", "p:refBy", "p:affRefCode"]) {
           const v = localStorage.getItem(k);
           if (v != null) prefs[k] = v;
         }
@@ -26224,6 +26238,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
           giftNote
         );
         renderTokens();
+        rememberGifter();
         showViewButton(info, true);
         setCvStatus("\u{1F381} It\u2019s yours! Your free copy is now in My NFTs.", "ok");
         cvGiftWif = null;
@@ -26864,7 +26879,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"655dc19"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"5a60d9e"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
