@@ -221,15 +221,57 @@ function showSeedModal(mnemonic: string): void {
   document.body.append(overlay)
 }
 
-// ─── Buy BSV (on-ramp) ──────────────────────────────────────────────
-// Orange Gateway signup referral — the app's affiliate link onboards new users (and earns a signup
-// referral). A local override (p:buyBsvUrl) can replace it; a future share-link `aff` param could too.
-const BUY_BSV_DEFAULT = 'https://exchange.orangegateway.com/signup?ref-code=13a59b79-e805-4a01-a2f6-4eb3e936d8cd'
-function buyBsvUrl(): string {
-  try { return localStorage.getItem('p:buyBsvUrl') || BUY_BSV_DEFAULT } catch { return BUY_BSV_DEFAULT }
+// ─── Buy BSV (on-ramp) + referral propagation ───────────────────────
+// Orange Gateway signup referral. The Buy-BSV button onboards new users and pays a signup referral to a
+// ref-code chosen by precedence: a share link's ?aff=… (the publisher who shared the page wins — Orange
+// Gateway has no sub-affiliates, so it simply OVERRIDES) → your own saved ref-code (p:affRefCode) → the
+// app's default. Your own ref-code rides on the sales-page links you share (withAff), closing the loop.
+const ORANGE_SIGNUP = 'https://exchange.orangegateway.com/signup?ref-code='
+const DEFAULT_REF_CODE = '13a59b79-e805-4a01-a2f6-4eb3e936d8cd'
+let incomingAff: string | null = null // ref-code carried in on a share link opened this session
+
+/** Pull a ref-code out of a full Orange Gateway URL or a bare code; null if neither. */
+function extractRefCode(input: string): string | null {
+  const s = input.trim()
+  if (s === '') return null
+  const m = s.match(/[?&]ref-code=([^&\s]+)/i)
+  if (m) return decodeURIComponent(m[1])
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return s // bare UUID
+  return null
 }
-function onBuyBsv(): void {
-  window.open(buyBsvUrl(), '_blank', 'noopener,noreferrer')
+function myRefCode(): string | null {
+  try { return localStorage.getItem('p:affRefCode') } catch { return null }
+}
+/** The Buy-BSV signup URL for the active context (a share link's aff overrides your own, then default). */
+function buyBsvUrl(): string {
+  const code = incomingAff ?? myRefCode() ?? DEFAULT_REF_CODE
+  return ORANGE_SIGNUP + encodeURIComponent(code)
+}
+function onBuyBsv(): void { window.open(buyBsvUrl(), '_blank', 'noopener,noreferrer') }
+
+/** Append your referral code to a share URL so buyers who open it fund up under YOUR ref-code. */
+function withAff(url: string): string {
+  const code = myRefCode()
+  return code != null && code !== '' ? `${url}&aff=${encodeURIComponent(code)}` : url
+}
+
+/** Show the saved referral code in its field (called on load). */
+function renderAffField(): void {
+  const el = document.getElementById('affRefCode') as HTMLInputElement | null
+  if (el != null) el.value = myRefCode() ?? ''
+}
+/** Save (or clear) the user's Orange Gateway referral code from the settings field. */
+function onSaveAff(): void {
+  const raw = val('affRefCode')
+  if (raw === '') {
+    try { localStorage.removeItem('p:affRefCode') } catch { /* ignore */ }
+    setStatus('Referral code cleared — your shared links use the app default.', 'ok'); return
+  }
+  const code = extractRefCode(raw)
+  if (code == null) { setStatus('That doesn’t look like an Orange Gateway link or ref-code.', 'error'); return }
+  try { localStorage.setItem('p:affRefCode', code) } catch { /* ignore */ }
+  ;($('affRefCode') as HTMLInputElement).value = code
+  setStatus('Saved — your shared sales pages now carry your Buy-BSV referral.', 'ok')
 }
 
 async function refreshBalance(): Promise<void> {
@@ -2010,11 +2052,13 @@ function setCvStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void 
   el.className = `cv-status ${kind === 'info' ? '' : kind}`.trim()
 }
 
-/** Read a `#c=…&h=…` hash route, or null if absent. */
+/** Read a `#c=…&h=…` hash route, or null if absent. Also captures a referral `aff` ref-code for this session. */
 function parseHashRoute(): { c: string; h: string | null; g: string | null } | null {
   const raw = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
   if (!raw) return null
   const params = new URLSearchParams(raw)
+  const aff = params.get('aff')
+  if (aff != null && aff !== '') incomingAff = aff // a share link's referral overrides the default Buy-BSV code
   const c = params.get('c')
   if (!c) return null
   return { c, h: params.get('h'), g: params.get('g') }
@@ -2153,7 +2197,7 @@ function currentShareLink(): string | null {
   if (!currentCollection) return null
   const { info, holderPubKey } = currentCollection
   const h = holderPubKey ?? pubKeyHex
-  return `${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`
+  return withAff(`${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`)
 }
 
 function shareCollectionLink(): void {
@@ -2426,7 +2470,7 @@ async function onGiftCopies(t: StoredToken): Promise<void> {
     // Deterministic keys: scan for the next free index so a new batch doesn't collide with existing vouchers.
     const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId)
     const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, k, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach })
-    const links = voucherWifs.map(wif => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`)
+    const links = voucherWifs.map(wif => withAff(`${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`))
     setStatus(`✅ ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, 'ok')
     showGiftLinksModal(t.collectionName ?? 'Free gift', links)
   } catch (e) {
@@ -2441,7 +2485,7 @@ async function onViewGiftLinks(t: StoredToken): Promise<void> {
   setStatus('Recovering your gift links from chain…')
   try {
     const scan = await scanGiftVouchers(provider, k, t.collectionId)
-    const links = scan.live.map(v => `${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`)
+    const links = scan.live.map(v => withAff(`${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`))
     if (links.length === 0) {
       setStatus(scan.claimedCount > 0
         ? `No unclaimed gift links left — all ${scan.claimedCount} have been claimed.`
@@ -2919,6 +2963,8 @@ function init(): void {
 
   $('btnRefresh').onclick = () => void refreshBalance()
   $('btnBuyBsv').onclick = () => onBuyBsv()
+  $('btnSaveAff').onclick = () => onSaveAff()
+  renderAffField()
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
   $('btnFeeFixed').onclick = () => setFeeMode('fixed')
