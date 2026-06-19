@@ -666,6 +666,62 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
   }
 }
 
+/** Onboard a listing partner: transfer THIS copy to the partner's pubkey (they hold + resell it, earning the
+ *  reseller fee on sales they drive; you keep earning your publisher fee), then hand back their listing link. */
+async function onOnboardPartner(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return
+  if (!t.lockHex) { setStatus('Missing edition script; cannot onboard.', 'error'); return }
+  const name = t.collectionName ?? 'this collection'
+  const partner = (prompt(
+    `Onboard a listing partner for “${name}”.\n\n` +
+    `Paste the partner site's PUBLIC KEY (66-hex, compressed). You'll transfer THIS copy to them — they list ` +
+    `it and earn the reseller fee on every sale they drive, while you keep earning your publisher fee. ` +
+    `(You can mint/keep other copies.)`) ?? '').trim().toLowerCase()
+  if (partner === '') return
+  if (!/^0[23][0-9a-f]{64}$/.test(partner)) {
+    setStatus('That isn’t a 33-byte compressed public key (66 hex, starting 02 or 03).', 'error'); return
+  }
+  if (!confirm(`Transfer one copy of “${name}” to partner ${short(partner)}? This hands over THIS copy — they hold and resell it.`)) return
+  setStatus('Onboarding partner (transferring a copy)…')
+  try {
+    const note = await noteToPropagate(t)
+    const r = await transferEdition(provider, k, {
+      editionTxId: t.txId, editionOutputIndex: t.outputIndex, editionLockHex: t.lockHex,
+      newOwnerPubKey: Utils.toArray(partner, 'hex'), note,
+    })
+    store.markSent(t.txId, t.outputIndex)
+    renderTokens()
+    const link = `${location.origin}${location.pathname}#c=${t.collectionId}&h=${partner}`
+    setStatus(`✅ Partner onboarded. Tx ${short(r.txId)} — share their listing link.`, 'ok')
+    showPartnerLinkModal(name, link, partner)
+  } catch (e) {
+    const msg = (e as Error).message
+    if (/missing inputs|missingorspent/i.test(msg) && await pruneIfEditionSpent(t)) {
+      setStatus('That copy had already been spent (moved or burned elsewhere) — removed it from your holdings.', 'ok'); return
+    }
+    setStatus(`Onboarding failed: ${msg}`, 'error')
+  }
+}
+
+/** Show the partner's ready-made listing link (copyable + QR) after onboarding. */
+function showPartnerLinkModal(name: string, link: string, partnerPubKey: string): void {
+  const overlay = document.createElement('div'); overlay.className = 'modal'
+  overlay.innerHTML =
+    '<div class="modal-box" style="max-width:520px">' +
+    '<div class="modal-head"><span>🤝 Listing partner onboarded</span><button class="secondary pl-close">✕ Close</button></div>' +
+    `<p class="muted" style="font-size:13px;margin:0 0 10px">The partner now holds a copy of “${escapeHtml(name)}”. Give them this listing link — buyers who open it replicate from the partner’s copy, so the <b>partner earns the reseller fee</b> and <b>you keep earning your publisher fee</b> on every sale.</p>` +
+    '<label>Partner listing link</label>' +
+    `<div class="row" style="flex-wrap:nowrap;gap:6px"><input class="pl-link mono" readonly value="${escapeHtml(link)}" style="flex:1 1 auto;min-width:0" /><button class="secondary pl-copy">Copy</button><button class="secondary pl-qr">QR</button></div>` +
+    `<p class="muted" style="font-size:11px;margin:10px 0 0">Partner key: <span class="mono">${escapeHtml(partnerPubKey)}</span></p>` +
+    '</div>'
+  const close = (): void => overlay.remove()
+  overlay.addEventListener('click', e => { if (e.target === overlay) close() })
+  overlay.querySelector('.pl-close')?.addEventListener('click', close)
+  overlay.querySelector('.pl-copy')?.addEventListener('click', () => void navigator.clipboard?.writeText(link))
+  overlay.querySelector('.pl-qr')?.addEventListener('click', () => showQrModal('Partner listing link', link))
+  document.body.append(overlay)
+}
+
 /** Burn an owned edition: owner-signed spend that destroys the token and reclaims its bond to your wallet. */
 async function onBurn(t: StoredToken): Promise<void> {
   const k = requireKey(); if (k == null) return
@@ -1467,7 +1523,10 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
       const reclaim = document.createElement('button')
       reclaim.textContent = '♻ Reclaim gifts'; reclaim.className = 'secondary'
       reclaim.onclick = () => void onReclaimGifts(t)
-      actions.append(gift, links, reclaim)
+      const partner = document.createElement('button')
+      partner.textContent = '🤝 Onboard partner'; partner.className = 'secondary'
+      partner.onclick = () => void onOnboardPartner(t)
+      actions.append(gift, links, reclaim, partner)
     }
     // 📣 Broadcast + 👥 Buyers stay publisher-only (collection-wide actions).
     if (iAmPublisher) {
