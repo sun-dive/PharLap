@@ -1319,25 +1319,30 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
       burn.onclick = () => void onBurn(t)
       actions.append(burn)
     }
+    // 🎁 Gift / links / reclaim — any holder can gift (resellers too); vouchers derive from their own key.
+    if (!ro) {
+      const gift = document.createElement('button')
+      gift.textContent = '🎁 Gift'; gift.className = 'secondary'
+      gift.onclick = () => void onGiftCopies(t)
+      const links = document.createElement('button')
+      links.textContent = '📥 Gift links'; links.className = 'secondary'
+      links.onclick = () => void onViewGiftLinks(t)
+      const reclaim = document.createElement('button')
+      reclaim.textContent = '♻ Reclaim gifts'; reclaim.className = 'secondary'
+      reclaim.onclick = () => void onReclaimGifts(t)
+      actions.append(gift, links, reclaim)
+    }
+    // 📣 Broadcast + 👥 Buyers stay publisher-only (collection-wide actions).
     if (iAmPublisher) {
-      const buyers = document.createElement('button')
-      buyers.textContent = '👥 Buyers'; buyers.className = 'secondary'
-      buyers.onclick = () => void onViewBuyers(t)
       if (!ro) {
         const bc = document.createElement('button')
         bc.textContent = '📣 Broadcast'; bc.className = 'secondary'
         bc.onclick = () => void onBroadcast(t)
-        const gift = document.createElement('button')
-        gift.textContent = '🎁 Gift'; gift.className = 'secondary'
-        gift.onclick = () => void onGiftCopies(t)
-        const links = document.createElement('button')
-        links.textContent = '📥 Gift links'; links.className = 'secondary'
-        links.onclick = () => void onViewGiftLinks(t)
-        const reclaim = document.createElement('button')
-        reclaim.textContent = '♻ Reclaim gifts'; reclaim.className = 'secondary'
-        reclaim.onclick = () => void onReclaimGifts(t)
-        actions.append(bc, gift, links, reclaim)
+        actions.append(bc)
       }
+      const buyers = document.createElement('button')
+      buyers.textContent = '👥 Buyers'; buyers.className = 'secondary'
+      buyers.onclick = () => void onViewBuyers(t)
       actions.append(buyers)
     }
   } else {
@@ -2444,27 +2449,39 @@ async function onBroadcast(t: StoredToken): Promise<void> {
   }
 }
 
-/** Publisher: create N pre-funded free-gift links for a collection (each single-use). */
+/** Any holder: create N pre-funded free-gift links for a collection (each single-use). Resellers can gift too;
+ *  their net cost per claim is higher (they pre-pay the publisher's cut, which doesn't return to them). */
 async function onGiftCopies(t: StoredToken): Promise<void> {
   const k = requireKey(); if (k == null) return
-  // Per-voucher funding = the recipient's replica BOND + the claim's price/fees (which return to you as
-  // holder) + miner fee + a small starter. The bond stays with the recipient (their reclaimable copy), so
-  // your real cost ≈ the bond + miner fee per claim.
-  let claimCost = 0
+  // Per-voucher funding = the recipient's replica BOND + the claim's price/fees + miner fee + a small starter.
+  // What RETURNS on a claim differs by role: the publisher gets price + fees back (net ≈ bond + miner fee); a
+  // reseller gets only their own share back, so they additionally eat the publisher's cut.
+  let claimCost = 0, publisherCut = 0
   try {
     const ed = parseEditionAny(LockingScript.fromHex(t.lockHex ?? ''))
-    if (ed) claimCost = ed.isV2 ? ed.priceSats : (ed.terms.publisherFeeSats + ed.terms.holderFeeSats)
+    if (ed) {
+      claimCost = ed.isV2 ? ed.priceSats : (ed.terms.publisherFeeSats + ed.terms.holderFeeSats)
+      publisherCut = ed.isV2 ? Math.floor((ed.priceSats * ed.terms.pBps) / 10000) : ed.terms.publisherFeeSats
+    }
   } catch { /* leave 0 */ }
   const bond = t.tokenSats ?? EDITION_BOND_SATS // unknown → assume the default (over-funding a voucher is harmless; under-funding fails the claim)
-  const fundEach = bond + claimCost + 700 /* miner buffer */ + 800 /* recipient starter */
+  const MINER = 700
+  const fundEach = bond + claimCost + MINER + 800 /* recipient starter */
+  const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myPubKeyHash()
+  const netEach = bond + MINER + (iAmPublisher ? 0 : publisherCut) // settled net once a gift is claimed
+  const roleLine = iAmPublisher
+    ? `You're the publisher: your price + fees return on each claim, so a claimed gift nets ≈ ${netEach.toLocaleString()} sats (the ${bond.toLocaleString()}-sat bond moves to the recipient, + miner fee).`
+    : `As a reseller: your share returns, but the publisher's ${publisherCut.toLocaleString()}-sat cut and the ${bond.toLocaleString()}-sat bond don't — so a claimed gift nets ≈ ${netEach.toLocaleString()} sats (think of it as marketing spend).`
   const countStr = prompt(
     `Create free-gift links for “${t.collectionName ?? 'this collection'}”.\n\n` +
-    `How many?  Each is pre-funded with ~${fundEach.toLocaleString()} sats. The price + fees come back to you, but the ` +
-    `${bond.toLocaleString()}-sat bond stays with the recipient (their reclaimable copy) — so your real cost ≈ the bond + miner fee per claim.`, '10')
+    `How many?  Each voucher is pre-funded with ~${fundEach.toLocaleString()} sats now; unclaimed links are fully recoverable via “♻ Reclaim gifts”.\n\n${roleLine}`, '10')
   if (countStr == null) return
   const count = Math.max(1, Math.min(500, parseInt(countStr, 10) || 0))
   const total = count * fundEach
-  if (!confirm(`Fund ${count} gift link(s) at ~${fundEach.toLocaleString()} sats each (~${total.toLocaleString()} sats from your wallet). Proceed?`)) return
+  if (!confirm(
+    `Fund ${count} gift link(s):\n` +
+    `• ~${total.toLocaleString()} sats locked now (recoverable if unclaimed)\n` +
+    `• net ≈ ${(count * netEach).toLocaleString()} sats once all ${count} are claimed\n\nProceed?`)) return
   setStatus(`Creating ${count} funded gift link(s)…`)
   try {
     // Deterministic keys: scan for the next free index so a new batch doesn't collide with existing vouchers.
@@ -2499,7 +2516,7 @@ async function onViewGiftLinks(t: StoredToken): Promise<void> {
   }
 }
 
-/** Publisher: reclaim UNCLAIMED gift links — sweep their pre-funded sats back to your wallet (invalidating
+/** Any holder: reclaim UNCLAIMED gift links — sweep their pre-funded sats back to your wallet (invalidating
  *  those links). Already-claimed gifts are untouched. */
 async function onReclaimGifts(t: StoredToken): Promise<void> {
   const k = requireKey(); if (k == null) return
