@@ -19349,6 +19349,16 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       return Transaction.fromHex(hex);
     }
     // ── Block Headers (feeds into SPV verification) ───────────────
+    /** WoC-reported confirmation of a tx: its block height + block time (unix seconds), or null if unconfirmed
+     *  (mempool) or not found. For provenance display only — not an SPV proof (use getMerkleProof for that). */
+    async getTxConfirmation(txId) {
+      const resp = await fetchWithRetry(`${WOC_BASE}/tx/hash/${txId}`);
+      if (!resp.ok) return null;
+      const d = await resp.json();
+      const h = d?.blockheight ?? 0;
+      if (h <= 0) return null;
+      return { blockHeight: h, time: d?.blocktime ?? d?.time ?? 0 };
+    }
     /** Current chain tip height (for approximate time-bucketing of activity by block-height delta). */
     async getChainHeight() {
       const resp = await fetchWithRetry(`${WOC_BASE}/chain/info`);
@@ -24776,7 +24786,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
           return;
         }
         const econ = r2.isV2 ? `publisher ${((r2.pBps ?? 0) / 100).toFixed(2)}% \xB7 price ${r2.priceSats} sats` : `fees ${r2.publisherFeeSats}/${r2.holderFeeSats} sats`;
-        setStatus(`\u2705 ${r2.reason}${r2.collectionName ? ` \u2014 \u201C${r2.collectionName}\u201D` : ""} \xB7 ${econ} (verified against TX1).`, "ok");
+        let anchor = `TX1 ${short(r2.collectionId ?? "")}`;
+        try {
+          const conf = await provider.getTxConfirmation(r2.collectionId ?? "");
+          anchor += conf != null ? ` \xB7 anchored at block ${conf.blockHeight.toLocaleString()} (${fmtTime(conf.time * 1e3)})` : " \xB7 pending confirmation";
+        } catch {
+        }
+        setStatus(`\u2705 ${r2.reason}${r2.collectionName ? ` \u2014 \u201C${r2.collectionName}\u201D` : ""} \xB7 ${econ} (verified against ${anchor}).`, "ok");
         return;
       }
       const deps = { getRawTransaction: (id) => provider.getSourceTransaction(id) };
@@ -26938,7 +26954,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f0ca99c"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"221c5e5"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
