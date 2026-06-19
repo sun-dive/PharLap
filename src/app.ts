@@ -23,7 +23,7 @@ import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast
 import { qrSvg, bsvPaymentUri } from './qr.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
-import { verifyTokenLineage } from './verify.ts'
+import { verifyTokenLineage, verifyEditionCovenant } from './verify.ts'
 import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
 import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime, downscaleToAvatar } from './thumbs.ts'
 import { publishProfile, resolveProfile } from './profile.ts'
@@ -1071,13 +1071,14 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
   setStatus('Verifying NFT lineage…')
   try {
     const tx = await provider.getSourceTransaction(txId)
-    // Edition covenant outputs are a custom script — verify them structurally (lineage walk is future work).
-    const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript)
-    if (ed) {
-      const econ = ed.isV2
-        ? `publisher ${(ed.terms.pBps / 100).toFixed(2)}% · price ${ed.priceSats} sats`
-        : `fees ${ed.terms.publisherFeeSats}/${ed.terms.holderFeeSats} sats`
-      setStatus(`✅ Valid ${ed.isV2 ? 'v2 ' : ''}edition covenant — collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, 'ok')
+    // Edition covenant: O(1) bind to the collection — byte-match the token's covenant against the template
+    // TX1 committed (proves genuine, immutable rules; no lineage walk needed — see verify.ts / MPT thesis).
+    if (parseEditionAny(tx.outputs[outputIndex]?.lockingScript) != null) {
+      setStatus('Verifying edition against its collection…')
+      const r = await verifyEditionCovenant(tx, outputIndex, { getRawTransaction: id => provider.getSourceTransaction(id) })
+      if (!r.valid) { setStatus(`❌ ${r.reason}${r.collectionName ? ` — “${r.collectionName}”` : ''}`, 'error'); return }
+      const econ = r.isV2 ? `publisher ${((r.pBps ?? 0) / 100).toFixed(2)}% · price ${r.priceSats} sats` : `fees ${r.publisherFeeSats}/${r.holderFeeSats} sats`
+      setStatus(`✅ ${r.reason}${r.collectionName ? ` — “${r.collectionName}”` : ''} · ${econ} (verified against TX1).`, 'ok')
       return
     }
     const deps = { getRawTransaction: (id: string) => provider.getSourceTransaction(id) }

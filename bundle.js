@@ -20537,6 +20537,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   var EDITION_VERSION_V2 = 4;
   var EDITION_OWNER_SCRIPT_OFFSET = 40;
+  var EDITION_PRICE_SCRIPT_OFFSET = 74;
   function swapEditionOwner(lockBytes, newOwnerPub) {
     if (newOwnerPub.length !== 33) throw new Error("swapEditionOwner: owner pubkey must be 33 bytes");
     const out = [...lockBytes];
@@ -23192,6 +23193,59 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       unconfirmed: true
     };
   }
+  var bytesEqual = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  async function verifyEditionCovenant(tokenTx, outputIndex, deps) {
+    const lock2 = tokenTx.outputs[outputIndex]?.lockingScript;
+    const ed = lock2 != null ? parseEditionAny(lock2) : null;
+    if (ed == null) return { valid: false, reason: "output is not a PHAR LAP edition covenant" };
+    const collectionId = ed.tx1RefHex;
+    let tx1;
+    try {
+      tx1 = await deps.getRawTransaction(collectionId);
+    } catch {
+      return { valid: false, reason: `cannot fetch collection TX1 ${collectionId.slice(0, 12)}\u2026`, collectionId };
+    }
+    let covenantHex = "", tokenName = "";
+    for (const o of tx1.outputs) {
+      const t = parseTemplateScript(o.lockingScript);
+      if (t != null) {
+        covenantHex = t.fields.covenantScript;
+        tokenName = t.fields.tokenName;
+        break;
+      }
+    }
+    if (covenantHex === "") {
+      return { valid: false, reason: "TX1 has no covenant template \u2014 not a valid edition collection", collectionId };
+    }
+    let expected;
+    try {
+      expected = buildHolderEditionScript(utils_exports.toArray(covenantHex, "hex"), utils_exports.toArray(collectionId, "hex"), utils_exports.toArray(ed.ownerPubKeyHex, "hex"));
+    } catch {
+      return { valid: false, reason: "collection template is malformed", collectionId, collectionName: tokenName };
+    }
+    const actual = lock2.toBinary();
+    if (ed.isV2 && expected.length === actual.length) {
+      for (let i = 0; i < 8; i++) expected[EDITION_PRICE_SCRIPT_OFFSET + i] = actual[EDITION_PRICE_SCRIPT_OFFSET + i];
+    }
+    if (!bytesEqual(expected, actual)) {
+      return { valid: false, reason: "covenant does NOT match this collection\u2019s committed rules \u2014 possible counterfeit or altered fees", collectionId, collectionName: tokenName };
+    }
+    const in0 = tokenTx.inputs[0];
+    const parentTxId = in0?.sourceTXID ?? in0?.sourceTransaction?.id("hex");
+    const isGenesis = parentTxId === collectionId;
+    return {
+      valid: true,
+      reason: isGenesis ? "genuine genesis edition (covenant matches the collection\u2019s committed rules)" : "genuine edition (covenant matches the collection\u2019s committed rules)",
+      collectionId,
+      collectionName: tokenName,
+      isGenesis,
+      isV2: ed.isV2,
+      publisherFeeSats: ed.isV2 ? void 0 : ed.terms.publisherFeeSats,
+      holderFeeSats: ed.isV2 ? void 0 : ed.terms.holderFeeSats,
+      pBps: ed.isV2 ? ed.terms.pBps : void 0,
+      priceSats: ed.isV2 ? ed.priceSats : void 0
+    };
+  }
 
   // src/thumbs.ts
   var PREFIX = "p:thumb:";
@@ -24714,10 +24768,15 @@ It's posted to your own address and spends a small network fee. Proceed?`
     setStatus("Verifying NFT lineage\u2026");
     try {
       const tx = await provider.getSourceTransaction(txId);
-      const ed = parseEditionAny(tx.outputs[outputIndex]?.lockingScript);
-      if (ed) {
-        const econ = ed.isV2 ? `publisher ${(ed.terms.pBps / 100).toFixed(2)}% \xB7 price ${ed.priceSats} sats` : `fees ${ed.terms.publisherFeeSats}/${ed.terms.holderFeeSats} sats`;
-        setStatus(`\u2705 Valid ${ed.isV2 ? "v2 " : ""}edition covenant \u2014 collection ${short(ed.tx1RefHex)}, owner ${short(ed.ownerPubKeyHex)}, ${econ} (structure verified).`, "ok");
+      if (parseEditionAny(tx.outputs[outputIndex]?.lockingScript) != null) {
+        setStatus("Verifying edition against its collection\u2026");
+        const r2 = await verifyEditionCovenant(tx, outputIndex, { getRawTransaction: (id) => provider.getSourceTransaction(id) });
+        if (!r2.valid) {
+          setStatus(`\u274C ${r2.reason}${r2.collectionName ? ` \u2014 \u201C${r2.collectionName}\u201D` : ""}`, "error");
+          return;
+        }
+        const econ = r2.isV2 ? `publisher ${((r2.pBps ?? 0) / 100).toFixed(2)}% \xB7 price ${r2.priceSats} sats` : `fees ${r2.publisherFeeSats}/${r2.holderFeeSats} sats`;
+        setStatus(`\u2705 ${r2.reason}${r2.collectionName ? ` \u2014 \u201C${r2.collectionName}\u201D` : ""} \xB7 ${econ} (verified against TX1).`, "ok");
         return;
       }
       const deps = { getRawTransaction: (id) => provider.getSourceTransaction(id) };
@@ -26879,7 +26938,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"5a60d9e"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f0ca99c"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
