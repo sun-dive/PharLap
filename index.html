@@ -141,6 +141,11 @@
     .watch-banner { border:1px solid var(--accent); border-radius:10px; padding:10px 12px; margin-bottom:12px;
       background:linear-gradient(180deg, rgba(88,166,255,.14), rgba(88,166,255,.05)); font-size:13px; line-height:1.5; }
     .send-bsv { border-top:1px solid var(--line); margin-top:14px; padding-top:12px; }
+    /* 📷 QR scan button + camera modal */
+    .scan-row { display:flex; gap:6px; align-items:stretch; }
+    .scan-row > input { flex:1 1 auto; min-width:0; }
+    .scan-btn { flex:none; padding:0 12px; }
+    .qr-scan-video { width:100%; border-radius:10px; background:#000; aspect-ratio:1/1; object-fit:cover; }
     /* Lead "Send BSV" block — the headline action at the top of the wallet. */
     .send-bsv-lead { border:1px solid var(--accent); border-radius:12px; padding:12px 14px; margin:10px 0 16px;
       background:linear-gradient(180deg, rgba(88,166,255,.10), rgba(88,166,255,.03)); }
@@ -385,7 +390,7 @@
 
       <div class="send-bsv send-bsv-lead">
         <label class="send-bsv-title">⚡ Send BSV</label>
-        <input id="sendBsvAddr" placeholder="recipient BSV address (1…)" autocomplete="off" />
+        <input id="sendBsvAddr" placeholder="recipient BSV address (1…)" autocomplete="off" data-scan="addr" />
         <div class="row" style="margin-top:6px; align-items:center; gap:10px">
           <input id="sendBsvAmount" type="number" min="1" step="1" placeholder="amount (sats)" style="flex:1 1 auto; min-width:0" />
           <label class="airgap-radio"><input type="checkbox" id="sendBsvMax"> Send max</label>
@@ -447,7 +452,7 @@
 
       <label style="margin-top:12px">👁 Watch a wallet (public key only — keyless)</label>
       <div class="grid2">
-        <input id="watchPubKey" placeholder="33-/65-byte hex public key from your offline wallet" autocomplete="off" />
+        <input id="watchPubKey" placeholder="33-/65-byte hex public key from your offline wallet" autocomplete="off" data-scan="pubkey" />
         <button id="btnWatchLoad" class="secondary">Watch</button>
       </div>
       <p class="muted" style="font-size:12px;margin:6px 0 0">Loads holdings + balance by public key with <b>no private key on this device</b>. Use it as the online half of an air-gapped setup: view, export unsigned requests, and broadcast — signing stays on your offline machine.</p>
@@ -576,7 +581,7 @@
     <section class="tabpanel" id="tab-tokens" role="tabpanel">
     <div class="card">
       <label>Recipient public key (for Send)</label>
-      <input id="sendPubKey" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
+      <input id="sendPubKey" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" data-scan="pubkey" />
       <div class="row" style="margin:10px 0"><button id="btnIncoming" class="secondary">Check incoming / recover</button></div>
       <div class="nft-toolbar">
         <button id="btnSales" class="secondary" type="button" style="margin-right:auto">📊 Sales</button>
@@ -633,7 +638,7 @@
       </div>
       <p class="muted" style="font-size:12px;margin:0 0 14px">Published once to your own address (small one-time fee, downscaled automatically); updating replaces it. Until you publish one, everyone sees your key-derived identicon.</p>
       <label>Recipient public key</label>
-      <input id="msgTo" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" />
+      <input id="msgTo" placeholder="recipient's 33-byte pubkey hex (02… / 03…)" data-scan="pubkey" />
       <div id="msgToName" class="muted" style="font-size:12px;min-height:16px;margin-top:2px"></div>
       <label>Message</label>
       <textarea id="msgText" placeholder="Write a note… (e.g. a thank-you, an announcement, an unlock)"></textarea>

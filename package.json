@@ -5,6 +5,7 @@
   "description": "PHAR LAP — Peer-to-peer Hashing Algorithm Replication Ledger Authentication Protocol. A PushDrop-based BSV token wallet (derived from MPT v05.24).",
   "scripts": {
     "build": "node build.mjs",
+    "build:jsqr": "esbuild node_modules/jsqr/dist/jsQR.js --bundle --minify --format=iife --global-name=jsQRlib --legal-comments=none --outfile=jsqr.min.js",
     "serve": "node serve.mjs",
     "dev": "node serve.mjs",
     "test": "node --test"
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.2",
-    "esbuild": "^0.21.0"
+    "esbuild": "^0.21.0",
+    "jsqr": "^1.4.0"
   }
 }

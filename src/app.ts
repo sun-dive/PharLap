@@ -274,6 +274,123 @@ function onSaveAff(): void {
   setStatus('Saved — your shared sales pages now carry your Buy-BSV referral.', 'ok')
 }
 
+// ─── QR scanning (camera) ───────────────────────────────────────────
+// Opens the camera in a modal and resolves with the first QR's text (or null if cancelled / no camera). Uses
+// the native BarcodeDetector where available (Chromium/Android, zero cost); on browsers without it (iOS Safari,
+// Firefox) it LAZY-LOADS a vendored jsQR (./jsqr.min.js) on first use, so the core bundle isn't bloated.
+type QrDecode = (d: Uint8ClampedArray, w: number, h: number, o?: { inversionAttempts?: string }) => { data: string } | null
+let jsqrFn: QrDecode | null = null
+async function loadJsqr(): Promise<QrDecode | null> {
+  if (jsqrFn != null) return jsqrFn
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const s = document.createElement('script')
+      s.src = './jsqr.min.js'; s.async = true
+      s.onload = () => resolve(); s.onerror = () => reject(new Error('load failed'))
+      document.head.append(s)
+    })
+    const g = (window as unknown as { jsQRlib?: QrDecode & { default?: QrDecode } }).jsQRlib
+    jsqrFn = g?.default ?? g ?? null
+  } catch { jsqrFn = null }
+  return jsqrFn
+}
+
+async function scanQrModal(title: string): Promise<string | null> {
+  if (navigator.mediaDevices?.getUserMedia == null) {
+    setStatus('This browser can’t access a camera (needs HTTPS + camera support).', 'error'); return null
+  }
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+  } catch {
+    setStatus('Camera unavailable — allow camera access (and use HTTPS) to scan.', 'error'); return null
+  }
+  const overlay = document.createElement('div'); overlay.className = 'modal'
+  overlay.innerHTML =
+    '<div class="modal-box" style="max-width:380px">' +
+    `<div class="modal-head"><span>${escapeHtml(title)}</span><button class="secondary scan-close">✕ Close</button></div>` +
+    '<video class="qr-scan-video" playsinline muted></video>' +
+    '<p class="muted" style="font-size:12px;margin:8px 0 0">Point the camera at a QR code.</p></div>'
+  document.body.append(overlay)
+  const video = overlay.querySelector('video') as HTMLVideoElement
+  video.srcObject = stream
+  await video.play().catch(() => { /* autoplay quirks — the frame loop still reads it */ })
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  const Detector = (window as unknown as { BarcodeDetector?: new (o: { formats: string[] }) => { detect: (s: CanvasImageSource) => Promise<Array<{ rawValue: string }>> } }).BarcodeDetector
+  const detector = Detector != null ? new Detector({ formats: ['qr_code'] }) : null
+  // No native detector (iOS Safari / Firefox) → lazy-load the vendored jsQR now (one-time ~46 KB fetch).
+  let decode: QrDecode | null = null
+  if (detector == null) {
+    decode = await loadJsqr()
+    if (decode == null) {
+      stream.getTracks().forEach(t => t.stop()); overlay.remove()
+      setStatus('Couldn’t load the QR scanner — check your connection and retry.', 'error'); return null
+    }
+  }
+
+  return new Promise<string | null>(resolve => {
+    let done = false
+    const finish = (val: string | null): void => {
+      if (done) return; done = true
+      stream.getTracks().forEach(t => t.stop())
+      overlay.remove(); resolve(val)
+    }
+    overlay.querySelector('.scan-close')?.addEventListener('click', () => finish(null))
+    overlay.addEventListener('click', e => { if (e.target === overlay) finish(null) })
+    const tick = async (): Promise<void> => {
+      if (done) return
+      if (video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        try {
+          if (detector != null) {
+            const codes = await detector.detect(canvas)
+            if (codes.length > 0 && codes[0].rawValue) { finish(codes[0].rawValue); return }
+          } else {
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+            const r = decode!(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' })
+            if (r?.data) { finish(r.data); return }
+          }
+        } catch { /* transient decode error — keep scanning */ }
+      }
+      requestAnimationFrame(() => void tick())
+    }
+    requestAnimationFrame(() => void tick())
+  })
+}
+
+/** Normalize a scanned string for the target field (strip a payment URI scheme; pull a pubkey from a share link). */
+function normalizeScan(kind: string | undefined, text: string): string {
+  let s = text.trim()
+  if (kind === 'addr') s = s.replace(/^(bitcoin|bitcoinsv|bsv):/i, '').split('?')[0].trim()
+  else if (kind === 'pubkey') { const m = s.match(/[?&#]h=([0-9a-fA-F]{66,130})/); if (m) s = m[1] }
+  return s
+}
+
+/** Scan a QR into an input field, then fire `input` so any live preview updates. */
+async function onScanInto(input: HTMLInputElement, kind: string | undefined): Promise<void> {
+  const text = await scanQrModal('📷 Scan QR code')
+  if (text == null) return
+  input.value = normalizeScan(kind, text)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  setStatus('Scanned ✓', 'ok')
+}
+
+/** Inject a 📷 button beside every `input[data-scan]`, wrapping the pair in a flex row. */
+function wireScanButtons(): void {
+  document.querySelectorAll<HTMLInputElement>('input[data-scan]').forEach(input => {
+    if (input.dataset.scanWired === '1') return
+    input.dataset.scanWired = '1'
+    const btn = document.createElement('button')
+    btn.type = 'button'; btn.className = 'secondary scan-btn'; btn.textContent = '📷'; btn.title = 'Scan a QR code'
+    const wrap = document.createElement('div'); wrap.className = 'scan-row'
+    input.parentNode?.insertBefore(wrap, input)
+    wrap.append(input, btn)
+    btn.onclick = () => void onScanInto(input, input.dataset.scan)
+  })
+}
+
 async function refreshBalance(): Promise<void> {
   setStatus('Fetching balance…')
   try {
@@ -2982,6 +3099,7 @@ function init(): void {
   $('btnBuyBsv').onclick = () => onBuyBsv()
   $('btnSaveAff').onclick = () => onSaveAff()
   renderAffField()
+  wireScanButtons() // inject 📷 scan buttons beside [data-scan] inputs
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
   $('btnFeeFixed').onclick = () => setFeeMode('fixed')

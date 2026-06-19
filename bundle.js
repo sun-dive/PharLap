@@ -23836,6 +23836,133 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     $("affRefCode").value = code;
     setStatus("Saved \u2014 your shared sales pages now carry your Buy-BSV referral.", "ok");
   }
+  var jsqrFn = null;
+  async function loadJsqr() {
+    if (jsqrFn != null) return jsqrFn;
+    try {
+      await new Promise((resolve, reject) => {
+        const s2 = document.createElement("script");
+        s2.src = "./jsqr.min.js";
+        s2.async = true;
+        s2.onload = () => resolve();
+        s2.onerror = () => reject(new Error("load failed"));
+        document.head.append(s2);
+      });
+      const g = window.jsQRlib;
+      jsqrFn = g?.default ?? g ?? null;
+    } catch {
+      jsqrFn = null;
+    }
+    return jsqrFn;
+  }
+  async function scanQrModal(title) {
+    if (navigator.mediaDevices?.getUserMedia == null) {
+      setStatus("This browser can\u2019t access a camera (needs HTTPS + camera support).", "error");
+      return null;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    } catch {
+      setStatus("Camera unavailable \u2014 allow camera access (and use HTTPS) to scan.", "error");
+      return null;
+    }
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = `<div class="modal-box" style="max-width:380px"><div class="modal-head"><span>${escapeHtml(title)}</span><button class="secondary scan-close">\u2715 Close</button></div><video class="qr-scan-video" playsinline muted></video><p class="muted" style="font-size:12px;margin:8px 0 0">Point the camera at a QR code.</p></div>`;
+    document.body.append(overlay);
+    const video = overlay.querySelector("video");
+    video.srcObject = stream;
+    await video.play().catch(() => {
+    });
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const Detector = window.BarcodeDetector;
+    const detector = Detector != null ? new Detector({ formats: ["qr_code"] }) : null;
+    let decode2 = null;
+    if (detector == null) {
+      decode2 = await loadJsqr();
+      if (decode2 == null) {
+        stream.getTracks().forEach((t) => t.stop());
+        overlay.remove();
+        setStatus("Couldn\u2019t load the QR scanner \u2014 check your connection and retry.", "error");
+        return null;
+      }
+    }
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (val2) => {
+        if (done) return;
+        done = true;
+        stream.getTracks().forEach((t) => t.stop());
+        overlay.remove();
+        resolve(val2);
+      };
+      overlay.querySelector(".scan-close")?.addEventListener("click", () => finish(null));
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) finish(null);
+      });
+      const tick = async () => {
+        if (done) return;
+        if (video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          try {
+            if (detector != null) {
+              const codes = await detector.detect(canvas);
+              if (codes.length > 0 && codes[0].rawValue) {
+                finish(codes[0].rawValue);
+                return;
+              }
+            } else {
+              const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              const r2 = decode2(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+              if (r2?.data) {
+                finish(r2.data);
+                return;
+              }
+            }
+          } catch {
+          }
+        }
+        requestAnimationFrame(() => void tick());
+      };
+      requestAnimationFrame(() => void tick());
+    });
+  }
+  function normalizeScan(kind, text) {
+    let s2 = text.trim();
+    if (kind === "addr") s2 = s2.replace(/^(bitcoin|bitcoinsv|bsv):/i, "").split("?")[0].trim();
+    else if (kind === "pubkey") {
+      const m = s2.match(/[?&#]h=([0-9a-fA-F]{66,130})/);
+      if (m) s2 = m[1];
+    }
+    return s2;
+  }
+  async function onScanInto(input, kind) {
+    const text = await scanQrModal("\u{1F4F7} Scan QR code");
+    if (text == null) return;
+    input.value = normalizeScan(kind, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    setStatus("Scanned \u2713", "ok");
+  }
+  function wireScanButtons() {
+    document.querySelectorAll("input[data-scan]").forEach((input) => {
+      if (input.dataset.scanWired === "1") return;
+      input.dataset.scanWired = "1";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "secondary scan-btn";
+      btn.textContent = "\u{1F4F7}";
+      btn.title = "Scan a QR code";
+      const wrap = document.createElement("div");
+      wrap.className = "scan-row";
+      input.parentNode?.insertBefore(wrap, input);
+      wrap.append(input, btn);
+      btn.onclick = () => void onScanInto(input, input.dataset.scan);
+    });
+  }
   async function refreshBalance() {
     setStatus("Fetching balance\u2026");
     try {
@@ -26737,7 +26864,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"f7d8c24"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c904429"} \xB7 ${"2026-06-19"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -26790,6 +26917,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     $("btnBuyBsv").onclick = () => onBuyBsv();
     $("btnSaveAff").onclick = () => onSaveAff();
     renderAffField();
+    wireScanButtons();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
     $("btnFeeFixed").onclick = () => setFeeMode("fixed");
