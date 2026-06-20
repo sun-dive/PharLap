@@ -666,22 +666,23 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
   }
 }
 
-/** Onboard a listing partner: transfer THIS copy to the partner's pubkey (they hold + resell it, earning the
- *  reseller fee on sales they drive; you keep earning your publisher fee), then hand back their listing link. */
+/** Onboard a listing partner: transfer THIS copy to a listing wallet's pubkey (a curation site, or your own
+ *  cold listing wallet). That wallet holds + resells the copy, collecting the reseller fee on sales via its
+ *  link; the publisher fee still goes to the collection's publisher. Returns the wallet's ready listing link. */
 async function onOnboardPartner(t: StoredToken): Promise<void> {
   const k = requireKey(); if (k == null) return
   if (!t.lockHex) { setStatus('Missing edition script; cannot onboard.', 'error'); return }
   const name = t.collectionName ?? 'this collection'
   const partner = (prompt(
-    `Onboard a listing partner for “${name}”.\n\n` +
-    `Paste the partner site's PUBLIC KEY (66-hex, compressed). You'll transfer THIS copy to them — they list ` +
-    `it and earn the reseller fee on every sale they drive, while you keep earning your publisher fee. ` +
-    `(You can mint/keep other copies.)`) ?? '').trim().toLowerCase()
+    `List “${name}” through a partner wallet.\n\n` +
+    `Paste the PUBLIC KEY (66-hex) of the listing wallet — a curation site's, or your own cold listing wallet. ` +
+    `You'll transfer THIS copy to it; that wallet then holds and resells the copy, collecting the reseller fee ` +
+    `on every sale made through its link. (You keep your other copies.)`) ?? '').trim().toLowerCase()
   if (partner === '') return
   if (!/^0[23][0-9a-f]{64}$/.test(partner)) {
     setStatus('That isn’t a 33-byte compressed public key (66 hex, starting 02 or 03).', 'error'); return
   }
-  if (!confirm(`Transfer one copy of “${name}” to partner ${short(partner)}? This hands over THIS copy — they hold and resell it.`)) return
+  if (!confirm(`Transfer one copy of “${name}” to ${short(partner)}? That wallet then holds and resells this copy.`)) return
   setStatus('Onboarding partner (transferring a copy)…')
   try {
     const note = await noteToPropagate(t)
@@ -709,7 +710,7 @@ function showPartnerLinkModal(name: string, link: string, partnerPubKey: string)
   overlay.innerHTML =
     '<div class="modal-box" style="max-width:520px">' +
     '<div class="modal-head"><span>🤝 Listing partner onboarded</span><button class="secondary pl-close">✕ Close</button></div>' +
-    `<p class="muted" style="font-size:13px;margin:0 0 10px">The partner now holds a copy of “${escapeHtml(name)}”. Give them this listing link — buyers who open it replicate from the partner’s copy, so the <b>partner earns the reseller fee</b> and <b>you keep earning your publisher fee</b> on every sale.</p>` +
+    `<p class="muted" style="font-size:13px;margin:0 0 10px">A copy of “${escapeHtml(name)}” now sits in the wallet you entered — your <b>listing partner</b> (a curation site, or your own listing wallet). Share its link below: every buyer mints their own copy from it, so that wallet <b>collects the reseller fee</b> on each sale, while the <b>publisher fee</b> goes to the collection’s publisher. The copy isn’t used up — it keeps selling.</p>` +
     '<label>Partner listing link</label>' +
     `<div class="row" style="flex-wrap:nowrap;gap:6px"><input class="pl-link mono" readonly value="${escapeHtml(link)}" style="flex:1 1 auto;min-width:0" /><button class="secondary pl-copy">Copy</button><button class="secondary pl-qr">QR</button></div>` +
     `<p class="muted" style="font-size:11px;margin:10px 0 0">Partner key: <span class="mono">${escapeHtml(partnerPubKey)}</span></p>` +
