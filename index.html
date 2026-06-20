@@ -284,6 +284,7 @@
 
     .cv-note { margin:12px 0; padding:12px 14px; border:1px solid #24405f; border-left:3px solid var(--accent2);
       background:linear-gradient(90deg, rgba(56,139,253,.08), rgba(56,139,253,.02)); border-radius:10px; font-size:14px; line-height:1.55; white-space:pre-wrap; }
+    .cv-note .cv-note-tags { color:var(--muted); font-size:12px; }
     .cv-bonus { margin:12px 0; padding:12px 14px; border:1px solid rgba(63,185,80,.45); border-radius:10px;
       background:linear-gradient(90deg, rgba(63,185,80,.10), rgba(63,185,80,.02)); font-size:14px; line-height:1.55; }
     .bonus-claim { display:inline-block; color:var(--accent); font-weight:700; }
@@ -845,8 +846,12 @@
       <div id="cvBonus" class="cv-bonus" style="display:none"></div>
 
       <div id="cvNoteEdit" class="cv-noteedit card" style="display:none">
-        <label>Your seller note (public — promo, redemption info; buyers see it)</label>
-        <textarea id="cvNoteText" placeholder="e.g. Thanks for buying! Here's how to redeem your bonus…"></textarea>
+        <label>Listing heading (optional — a custom title for your listing; buyers &amp; listing sites see it)</label>
+        <input id="cvNoteHeading" placeholder="e.g. Phar Lap App — June Snapshot" />
+        <label>Listing description / seller note (public — promo, redemption info; buyers see it)</label>
+        <textarea id="cvNoteText" placeholder="e.g. A zip of the current app build. Thanks for buying!"></textarea>
+        <label>Tags (optional — categories for listing sites)</label>
+        <input id="cvNoteTags" placeholder="#software #tools   (or comma-separated)" />
         <label>Buyer bonus (optional — delivered to buyers, propagates downstream)</label>
         <div class="grid2" style="grid-template-columns:120px 1fr">
           <select id="cvBonusKind">

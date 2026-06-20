@@ -29,11 +29,25 @@ function utf8Len(s: string): number {
   return new TextEncoder().encode(s).length
 }
 
-/** A resolved seller note (promo text + optional buyer bonus). */
+/** A resolved seller note: a listing heading + description (text) + tags + optional buyer bonus. */
 export interface SellerNote {
   text: string
+  /** Seller-authored listing heading (updatable; distinct from the immutable collection title). */
+  heading?: string
+  /** Category tags (slug-like, no leading '#'). */
+  tags?: string[]
   bonusKind?: BonusKind
   bonusValue?: string
+}
+
+/** Bound the heading / joined tags so the note stays small enough to ride on a notification output. */
+const MAX_HEADING_BYTES = 120
+const MAX_TAGS_BYTES = 160
+
+/** True if a note carries anything worth recording/propagating (description, heading, tags, or a bonus). */
+export function noteHasContent(n: SellerNote): boolean {
+  return (n.text?.trim().length ?? 0) > 0 || (n.bonusValue?.trim().length ?? 0) > 0 ||
+    (n.heading?.trim().length ?? 0) > 0 || (n.tags != null && n.tags.length > 0)
 }
 
 /** Publish (or overwrite) the seller's note for a collection, with an optional bonus. Returns the note tx id. */
@@ -41,9 +55,13 @@ export async function publishSellerNote(
   provider: WalletProvider, key: PrivateKey, collectionId: string, note: SellerNote,
 ): Promise<string> {
   const trimmed = note.text.trim()
+  const heading = note.heading?.trim()
+  const tags = note.tags?.map(t => t.replace(/^#+/, '').trim()).filter(Boolean)
   const bonusValue = note.bonusValue?.trim()
-  if (trimmed.length === 0 && !bonusValue) throw new Error('note is empty')
+  if (trimmed.length === 0 && !bonusValue && !heading && !(tags && tags.length > 0)) throw new Error('note is empty')
   if (utf8Len(trimmed) > MAX_NOTE_BYTES) throw new Error(`note exceeds ${MAX_NOTE_BYTES} bytes`)
+  if (heading != null && utf8Len(heading) > MAX_HEADING_BYTES) throw new Error(`heading exceeds ${MAX_HEADING_BYTES} bytes`)
+  if (tags != null && utf8Len(tags.join(' ')) > MAX_TAGS_BYTES) throw new Error(`tags exceed ${MAX_TAGS_BYTES} bytes`)
   if (bonusValue && utf8Len(bonusValue) > MAX_NOTE_BYTES) throw new Error(`bonus exceeds ${MAX_NOTE_BYTES} bytes`)
   const authorPub = key.toPublicKey().toString()
 
@@ -61,6 +79,8 @@ export async function publishSellerNote(
   tx.addOutput({
     lockingScript: buildNoteScript(authorPub, {
       collectionRef: collectionId, text: trimmed,
+      ...(heading ? { heading } : {}),
+      ...(tags && tags.length > 0 ? { tags } : {}),
       ...(bonusValue ? { bonusKind: note.bonusKind, bonusValue } : {}),
     }),
     satoshis: PHARLAP_OUTPUT_SATS,
@@ -85,7 +105,7 @@ export function readNoteFromTx(tx: Transaction, collectionId: string): SellerNot
   for (const o of tx.outputs) {
     const n = parseNoteScript(o.lockingScript)
     if (n && n.fields.collectionRef.toLowerCase() === want) {
-      return { text: n.fields.text, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue }
+      return { text: n.fields.text, heading: n.fields.heading, tags: n.fields.tags, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue }
     }
   }
   return null
@@ -124,7 +144,7 @@ export async function resolveSellerNote(
     for (const o of tx.outputs) {
       const n = parseNoteScript(o.lockingScript)
       if (n && n.authorPubKeyHex.toLowerCase() === seller && n.fields.collectionRef.toLowerCase() === want) {
-        return { text: n.fields.text, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue, txId }
+        return { text: n.fields.text, heading: n.fields.heading, tags: n.fields.tags, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue, txId }
       }
     }
   }
