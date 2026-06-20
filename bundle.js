@@ -26426,17 +26426,26 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       const publisherCut = tip.isV2 ? Math.floor(tip.priceSats * info.pBps / 1e4) : tip.terms.publisherFeeSats;
       const resellerCut = tip.isV2 ? tip.priceSats - publisherCut : tip.terms.holderFeeSats;
       const price = publisherCut + resellerCut;
-      const ok = confirm(
-        `Buy a copy of \u201C${info.name}\u201D for ${price} sats?
+      const bond = tip.tokenSats;
+      const priceDetail = tip.isV2 ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut.toLocaleString()} + reseller ${resellerCut.toLocaleString()}` : `publisher ${publisherCut.toLocaleString()} + holder ${resellerCut.toLocaleString()}`;
+      let approved = false;
+      const confirmBuy = (totalSats) => {
+        if (approved) return true;
+        const showBond = bond > 1;
+        const networkFee = Math.max(0, totalSats - price - (showBond ? bond : 0));
+        approved = confirm(
+          `Buy a copy of \u201C${info.name}\u201D?
 
-` + (tip.isV2 ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut} + reseller ${resellerCut} sats, plus a small network fee.
-` : `publisher ${publisherCut} + holder ${resellerCut} sats, plus a small network fee.
-`) + `This is an instant, on-chain purchase.`
-      );
-      if (!ok) {
-        setCvStatus("Purchase cancelled.");
-        return;
-      }
+Seller's price:   ${price.toLocaleString()} sats  (${priceDetail})
+` + (showBond ? `Refundable bond:  ${bond.toLocaleString()} sats  (held in your copy \u2014 reclaim by burning)
+` : "") + `Network fee:      ${networkFee.toLocaleString()} sats
+\u2014\u2014\u2014\u2014\u2014\u2014\u2014
+Total to pay:     ${totalSats.toLocaleString()} sats
+
+Instant, on-chain purchase.`
+        );
+        return approved;
+      };
       const needed = price + 2 * tip.tokenSats + 1200;
       const have = (await getSafeUtxos(provider)).reduce((s2, u) => s2 + u.satoshis, 0);
       if (have < needed) {
@@ -26455,9 +26464,10 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       let bought = null;
       for (let attempt = 0; attempt <= 2; attempt++) {
         try {
-          bought = tip.isV2 ? await replicateEditionV2(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? void 0 }) : await replicateEdition(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? void 0 });
+          bought = tip.isV2 ? await replicateEditionV2(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? void 0, confirmSpend: confirmBuy }) : await replicateEdition(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? void 0, confirmSpend: confirmBuy });
           break;
         } catch (e) {
+          if (e.message === SPEND_CANCELLED) throw e;
           if (attempt === 2) throw e;
           setCvStatus("Another buyer was first \u2014 finding the seller\u2019s new edition\u2026");
           const again = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex });
@@ -26482,7 +26492,12 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       );
       if (info.hasContentFile) void onView(info.tx1Ref, info.name);
     } catch (e) {
-      setCvStatus(`Could not complete the purchase: ${e.message}`, "error");
+      const msg = e.message;
+      if (msg === SPEND_CANCELLED) {
+        setCvStatus("Purchase cancelled \u2014 nothing was spent.");
+        return;
+      }
+      setCvStatus(`Could not complete the purchase: ${msg}`, "error");
     } finally {
       buying = false;
       $("cvGet").disabled = false;
@@ -27058,7 +27073,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"ae8166f"} \xB7 ${"2026-06-20"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"2e92c17"} \xB7 ${"2026-06-20"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
