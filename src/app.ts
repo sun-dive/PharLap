@@ -2286,12 +2286,12 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
   let bondSats = 0
   for (const o of tx1.outputs) {
     const t = parseTemplateScript(o.lockingScript)
-    if (t) { template = t.fields; publisherPubKeyHex = t.publisherPubKeyHex }
+    // Genesis mints every output (template/file/storefront) and each edition at one value — the refundable
+    // bond every copy carries forward (covenant-enforced). Read it off the template output (always present).
+    if (t) { template = t.fields; publisherPubKeyHex = t.publisherPubKeyHex; bondSats = o.satoshis ?? 0 }
     const s = parseStorefrontScript(o.lockingScript)
     if (s) storefront = s.fields
     if (parseFileScript(o.lockingScript)) hasContentFile = true
-    // A genesis edition output's value IS the refundable bond each replica carries forward (covenant-enforced).
-    if (parseEditionAny(o.lockingScript)) bondSats = o.satoshis ?? 0
   }
   if (!template) throw new Error('not a SMART NFTs collection (no template output in TX1)')
   const rules = decodeTokenRules(template.tokenRules)
