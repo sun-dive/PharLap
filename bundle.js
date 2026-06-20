@@ -26069,11 +26069,11 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       if (t) {
         template = t.fields;
         publisherPubKeyHex = t.publisherPubKeyHex;
+        bondSats = o.satoshis ?? 0;
       }
       const s2 = parseStorefrontScript(o.lockingScript);
       if (s2) storefront = s2.fields;
       if (parseFileScript(o.lockingScript)) hasContentFile = true;
-      if (parseEditionAny(o.lockingScript)) bondSats = o.satoshis ?? 0;
     }
     if (!template) throw new Error("not a SMART NFTs collection (no template output in TX1)");
     const rules = decodeTokenRules(template.tokenRules);
@@ -27058,7 +27058,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"4cb3e40"} \xB7 ${"2026-06-20"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"ae8166f"} \xB7 ${"2026-06-20"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
