@@ -2610,14 +2610,27 @@ async function onGetCopy(): Promise<void> {
     const publisherCut = tip.isV2 ? Math.floor((tip.priceSats * info.pBps) / 10000) : tip.terms.publisherFeeSats
     const resellerCut = tip.isV2 ? tip.priceSats - publisherCut : tip.terms.holderFeeSats
     const price = publisherCut + resellerCut
-    const ok = confirm(
-      `Buy a copy of “${info.name}” for ${price} sats?\n\n` +
-      (tip.isV2
-        ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut} + reseller ${resellerCut} sats, plus a small network fee.\n`
-        : `publisher ${publisherCut} + holder ${resellerCut} sats, plus a small network fee.\n`) +
-      `This is an instant, on-chain purchase.`,
-    )
-    if (!ok) { setCvStatus('Purchase cancelled.'); return }
+    // Confirm against the EXACT total (fees + refundable bond + network fee) — known only after the tx is
+    // built, so confirmSpend gates the real spend, not just the fees. `approved` keeps a retry from re-asking.
+    const bond = tip.tokenSats
+    const priceDetail = tip.isV2
+      ? `publisher ${(info.pBps / 100).toFixed(2)}% = ${publisherCut.toLocaleString()} + reseller ${resellerCut.toLocaleString()}`
+      : `publisher ${publisherCut.toLocaleString()} + holder ${resellerCut.toLocaleString()}`
+    let approved = false
+    const confirmBuy = (totalSats: number): boolean => {
+      if (approved) return true
+      const showBond = bond > 1
+      const networkFee = Math.max(0, totalSats - price - (showBond ? bond : 0))
+      approved = confirm(
+        `Buy a copy of “${info.name}”?\n\n` +
+        `Seller's price:   ${price.toLocaleString()} sats  (${priceDetail})\n` +
+        (showBond ? `Refundable bond:  ${bond.toLocaleString()} sats  (held in your copy — reclaim by burning)\n` : '') +
+        `Network fee:      ${networkFee.toLocaleString()} sats\n` +
+        `———————\n` +
+        `Total to pay:     ${totalSats.toLocaleString()} sats\n\n` +
+        `Instant, on-chain purchase.`)
+      return approved
+    }
 
     // Fund check: price + token + replica sats + a little for the miner fee/margin.
     const needed = price + 2 * tip.tokenSats + 1200
@@ -2636,10 +2649,11 @@ async function onGetCopy(): Promise<void> {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         bought = tip.isV2
-          ? await replicateEditionV2(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? undefined })
-          : await replicateEdition(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? undefined })
+          ? await replicateEditionV2(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, note: echoNote ?? undefined, confirmSpend: confirmBuy })
+          : await replicateEdition(provider, k, { editionTxId: tip.txId, editionOutputIndex: tip.outputIndex, editionLockHex: tip.lockHex, terms: tip.terms, note: echoNote ?? undefined, confirmSpend: confirmBuy })
         break
       } catch (e) {
+        if ((e as Error).message === SPEND_CANCELLED) throw e // user declined the spend — don't retry
         if (attempt === 2) throw e
         // The tip was likely taken by another buyer (double-spend) — re-resolve the seller's new edition and retry.
         setCvStatus('Another buyer was first — finding the seller’s new edition…')
@@ -2663,7 +2677,9 @@ async function onGetCopy(): Promise<void> {
     // Reveal the content (decrypts automatically — you're a holder now).
     if (info.hasContentFile) void onView(info.tx1Ref, info.name)
   } catch (e) {
-    setCvStatus(`Could not complete the purchase: ${(e as Error).message}`, 'error')
+    const msg = (e as Error).message
+    if (msg === SPEND_CANCELLED) { setCvStatus('Purchase cancelled — nothing was spent.'); return }
+    setCvStatus(`Could not complete the purchase: ${msg}`, 'error')
   } finally {
     buying = false
     ;($('cvGet') as HTMLButtonElement).disabled = false
