@@ -21231,7 +21231,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     };
     const noteSats = params.note ? PHARLAP_OUTPUT_SATS : 0;
     const estFee = Math.ceil(1500 * feePerKb / 1e3);
-    const target = 2 * bond + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1e3;
+    const target = bond + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1e3;
     const selected = selectFunding(await getSafeUtxos(provider2), target);
     const funding = await toFundingInputs(provider2, selected);
     const rep = await buildReplicateTx({ edition, terms: params.terms, buyerKey, funding, note: params.note, feePerKb });
@@ -21270,7 +21270,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     };
     const noteSats = params.note ? tokenSats : 0;
     const estFee = Math.ceil(1600 * feePerKb / 1e3);
-    const target = 2 * tokenSats + noteSats + parsed.priceSats + estFee + 1e3;
+    const target = tokenSats + noteSats + parsed.priceSats + estFee + 1e3;
     const selected = selectFunding(await getSafeUtxos(provider2), target);
     const funding = await toFundingInputs(provider2, selected);
     const rep = await buildReplicateV2Tx({ edition, buyerKey, funding, note: params.note, feePerKb });
@@ -26446,7 +26446,7 @@ Instant, on-chain purchase.`
         );
         return approved;
       };
-      const needed = price + 2 * tip.tokenSats + 1200;
+      const needed = price + tip.tokenSats + 1200;
       const have = (await getSafeUtxos(provider)).reduce((s2, u) => s2 + u.satoshis, 0);
       if (have < needed) {
         showFundPrompt(needed, have);
@@ -27073,7 +27073,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"2e92c17"} \xB7 ${"2026-06-20"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6444331"} \xB7 ${"2026-06-20"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
