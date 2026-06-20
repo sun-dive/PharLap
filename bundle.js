@@ -24380,16 +24380,16 @@ Proceed?`
     }
     const name = t.collectionName ?? "this collection";
     const partner = (prompt(
-      `Onboard a listing partner for \u201C${name}\u201D.
+      `List \u201C${name}\u201D through a partner wallet.
 
-Paste the partner site's PUBLIC KEY (66-hex, compressed). You'll transfer THIS copy to them \u2014 they list it and earn the reseller fee on every sale they drive, while you keep earning your publisher fee. (You can mint/keep other copies.)`
+Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or your own cold listing wallet. You'll transfer THIS copy to it; that wallet then holds and resells the copy, collecting the reseller fee on every sale made through its link. (You keep your other copies.)`
     ) ?? "").trim().toLowerCase();
     if (partner === "") return;
     if (!/^0[23][0-9a-f]{64}$/.test(partner)) {
       setStatus("That isn\u2019t a 33-byte compressed public key (66 hex, starting 02 or 03).", "error");
       return;
     }
-    if (!confirm(`Transfer one copy of \u201C${name}\u201D to partner ${short(partner)}? This hands over THIS copy \u2014 they hold and resell it.`)) return;
+    if (!confirm(`Transfer one copy of \u201C${name}\u201D to ${short(partner)}? That wallet then holds and resells this copy.`)) return;
     setStatus("Onboarding partner (transferring a copy)\u2026");
     try {
       const note = await noteToPropagate(t);
@@ -24417,7 +24417,7 @@ Paste the partner site's PUBLIC KEY (66-hex, compressed). You'll transfer THIS c
   function showPartnerLinkModal(name, link, partnerPubKey) {
     const overlay = document.createElement("div");
     overlay.className = "modal";
-    overlay.innerHTML = `<div class="modal-box" style="max-width:520px"><div class="modal-head"><span>\u{1F91D} Listing partner onboarded</span><button class="secondary pl-close">\u2715 Close</button></div><p class="muted" style="font-size:13px;margin:0 0 10px">The partner now holds a copy of \u201C${escapeHtml(name)}\u201D. Give them this listing link \u2014 buyers who open it replicate from the partner\u2019s copy, so the <b>partner earns the reseller fee</b> and <b>you keep earning your publisher fee</b> on every sale.</p><label>Partner listing link</label><div class="row" style="flex-wrap:nowrap;gap:6px"><input class="pl-link mono" readonly value="${escapeHtml(link)}" style="flex:1 1 auto;min-width:0" /><button class="secondary pl-copy">Copy</button><button class="secondary pl-qr">QR</button></div><p class="muted" style="font-size:11px;margin:10px 0 0">Partner key: <span class="mono">${escapeHtml(partnerPubKey)}</span></p></div>`;
+    overlay.innerHTML = `<div class="modal-box" style="max-width:520px"><div class="modal-head"><span>\u{1F91D} Listing partner onboarded</span><button class="secondary pl-close">\u2715 Close</button></div><p class="muted" style="font-size:13px;margin:0 0 10px">A copy of \u201C${escapeHtml(name)}\u201D now sits in the wallet you entered \u2014 your <b>listing partner</b> (a curation site, or your own listing wallet). Share its link below: every buyer mints their own copy from it, so that wallet <b>collects the reseller fee</b> on each sale, while the <b>publisher fee</b> goes to the collection\u2019s publisher. The copy isn\u2019t used up \u2014 it keeps selling.</p><label>Partner listing link</label><div class="row" style="flex-wrap:nowrap;gap:6px"><input class="pl-link mono" readonly value="${escapeHtml(link)}" style="flex:1 1 auto;min-width:0" /><button class="secondary pl-copy">Copy</button><button class="secondary pl-qr">QR</button></div><p class="muted" style="font-size:11px;margin:10px 0 0">Partner key: <span class="mono">${escapeHtml(partnerPubKey)}</span></p></div>`;
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close();
@@ -27050,7 +27050,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"1056eef"} \xB7 ${"2026-06-20"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"a8f9e66"} \xB7 ${"2026-06-20"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
