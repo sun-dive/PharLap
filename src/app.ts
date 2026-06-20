@@ -2247,6 +2247,8 @@ interface CollectionInfo {
   v2PriceSats: number
   /** The collection's covenant template bytes (hex) — lets the buy flow reconstruct a holder's edition. */
   covenantHex: string
+  /** Refundable bond a buyer funds into their own copy (sats) = the genesis edition output value. 0 if none. */
+  bondSats: number
 }
 
 let cvObjectUrl: string | null = null
@@ -2281,12 +2283,15 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
   let publisherPubKeyHex: string | null = null
   let storefront: { description: string; coverMimeType?: string; coverBytes?: number[] } | null = null
   let hasContentFile = false
+  let bondSats = 0
   for (const o of tx1.outputs) {
     const t = parseTemplateScript(o.lockingScript)
     if (t) { template = t.fields; publisherPubKeyHex = t.publisherPubKeyHex }
     const s = parseStorefrontScript(o.lockingScript)
     if (s) storefront = s.fields
     if (parseFileScript(o.lockingScript)) hasContentFile = true
+    // A genesis edition output's value IS the refundable bond each replica carries forward (covenant-enforced).
+    if (parseEditionAny(o.lockingScript)) bondSats = o.satoshis ?? 0
   }
   if (!template) throw new Error('not a SMART NFTs collection (no template output in TX1)')
   const rules = decodeTokenRules(template.tokenRules)
@@ -2305,7 +2310,7 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
     cover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
-    publisherPubKeyHex, fees, isV2, pBps, v2PriceSats, covenantHex: template.covenantScript,
+    publisherPubKeyHex, fees, isV2, pBps, v2PriceSats, covenantHex: template.covenantScript, bondSats,
   }
 }
 
@@ -2332,11 +2337,17 @@ function renderCollectionView(info: CollectionInfo): void {
     resolveAvatarsThen([pub], () => { $('cvPublisher').innerHTML = `by ${nameChip(pub)}` })
   }
   $('cvDesc').textContent = info.description || '(no description provided)'
+  const bond = info.bondSats || 0
+  // Show the real buyer total: the seller's price/fees PLUS the refundable bond locked into the buyer's own copy.
+  const bondBit = bond > 1 ? ` + ${bond.toLocaleString()} refundable bond` : ''
+  const bondTail = bond > 1 ? `; the ${bond.toLocaleString()}-sat bond is reclaimable by burning your copy` : ''
   if (info.isV2) {
-    $('cvPrice').innerHTML = `Get your own copy — <b>${info.v2PriceSats} sats</b> <span class="muted">` +
-      `(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sats, plus a small network fee and a refundable bond you reclaim by burning the token)</span>`
+    const total = info.v2PriceSats + bond
+    $('cvPrice').innerHTML = `Get your own copy — <b>${total.toLocaleString()} sats</b> <span class="muted">` +
+      `(reseller's price ${info.v2PriceSats.toLocaleString()}${bondBit}; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sats, plus a small network fee${bondTail})</span>`
   } else if (info.fees) {
-    $('cvPrice').innerHTML = `Get your own copy — <b>${info.fees.publisher + info.fees.holder} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee and a refundable bond you reclaim by burning the token)</span>`
+    const total = info.fees.publisher + info.fees.holder + bond
+    $('cvPrice').innerHTML = `Get your own copy — <b>${total.toLocaleString()} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}${bondBit}, plus a small network fee${bondTail})</span>`
   } else {
     $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
   }

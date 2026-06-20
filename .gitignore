@@ -15,3 +15,6 @@ smart-nfts-app.zip
 # Local high-res source art (fal.ai masters etc.) — kept local, never deployed.
 # Export the optimized .jpg you actually use into brand/home/.
 art-src/
+
+# BigRed curation tool (private)
+curate-bigred.ts

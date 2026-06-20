@@ -26063,6 +26063,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     let publisherPubKeyHex = null;
     let storefront = null;
     let hasContentFile = false;
+    let bondSats = 0;
     for (const o of tx1.outputs) {
       const t = parseTemplateScript(o.lockingScript);
       if (t) {
@@ -26072,6 +26073,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       const s2 = parseStorefrontScript(o.lockingScript);
       if (s2) storefront = s2.fields;
       if (parseFileScript(o.lockingScript)) hasContentFile = true;
+      if (parseEditionAny(o.lockingScript)) bondSats = o.satoshis ?? 0;
     }
     if (!template) throw new Error("not a SMART NFTs collection (no template output in TX1)");
     const rules = decodeTokenRules(template.tokenRules);
@@ -26102,7 +26104,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       isV2,
       pBps,
       v2PriceSats,
-      covenantHex: template.covenantScript
+      covenantHex: template.covenantScript,
+      bondSats
     };
   }
   function renderCollectionView(info) {
@@ -26135,10 +26138,15 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       });
     }
     $("cvDesc").textContent = info.description || "(no description provided)";
+    const bond = info.bondSats || 0;
+    const bondBit = bond > 1 ? ` + ${bond.toLocaleString()} refundable bond` : "";
+    const bondTail = bond > 1 ? `; the ${bond.toLocaleString()}-sat bond is reclaimable by burning your copy` : "";
     if (info.isV2) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.v2PriceSats} sats</b> <span class="muted">(reseller's price; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee and a refundable bond you reclaim by burning the token)</span>`;
+      const total = info.v2PriceSats + bond;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${total.toLocaleString()} sats</b> <span class="muted">(reseller's price ${info.v2PriceSats.toLocaleString()}${bondBit}; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee${bondTail})</span>`;
     } else if (info.fees) {
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${info.fees.publisher + info.fees.holder} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}, plus a small network fee and a refundable bond you reclaim by burning the token)</span>`;
+      const total = info.fees.publisher + info.fees.holder + bond;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${total.toLocaleString()} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}${bondBit}, plus a small network fee${bondTail})</span>`;
     } else {
       $("cvPrice").innerHTML = '<span class="muted">This collection is not a replicable edition.</span>';
     }
@@ -27050,7 +27058,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"a8f9e66"} \xB7 ${"2026-06-20"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"4cb3e40"} \xB7 ${"2026-06-20"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
