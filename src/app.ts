@@ -669,20 +669,30 @@ async function onTransferEdition(t: StoredToken): Promise<void> {
 /** Onboard a listing partner: transfer THIS copy to a listing wallet's pubkey (a curation site, or your own
  *  cold listing wallet). That wallet holds + resells the copy, collecting the reseller fee on sales via its
  *  link; the publisher fee still goes to the collection's publisher. Returns the wallet's ready listing link. */
+/** Set by a "List your NFT here" deep link (#list=<pubkey>): the listing wallet to onboard the next copy to. */
+let pendingListPartner: string | null = null
+
 async function onOnboardPartner(t: StoredToken): Promise<void> {
   const k = requireKey(); if (k == null) return
   if (!t.lockHex) { setStatus('Missing edition script; cannot onboard.', 'error'); return }
   const name = t.collectionName ?? 'this collection'
-  const partner = (prompt(
-    `List “${name}” through a partner wallet.\n\n` +
-    `Paste the PUBLIC KEY (66-hex) of the listing wallet — a curation site's, or your own cold listing wallet. ` +
-    `You'll transfer THIS copy to it; that wallet then holds and resells the copy, collecting the reseller fee ` +
-    `on every sale made through its link. (You keep your other copies.)`) ?? '').trim().toLowerCase()
-  if (partner === '') return
-  if (!/^0[23][0-9a-f]{64}$/.test(partner)) {
-    setStatus('That isn’t a 33-byte compressed public key (66 hex, starting 02 or 03).', 'error'); return
+  let partner: string
+  if (pendingListPartner) {
+    // Pre-filled from a curation site's "List your NFT here" link — the publisher just picks a collection + confirms.
+    partner = pendingListPartner
+    if (!confirm(`List “${name}” on listing wallet ${short(partner)}?\n\nThis sends one copy there; that wallet then holds and resells it, earning the reseller fee on each sale. You keep your other copies and your publisher fee.`)) return
+  } else {
+    partner = (prompt(
+      `List “${name}” through a partner wallet.\n\n` +
+      `Paste the PUBLIC KEY (66-hex) of the listing wallet — a curation site's, or your own cold listing wallet. ` +
+      `You'll transfer THIS copy to it; that wallet then holds and resells the copy, collecting the reseller fee ` +
+      `on every sale made through its link. (You keep your other copies.)`) ?? '').trim().toLowerCase()
+    if (partner === '') return
+    if (!/^0[23][0-9a-f]{64}$/.test(partner)) {
+      setStatus('That isn’t a 33-byte compressed public key (66 hex, starting 02 or 03).', 'error'); return
+    }
+    if (!confirm(`Transfer one copy of “${name}” to ${short(partner)}? That wallet then holds and resells this copy.`)) return
   }
-  if (!confirm(`Transfer one copy of “${name}” to ${short(partner)}? That wallet then holds and resells this copy.`)) return
   setStatus('Onboarding partner (transferring a copy)…')
   try {
     const note = await noteToPropagate(t)
@@ -692,6 +702,7 @@ async function onOnboardPartner(t: StoredToken): Promise<void> {
     })
     store.markSent(t.txId, t.outputIndex)
     renderTokens()
+    pendingListPartner = null // consume the one-shot deep-link target
     const link = `${location.origin}${location.pathname}#c=${t.collectionId}&h=${partner}`
     setStatus(`✅ Partner onboarded. Tx ${short(r.txId)} — share their listing link.`, 'ok')
     showPartnerLinkModal(name, link, partner)
@@ -3342,6 +3353,16 @@ function init(): void {
     if (r) void openCollectionView(r.c, r.h, r.g)
     else closeCollectionView()
   })
+
+  // "List your NFT here" deep link (#list=<pubkey>): pre-fill the onboard target and send the publisher to
+  // My NFTs to pick a collection to send a copy of.
+  const listParam = new URLSearchParams(location.hash.replace(/^#/, '')).get('list')
+  if (listParam && /^0[23][0-9a-f]{64}$/.test(listParam.toLowerCase())) {
+    pendingListPartner = listParam.toLowerCase()
+    activateTab('tokens')
+    setStatus(`📤 Listing to ${short(pendingListPartner)} — tap “🤝 Onboard partner” on a collection below to send it a copy for resale.`)
+    history.replaceState(null, '', location.pathname + location.search)
+  }
 
   // If the page was opened via a share link, show the storefront over the wallet.
   const route = parseHashRoute()

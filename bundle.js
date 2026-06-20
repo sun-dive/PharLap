@@ -24371,6 +24371,7 @@ Proceed?`
       setStatus(`Transfer failed: ${msg}`, "error");
     }
   }
+  var pendingListPartner = null;
   async function onOnboardPartner(t) {
     const k = requireKey();
     if (k == null) return;
@@ -24379,17 +24380,25 @@ Proceed?`
       return;
     }
     const name = t.collectionName ?? "this collection";
-    const partner = (prompt(
-      `List \u201C${name}\u201D through a partner wallet.
+    let partner;
+    if (pendingListPartner) {
+      partner = pendingListPartner;
+      if (!confirm(`List \u201C${name}\u201D on listing wallet ${short(partner)}?
+
+This sends one copy there; that wallet then holds and resells it, earning the reseller fee on each sale. You keep your other copies and your publisher fee.`)) return;
+    } else {
+      partner = (prompt(
+        `List \u201C${name}\u201D through a partner wallet.
 
 Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or your own cold listing wallet. You'll transfer THIS copy to it; that wallet then holds and resells the copy, collecting the reseller fee on every sale made through its link. (You keep your other copies.)`
-    ) ?? "").trim().toLowerCase();
-    if (partner === "") return;
-    if (!/^0[23][0-9a-f]{64}$/.test(partner)) {
-      setStatus("That isn\u2019t a 33-byte compressed public key (66 hex, starting 02 or 03).", "error");
-      return;
+      ) ?? "").trim().toLowerCase();
+      if (partner === "") return;
+      if (!/^0[23][0-9a-f]{64}$/.test(partner)) {
+        setStatus("That isn\u2019t a 33-byte compressed public key (66 hex, starting 02 or 03).", "error");
+        return;
+      }
+      if (!confirm(`Transfer one copy of \u201C${name}\u201D to ${short(partner)}? That wallet then holds and resells this copy.`)) return;
     }
-    if (!confirm(`Transfer one copy of \u201C${name}\u201D to ${short(partner)}? That wallet then holds and resells this copy.`)) return;
     setStatus("Onboarding partner (transferring a copy)\u2026");
     try {
       const note = await noteToPropagate(t);
@@ -24402,6 +24411,7 @@ Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or
       });
       store2.markSent(t.txId, t.outputIndex);
       renderTokens();
+      pendingListPartner = null;
       const link = `${location.origin}${location.pathname}#c=${t.collectionId}&h=${partner}`;
       setStatus(`\u2705 Partner onboarded. Tx ${short(r2.txId)} \u2014 share their listing link.`, "ok");
       showPartnerLinkModal(name, link, partner);
@@ -27073,7 +27083,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6444331"} \xB7 ${"2026-06-20"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"dc68bfd"} \xB7 ${"2026-06-20"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -27256,6 +27266,13 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       if (r2) void openCollectionView(r2.c, r2.h, r2.g);
       else closeCollectionView();
     });
+    const listParam = new URLSearchParams(location.hash.replace(/^#/, "")).get("list");
+    if (listParam && /^0[23][0-9a-f]{64}$/.test(listParam.toLowerCase())) {
+      pendingListPartner = listParam.toLowerCase();
+      activateTab("tokens");
+      setStatus(`\u{1F4E4} Listing to ${short(pendingListPartner)} \u2014 tap \u201C\u{1F91D} Onboard partner\u201D on a collection below to send it a copy for resale.`);
+      history.replaceState(null, "", location.pathname + location.search);
+    }
     const route = parseHashRoute();
     if (route) void openCollectionView(route.c, route.h, route.g);
     void refreshBalance();
