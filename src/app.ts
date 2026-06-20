@@ -18,7 +18,7 @@ import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress }
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
-import { publishSellerNote, resolveSellerNote, readNoteFromTx, type SellerNote } from './sellerNote.ts'
+import { publishSellerNote, resolveSellerNote, readNoteFromTx, noteHasContent, type SellerNote } from './sellerNote.ts'
 import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
 import { qrSvg, bsvPaymentUri } from './qr.ts'
 import type { Part } from './messageCodec.ts'
@@ -566,7 +566,7 @@ async function onMintEdition(): Promise<void> {
 /** The note (promo + bonus) to carry when I sell/transfer an edition I hold: my own published note wins,
  *  else the note that came with this copy (sticky default → hands-off propagation). */
 async function noteToPropagate(t: StoredToken): Promise<SellerNote | undefined> {
-  try { const p = await resolveSellerNote(provider, pubKeyHex, t.collectionId); if (p && (p.text || p.bonusValue)) return p } catch { /* best-effort */ }
+  try { const p = await resolveSellerNote(provider, pubKeyHex, t.collectionId); if (p && noteHasContent(p)) return p } catch { /* best-effort */ }
   if (t.sellerNote || t.bonusValue) return { text: t.sellerNote ?? '', bonusKind: t.bonusKind, bonusValue: t.bonusValue }
   return undefined
 }
@@ -2464,6 +2464,8 @@ async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): P
   const holdsIt = store.active().some(t => t.collectionId === info.tx1Ref)
   $('cvNoteEdit').style.display = isMine ? 'block' : 'none'
   ;($('cvNoteText') as HTMLTextAreaElement).value = ''
+  ;($('cvNoteHeading') as HTMLInputElement).value = ''
+  ;($('cvNoteTags') as HTMLInputElement).value = ''
   ;($('cvBonusValue') as HTMLInputElement).value = ''
   ;($('cvBonusKind') as HTMLSelectElement).value = 'none'
   $('cvNoteStatus').textContent = ''
@@ -2489,12 +2491,14 @@ async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): P
       $('cvNoteStatus').textContent = 'This is what you received when you bought — Publish to pass it on.'
     }
   }
-  if (current && (current.text || current.bonusValue)) {
+  if (current && (current.text || current.bonusValue || current.heading || (current.tags && current.tags.length > 0))) {
     cvNote = current
-    if (current.text) { noteBox.textContent = `📝 Seller’s note: ${current.text}`; noteBox.style.display = 'block' }
+    paintCvNote(current)
     showBonus(current, holdsIt) // holder sees a claim button; everyone else a teaser
     if (isMine) {
       ;($('cvNoteText') as HTMLTextAreaElement).value = current.text
+      ;($('cvNoteHeading') as HTMLInputElement).value = current.heading ?? ''
+      ;($('cvNoteTags') as HTMLInputElement).value = (current.tags ?? []).map(t => '#' + t).join(' ')
       if (current.bonusKind && current.bonusValue) {
         ;($('cvBonusKind') as HTMLSelectElement).value = current.bonusKind
         ;($('cvBonusValue') as HTMLInputElement).value = current.bonusValue
@@ -2503,21 +2507,39 @@ async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): P
   }
 }
 
+/** Render the seller note (heading + description + tags) into the storefront note box. */
+function paintCvNote(note: SellerNote): void {
+  const box = $('cvNote')
+  const parts: string[] = []
+  if (note.heading) parts.push(`<b>${escapeHtml(note.heading)}</b>`)
+  if (note.text) parts.push(`📝 ${escapeHtml(note.text)}`)
+  if (note.tags && note.tags.length > 0) parts.push(`<span class="cv-note-tags">${note.tags.map(t => '#' + escapeHtml(t)).join(' ')}</span>`)
+  box.innerHTML = parts.join('<br>')
+  box.style.display = parts.length > 0 ? 'block' : 'none'
+}
+
+/** Parse a tags input ("#software #tools" or comma-separated) into slug-like tags. */
+function parseTagsInput(s: string): string[] {
+  return s.split(/[\s,]+/).map(t => t.replace(/^#+/, '').trim().toLowerCase()).filter(Boolean)
+}
+
 async function onSaveSellerNote(): Promise<void> {
   const k = requireKey(); if (k == null) return
   if (!currentCollection) return
   const text = ($('cvNoteText') as HTMLTextAreaElement).value.trim()
+  const heading = ($('cvNoteHeading') as HTMLInputElement).value.trim()
+  const tags = parseTagsInput(($('cvNoteTags') as HTMLInputElement).value)
   const bonusKindRaw = ($('cvBonusKind') as HTMLSelectElement).value
   const bonusValue = ($('cvBonusValue') as HTMLInputElement).value.trim()
   const bonusKind = (bonusKindRaw === 'link' || bonusKindRaw === 'code') ? bonusKindRaw : undefined
-  if (!text && !bonusValue) { $('cvNoteStatus').textContent = 'Add a note or a bonus first.'; return }
+  if (!text && !bonusValue && !heading && tags.length === 0) { $('cvNoteStatus').textContent = 'Add a heading, description, tags, or a bonus first.'; return }
   if (bonusValue && !bonusKind) { $('cvNoteStatus').textContent = 'Pick a bonus type (link or code).'; return }
-  const note: SellerNote = { text, bonusKind, bonusValue: bonusValue || undefined }
+  const note: SellerNote = { text, heading: heading || undefined, tags: tags.length > 0 ? tags : undefined, bonusKind, bonusValue: bonusValue || undefined }
   $('cvNoteStatus').textContent = 'Publishing your note…'
   try {
     const txId = await publishSellerNote(provider, k, currentCollection.info.tx1Ref, note)
     cvNote = note
-    if (text) { $('cvNote').textContent = `📝 Seller’s note: ${text}`; $('cvNote').style.display = 'block' }
+    paintCvNote(note)
     showBonus(note, true)
     $('cvNoteStatus').textContent = `Published (${short(txId)}). Buyers will see it shortly.`
   } catch (e) {

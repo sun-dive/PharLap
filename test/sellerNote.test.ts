@@ -39,6 +39,33 @@ test('note carries an optional code bonus; a note with no bonus has undefined bo
   assert.equal(plain!.fields.bonusValue, undefined)
 })
 
+test('note carries a heading + tags through the PushDrop', () => {
+  const parsed = parseNoteScript(buildNoteScript(sellerPub, {
+    collectionRef, text: 'A zip of the app build', heading: 'Phar Lap App — June', tags: ['software', 'phar-lap'],
+  }))!
+  assert.equal(parsed.fields.heading, 'Phar Lap App — June')
+  assert.deepEqual(parsed.fields.tags, ['software', 'phar-lap'])
+  assert.equal(parsed.fields.text, 'A zip of the app build')
+})
+
+test('note carries heading + tags + bonus together (all typed pairs, any order)', () => {
+  const parsed = parseNoteScript(buildNoteScript(sellerPub, {
+    collectionRef, text: 'desc', heading: 'Title', tags: ['art', 'music'], bonusKind: 'link', bonusValue: 'https://x/claim',
+  }))!
+  assert.equal(parsed.fields.heading, 'Title')
+  assert.deepEqual(parsed.fields.tags, ['art', 'music'])
+  assert.equal(parsed.fields.bonusKind, 'link')
+  assert.equal(parsed.fields.bonusValue, 'https://x/claim')
+})
+
+test('backward compat: a bonus-only note (no heading/tags) still decodes its bonus', () => {
+  const parsed = parseNoteScript(buildNoteScript(sellerPub, { collectionRef, text: 'hi', bonusKind: 'code', bonusValue: 'OLD' }))!
+  assert.equal(parsed.fields.bonusKind, 'code')
+  assert.equal(parsed.fields.bonusValue, 'OLD')
+  assert.equal(parsed.fields.heading, undefined)
+  assert.equal(parsed.fields.tags, undefined)
+})
+
 test('a note output classifies as RECORD_NOTE (0x07)', () => {
   assert.equal(classifyRecord(buildNoteScript(sellerPub, { collectionRef, text: 'hi' })), RECORD_NOTE)
 })

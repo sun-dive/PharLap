@@ -437,14 +437,23 @@ export function parseProfileScript(
 
 /** Optional bonus a seller attaches to a note, claimable by the buyer. */
 export type BonusKind = 'link' | 'code'
+// Trailing note fields are TYPED PAIRs: a 1-byte type marker + its value. Extensible and backward-compatible
+// (old notes' bonus pair still reads; old clients reading new notes ignore unknown trailing pairs, and — since
+// the bonus is written first — still find the bonus where they expect it).
 const BONUS_LINK = 1
 const BONUS_CODE = 2
+const NOTE_HEADING = 3 // a seller-authored listing heading (distinct from the immutable collection title)
+const NOTE_TAGS = 4    // space/comma-separated category hashtags
 
 export interface NoteFields {
   /** Collection id (TX1 txid, 32-byte hex) this note is about. */
   collectionRef: string
-  /** The note text (UTF-8). */
+  /** The note text (UTF-8) — the listing description / promo. */
   text: string
+  /** Optional seller-authored listing heading (updatable; not the immutable collection title). */
+  heading?: string
+  /** Optional category tags (slug-like, no leading '#'). */
+  tags?: string[]
   /** Optional buyer bonus: an external link (seller's site delivers it) or a redeemable code. */
   bonusKind?: BonusKind
   bonusValue?: string
@@ -458,9 +467,12 @@ export function encodeNoteFields(data: NoteFields): number[][] {
     hexToBytes(data.collectionRef),
     utf8ToBytes(data.text),
   ]
+  // Bonus FIRST (so an un-updated client still reads it at fields[5..6]), then the new typed pairs.
   if (data.bonusKind != null && data.bonusValue != null && data.bonusValue.length > 0) {
     fields.push([data.bonusKind === 'link' ? BONUS_LINK : BONUS_CODE], utf8ToBytes(data.bonusValue))
   }
+  if (data.heading != null && data.heading.length > 0) fields.push([NOTE_HEADING], utf8ToBytes(data.heading))
+  if (data.tags != null && data.tags.length > 0) fields.push([NOTE_TAGS], utf8ToBytes(data.tags.join(' ')))
   return fields
 }
 
@@ -474,9 +486,13 @@ export function decodeNoteFields(fields: number[][]): NoteFields | null {
     collectionRef: bytesToHex(fields[3]),
     text: isEmptyOrZero(fields[4]) ? '' : bytesToUtf8(fields[4]),
   }
-  if (fields.length >= 7 && fields[5].length === 1 && (fields[5][0] === BONUS_LINK || fields[5][0] === BONUS_CODE)) {
-    result.bonusKind = fields[5][0] === BONUS_LINK ? 'link' : 'code'
-    result.bonusValue = bytesToUtf8(fields[6])
+  // Trailing typed pairs (any order): [typeByte][value].
+  for (let i = 5; i + 1 < fields.length; i += 2) {
+    const type = fields[i].length === 1 ? fields[i][0] : 0
+    const val = fields[i + 1]
+    if (type === BONUS_LINK || type === BONUS_CODE) { result.bonusKind = type === BONUS_LINK ? 'link' : 'code'; result.bonusValue = bytesToUtf8(val) }
+    else if (type === NOTE_HEADING) { result.heading = bytesToUtf8(val) }
+    else if (type === NOTE_TAGS) { const t = bytesToUtf8(val).split(/[\s,]+/).filter(Boolean); if (t.length > 0) result.tags = t }
   }
   return result
 }

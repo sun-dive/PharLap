@@ -32,7 +32,7 @@ import {
 } from './collectionBuilder.ts'
 import { encodeTokenRules, buildNoteScript, RESTRICTION_REPLICABLE, RESTRICTION_ENCRYPTED, RESTRICTION_COMPRESSED } from './tokenCodec.ts'
 import { compressIfSmaller } from './compress.ts'
-import { readNoteFromTx, type SellerNote } from './sellerNote.ts'
+import { readNoteFromTx, noteHasContent, type SellerNote } from './sellerNote.ts'
 import { newContentKey, newKeySalt, encryptContent, wrapContentKey } from './contentCrypto.ts'
 import type { WalletProvider, Utxo } from './walletProvider.ts'
 
@@ -321,11 +321,9 @@ export async function buildReplicateTx(opts: {
   tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash.hash160(holderPub))), satoshis: opts.terms.holderFeeSats })       // [3] holder fee
   // [4] (optional) seller-note echo, locked to the buyer — a spender-supplied trailing output the covenant
   // appends verbatim (no covenant change). A small carrier (NOT bonded). Carries the note + bonus forward.
-  if (opts.note && tx1RefHex != null && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
+  if (opts.note && tx1RefHex != null && noteHasContent(opts.note)) {
     tx.addOutput({
-      lockingScript: buildNoteScript(Utils.toHex(buyerPub), {
-        collectionRef: tx1RefHex, text: opts.note.text, bonusKind: opts.note.bonusKind, bonusValue: opts.note.bonusValue,
-      }),
+      lockingScript: buildNoteScript(Utils.toHex(buyerPub), { collectionRef: tx1RefHex, ...opts.note }),
       satoshis: PHARLAP_OUTPUT_SATS,
     })
   }
@@ -383,11 +381,9 @@ export async function buildReplicateV2Tx(opts: {
   tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats }) // [1] replica → buyer
   tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(parsed.terms.publisherPubKeyHash)), satoshis: publisherCut })       // [2] publisher cut = ⌊P·c%⌋
   tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash.hash160(holderPub))), satoshis: resellerCut })             // [3] reseller cut = P − publisherCut
-  if (opts.note && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
+  if (opts.note && noteHasContent(opts.note)) {
     tx.addOutput({
-      lockingScript: buildNoteScript(Utils.toHex(buyerPub), {
-        collectionRef: parsed.tx1RefHex, text: opts.note.text, bonusKind: opts.note.bonusKind, bonusValue: opts.note.bonusValue,
-      }),
+      lockingScript: buildNoteScript(Utils.toHex(buyerPub), { collectionRef: parsed.tx1RefHex, ...opts.note }),
       satoshis: tokenSats,
     })
   }
@@ -451,11 +447,9 @@ export async function buildEditionTransferTx(opts: {
   const notifyAddress = PublicKey.fromString(Utils.toHex(opts.newOwnerPubKey)).toAddress()
   tx.addOutput({ lockingScript: new P2PKH().lock(notifyAddress), satoshis: 1 })
   // (optional) seller-note echo, locked to the new owner — carries the note + bonus across the transfer.
-  if (opts.note && tx1RefHex != null && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
+  if (opts.note && tx1RefHex != null && noteHasContent(opts.note)) {
     tx.addOutput({
-      lockingScript: buildNoteScript(Utils.toHex(opts.newOwnerPubKey), {
-        collectionRef: tx1RefHex, text: opts.note.text, bonusKind: opts.note.bonusKind, bonusValue: opts.note.bonusValue,
-      }),
+      lockingScript: buildNoteScript(Utils.toHex(opts.newOwnerPubKey), { collectionRef: tx1RefHex, ...opts.note }),
       satoshis: PHARLAP_OUTPUT_SATS,
     })
   }

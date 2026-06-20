@@ -19940,6 +19940,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   var BONUS_LINK = 1;
   var BONUS_CODE = 2;
+  var NOTE_HEADING = 3;
+  var NOTE_TAGS = 4;
   function encodeNoteFields(data) {
     const fields = [
       P_PREFIX,
@@ -19951,6 +19953,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (data.bonusKind != null && data.bonusValue != null && data.bonusValue.length > 0) {
       fields.push([data.bonusKind === "link" ? BONUS_LINK : BONUS_CODE], utf8ToBytes2(data.bonusValue));
     }
+    if (data.heading != null && data.heading.length > 0) fields.push([NOTE_HEADING], utf8ToBytes2(data.heading));
+    if (data.tags != null && data.tags.length > 0) fields.push([NOTE_TAGS], utf8ToBytes2(data.tags.join(" ")));
     return fields;
   }
   function decodeNoteFields(fields) {
@@ -19963,9 +19967,18 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       collectionRef: bytesToHex2(fields[3]),
       text: isEmptyOrZero(fields[4]) ? "" : bytesToUtf8(fields[4])
     };
-    if (fields.length >= 7 && fields[5].length === 1 && (fields[5][0] === BONUS_LINK || fields[5][0] === BONUS_CODE)) {
-      result.bonusKind = fields[5][0] === BONUS_LINK ? "link" : "code";
-      result.bonusValue = bytesToUtf8(fields[6]);
+    for (let i = 5; i + 1 < fields.length; i += 2) {
+      const type = fields[i].length === 1 ? fields[i][0] : 0;
+      const val2 = fields[i + 1];
+      if (type === BONUS_LINK || type === BONUS_CODE) {
+        result.bonusKind = type === BONUS_LINK ? "link" : "code";
+        result.bonusValue = bytesToUtf8(val2);
+      } else if (type === NOTE_HEADING) {
+        result.heading = bytesToUtf8(val2);
+      } else if (type === NOTE_TAGS) {
+        const t = bytesToUtf8(val2).split(/[\s,]+/).filter(Boolean);
+        if (t.length > 0) result.tags = t;
+      }
     }
     return result;
   }
@@ -20720,11 +20733,20 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function utf8Len(s2) {
     return new TextEncoder().encode(s2).length;
   }
+  var MAX_HEADING_BYTES = 120;
+  var MAX_TAGS_BYTES = 160;
+  function noteHasContent(n) {
+    return (n.text?.trim().length ?? 0) > 0 || (n.bonusValue?.trim().length ?? 0) > 0 || (n.heading?.trim().length ?? 0) > 0 || n.tags != null && n.tags.length > 0;
+  }
   async function publishSellerNote(provider2, key2, collectionId, note) {
     const trimmed = note.text.trim();
+    const heading = note.heading?.trim();
+    const tags = note.tags?.map((t) => t.replace(/^#+/, "").trim()).filter(Boolean);
     const bonusValue = note.bonusValue?.trim();
-    if (trimmed.length === 0 && !bonusValue) throw new Error("note is empty");
+    if (trimmed.length === 0 && !bonusValue && !heading && !(tags && tags.length > 0)) throw new Error("note is empty");
     if (utf8Len(trimmed) > MAX_NOTE_BYTES) throw new Error(`note exceeds ${MAX_NOTE_BYTES} bytes`);
+    if (heading != null && utf8Len(heading) > MAX_HEADING_BYTES) throw new Error(`heading exceeds ${MAX_HEADING_BYTES} bytes`);
+    if (tags != null && utf8Len(tags.join(" ")) > MAX_TAGS_BYTES) throw new Error(`tags exceed ${MAX_TAGS_BYTES} bytes`);
     if (bonusValue && utf8Len(bonusValue) > MAX_NOTE_BYTES) throw new Error(`bonus exceeds ${MAX_NOTE_BYTES} bytes`);
     const authorPub = key2.toPublicKey().toString();
     const selected = selectFunding(await getSafeUtxos(provider2), PHARLAP_OUTPUT_SATS + 500);
@@ -20743,6 +20765,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       lockingScript: buildNoteScript(authorPub, {
         collectionRef: collectionId,
         text: trimmed,
+        ...heading ? { heading } : {},
+        ...tags && tags.length > 0 ? { tags } : {},
         ...bonusValue ? { bonusKind: note.bonusKind, bonusValue } : {}
       }),
       satoshis: PHARLAP_OUTPUT_SATS
@@ -20764,7 +20788,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     for (const o of tx.outputs) {
       const n = parseNoteScript(o.lockingScript);
       if (n && n.fields.collectionRef.toLowerCase() === want) {
-        return { text: n.fields.text, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue };
+        return { text: n.fields.text, heading: n.fields.heading, tags: n.fields.tags, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue };
       }
     }
     return null;
@@ -20796,7 +20820,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       for (const o of tx.outputs) {
         const n = parseNoteScript(o.lockingScript);
         if (n && n.authorPubKeyHex.toLowerCase() === seller && n.fields.collectionRef.toLowerCase() === want) {
-          return { text: n.fields.text, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue, txId };
+          return { text: n.fields.text, heading: n.fields.heading, tags: n.fields.tags, bonusKind: n.fields.bonusKind, bonusValue: n.fields.bonusValue, txId };
         }
       }
     }
@@ -20990,14 +21014,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: bond });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(opts.terms.publisherPubKeyHash)), satoshis: opts.terms.publisherFeeSats });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash_exports.hash160(holderPub))), satoshis: opts.terms.holderFeeSats });
-    if (opts.note && tx1RefHex != null && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
+    if (opts.note && tx1RefHex != null && noteHasContent(opts.note)) {
       tx.addOutput({
-        lockingScript: buildNoteScript(utils_exports.toHex(buyerPub), {
-          collectionRef: tx1RefHex,
-          text: opts.note.text,
-          bonusKind: opts.note.bonusKind,
-          bonusValue: opts.note.bonusValue
-        }),
+        lockingScript: buildNoteScript(utils_exports.toHex(buyerPub), { collectionRef: tx1RefHex, ...opts.note }),
         satoshis: PHARLAP_OUTPUT_SATS
       });
     }
@@ -21036,14 +21055,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, buyerPub)), satoshis: tokenSats });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(parsed.terms.publisherPubKeyHash)), satoshis: publisherCut });
     tx.addOutput({ lockingScript: LockingScript.fromBinary(p2pkhScript(Hash_exports.hash160(holderPub))), satoshis: resellerCut });
-    if (opts.note && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
+    if (opts.note && noteHasContent(opts.note)) {
       tx.addOutput({
-        lockingScript: buildNoteScript(utils_exports.toHex(buyerPub), {
-          collectionRef: parsed.tx1RefHex,
-          text: opts.note.text,
-          bonusKind: opts.note.bonusKind,
-          bonusValue: opts.note.bonusValue
-        }),
+        lockingScript: buildNoteScript(utils_exports.toHex(buyerPub), { collectionRef: parsed.tx1RefHex, ...opts.note }),
         satoshis: tokenSats
       });
     }
@@ -21089,14 +21103,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     tx.addOutput({ lockingScript: LockingScript.fromBinary(swapEditionOwner(opts.edition.lockBytes, opts.newOwnerPubKey)), satoshis: bond });
     const notifyAddress = PublicKey.fromString(utils_exports.toHex(opts.newOwnerPubKey)).toAddress();
     tx.addOutput({ lockingScript: new P2PKH().lock(notifyAddress), satoshis: 1 });
-    if (opts.note && tx1RefHex != null && (opts.note.text.length > 0 || (opts.note.bonusValue?.length ?? 0) > 0)) {
+    if (opts.note && tx1RefHex != null && noteHasContent(opts.note)) {
       tx.addOutput({
-        lockingScript: buildNoteScript(utils_exports.toHex(opts.newOwnerPubKey), {
-          collectionRef: tx1RefHex,
-          text: opts.note.text,
-          bonusKind: opts.note.bonusKind,
-          bonusValue: opts.note.bonusValue
-        }),
+        lockingScript: buildNoteScript(utils_exports.toHex(opts.newOwnerPubKey), { collectionRef: tx1RefHex, ...opts.note }),
         satoshis: PHARLAP_OUTPUT_SATS
       });
     }
@@ -24234,7 +24243,7 @@ Proceed?`
   async function noteToPropagate(t) {
     try {
       const p = await resolveSellerNote(provider, pubKeyHex, t.collectionId);
-      if (p && (p.text || p.bonusValue)) return p;
+      if (p && noteHasContent(p)) return p;
     } catch {
     }
     if (t.sellerNote || t.bonusValue) return { text: t.sellerNote ?? "", bonusKind: t.bonusKind, bonusValue: t.bonusValue };
@@ -26256,6 +26265,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     const holdsIt = store2.active().some((t) => t.collectionId === info.tx1Ref);
     $("cvNoteEdit").style.display = isMine ? "block" : "none";
     $("cvNoteText").value = "";
+    $("cvNoteHeading").value = "";
+    $("cvNoteTags").value = "";
     $("cvBonusValue").value = "";
     $("cvBonusKind").value = "none";
     $("cvNoteStatus").textContent = "";
@@ -26280,16 +26291,15 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
         $("cvNoteStatus").textContent = "This is what you received when you bought \u2014 Publish to pass it on.";
       }
     }
-    if (current && (current.text || current.bonusValue)) {
+    if (current && (current.text || current.bonusValue || current.heading || current.tags && current.tags.length > 0)) {
       cvNote = current;
-      if (current.text) {
-        noteBox.textContent = `\u{1F4DD} Seller\u2019s note: ${current.text}`;
-        noteBox.style.display = "block";
-      }
+      paintCvNote(current);
       showBonus(current, holdsIt);
       if (isMine) {
         ;
         $("cvNoteText").value = current.text;
+        $("cvNoteHeading").value = current.heading ?? "";
+        $("cvNoteTags").value = (current.tags ?? []).map((t) => "#" + t).join(" ");
         if (current.bonusKind && current.bonusValue) {
           ;
           $("cvBonusKind").value = current.bonusKind;
@@ -26298,31 +26308,42 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       }
     }
   }
+  function paintCvNote(note) {
+    const box = $("cvNote");
+    const parts = [];
+    if (note.heading) parts.push(`<b>${escapeHtml(note.heading)}</b>`);
+    if (note.text) parts.push(`\u{1F4DD} ${escapeHtml(note.text)}`);
+    if (note.tags && note.tags.length > 0) parts.push(`<span class="cv-note-tags">${note.tags.map((t) => "#" + escapeHtml(t)).join(" ")}</span>`);
+    box.innerHTML = parts.join("<br>");
+    box.style.display = parts.length > 0 ? "block" : "none";
+  }
+  function parseTagsInput(s2) {
+    return s2.split(/[\s,]+/).map((t) => t.replace(/^#+/, "").trim().toLowerCase()).filter(Boolean);
+  }
   async function onSaveSellerNote() {
     const k = requireKey();
     if (k == null) return;
     if (!currentCollection) return;
     const text = $("cvNoteText").value.trim();
+    const heading = $("cvNoteHeading").value.trim();
+    const tags = parseTagsInput($("cvNoteTags").value);
     const bonusKindRaw = $("cvBonusKind").value;
     const bonusValue = $("cvBonusValue").value.trim();
     const bonusKind = bonusKindRaw === "link" || bonusKindRaw === "code" ? bonusKindRaw : void 0;
-    if (!text && !bonusValue) {
-      $("cvNoteStatus").textContent = "Add a note or a bonus first.";
+    if (!text && !bonusValue && !heading && tags.length === 0) {
+      $("cvNoteStatus").textContent = "Add a heading, description, tags, or a bonus first.";
       return;
     }
     if (bonusValue && !bonusKind) {
       $("cvNoteStatus").textContent = "Pick a bonus type (link or code).";
       return;
     }
-    const note = { text, bonusKind, bonusValue: bonusValue || void 0 };
+    const note = { text, heading: heading || void 0, tags: tags.length > 0 ? tags : void 0, bonusKind, bonusValue: bonusValue || void 0 };
     $("cvNoteStatus").textContent = "Publishing your note\u2026";
     try {
       const txId = await publishSellerNote(provider, k, currentCollection.info.tx1Ref, note);
       cvNote = note;
-      if (text) {
-        $("cvNote").textContent = `\u{1F4DD} Seller\u2019s note: ${text}`;
-        $("cvNote").style.display = "block";
-      }
+      paintCvNote(note);
       showBonus(note, true);
       $("cvNoteStatus").textContent = `Published (${short(txId)}). Buyers will see it shortly.`;
     } catch (e) {
@@ -27029,7 +27050,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"4f59d1c"} \xB7 ${"2026-06-19"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"1056eef"} \xB7 ${"2026-06-20"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
