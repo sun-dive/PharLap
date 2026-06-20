@@ -620,7 +620,7 @@ export async function replicateEdition(provider: WalletProvider, buyerKey: Priva
   // holder's returned token (out0) rides forward from the spent edition input.
   const noteSats = params.note ? PHARLAP_OUTPUT_SATS : 0
   const estFee = Math.ceil((1500 * feePerKb) / 1000)
-  const target = 2 * bond + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1000
+  const target = bond + noteSats + params.terms.publisherFeeSats + params.terms.holderFeeSats + estFee + 1000
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding = await toFundingInputs(provider, selected)
 
@@ -756,10 +756,11 @@ export async function replicateEditionV2(provider: WalletProvider, buyerKey: Pri
   const edition: EditionUtxo = {
     txId: params.editionTxId, outputIndex: params.editionOutputIndex, satoshis: tokenSats, lockBytes, sourceTx,
   }
-  // Buyer funds: token + replica sats + the price (publisher + reseller cuts) + the optional note output + miner fee + margin.
+  // Buyer funds: ONE bond (their replica, out[1]) + the price (publisher + reseller cuts) + the optional note
+  // output + miner fee + margin. out[0]'s bond rides forward from the spent edition input.
   const noteSats = params.note ? tokenSats : 0
   const estFee = Math.ceil((1600 * feePerKb) / 1000)
-  const target = 2 * tokenSats + noteSats + parsed.priceSats + estFee + 1000
+  const target = tokenSats + noteSats + parsed.priceSats + estFee + 1000
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding = await toFundingInputs(provider, selected)
 

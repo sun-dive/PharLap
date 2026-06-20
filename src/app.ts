@@ -2632,8 +2632,9 @@ async function onGetCopy(): Promise<void> {
       return approved
     }
 
-    // Fund check: price + token + replica sats + a little for the miner fee/margin.
-    const needed = price + 2 * tip.tokenSats + 1200
+    // Fund check: the buyer funds the price/fees + ONE bond (their replica, out[1]) + a miner-fee margin.
+    // out[0]'s bond rides forward from the spent edition input, so it isn't funded by the buyer.
+    const needed = price + tip.tokenSats + 1200
     const have = (await getSafeUtxos(provider)).reduce((s, u) => s + u.satoshis, 0)
     if (have < needed) { showFundPrompt(needed, have); return }
     hideFundPrompt()
