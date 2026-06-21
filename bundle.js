@@ -24274,8 +24274,9 @@ Proceed?`
         });
         canvas.addEventListener("pointermove", (e) => {
           if (!drag) return;
-          ox += e.clientX - lx;
-          oy += e.clientY - ly;
+          const k = canvas.width / (canvas.clientWidth || canvas.width);
+          ox += (e.clientX - lx) * k;
+          oy += (e.clientY - ly) * k;
           lx = e.clientX;
           ly = e.clientY;
           clamp();
@@ -27211,7 +27212,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"043efd2"} \xB7 ${"2026-06-21"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"26bbde6"} \xB7 ${"2026-06-21"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

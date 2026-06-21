@@ -589,7 +589,11 @@ function openCropModal(file: File): Promise<Blob | null> {
 
       let drag = false, lx = 0, ly = 0
       canvas.addEventListener('pointerdown', e => { drag = true; lx = e.clientX; ly = e.clientY; canvas.setPointerCapture(e.pointerId); canvas.classList.add('grabbing') })
-      canvas.addEventListener('pointermove', e => { if (!drag) return; ox += e.clientX - lx; oy += e.clientY - ly; lx = e.clientX; ly = e.clientY; clamp(); draw() })
+      canvas.addEventListener('pointermove', e => {
+        if (!drag) return
+        const k = canvas.width / (canvas.clientWidth || canvas.width) // CSS px → buffer px (canvas may display smaller)
+        ox += (e.clientX - lx) * k; oy += (e.clientY - ly) * k; lx = e.clientX; ly = e.clientY; clamp(); draw()
+      })
       const endDrag = (): void => { drag = false; canvas.classList.remove('grabbing') }
       canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag)
       zoom.addEventListener('input', () => {
