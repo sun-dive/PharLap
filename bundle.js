@@ -24208,6 +24208,13 @@ Proceed?`
     coverPrevUrl = URL.createObjectURL(blob);
     host.innerHTML = `<img src="${coverPrevUrl}" alt="cover" /><span class="muted" style="font-size:12px">Cropped cover \u2014 ${kb(blob.size)}, square WebP</span>`;
   }
+  async function cropAndStoreCover(f2) {
+    const blob = await openCropModal(f2);
+    if (!blob) return false;
+    croppedCover = { mimeType: blob.type || "image/webp", fileName: "cover.webp", bytes: Array.from(new Uint8Array(await blob.arrayBuffer())) };
+    paintCoverPreview(blob);
+    return true;
+  }
   async function onCoverSelected() {
     const input = $("edCover");
     const f2 = input.files?.[0];
@@ -24216,15 +24223,60 @@ Proceed?`
       paintCoverPreview(null);
       return;
     }
-    const blob = await openCropModal(f2);
-    if (!blob) {
-      input.value = "";
-      croppedCover = null;
-      paintCoverPreview(null);
-      return;
+    if (!await cropAndStoreCover(f2)) input.value = "";
+  }
+  async function onTakePhoto() {
+    const photo = await capturePhotoModal();
+    if (!photo) return;
+    $("edCover").value = "";
+    await cropAndStoreCover(photo);
+  }
+  async function capturePhotoModal() {
+    if (navigator.mediaDevices?.getUserMedia == null) {
+      setStatus("This browser can\u2019t access a camera (needs HTTPS + camera support).", "error");
+      return null;
     }
-    croppedCover = { mimeType: blob.type || "image/webp", fileName: "cover.webp", bytes: Array.from(new Uint8Array(await blob.arrayBuffer())) };
-    paintCoverPreview(blob);
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    } catch {
+      setStatus("Camera unavailable \u2014 allow camera access (and use HTTPS) to take a photo.", "error");
+      return null;
+    }
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = '<div class="modal-box" style="max-width:380px"><div class="modal-head"><span>\u{1F4F7} Take a cover photo</span><button class="secondary cam-close">\u2715 Cancel</button></div><video class="qr-scan-video" playsinline muted></video><div class="row" style="justify-content:center;margin-top:10px"><button class="cam-shot">\u{1F4F8} Capture</button></div></div>';
+    document.body.append(overlay);
+    const video = overlay.querySelector("video");
+    video.srcObject = stream;
+    await video.play().catch(() => {
+    });
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (file) => {
+        if (done) return;
+        done = true;
+        stream.getTracks().forEach((t) => t.stop());
+        overlay.remove();
+        resolve(file);
+      };
+      overlay.querySelector(".cam-close").addEventListener("click", () => finish(null));
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) finish(null);
+      });
+      overlay.querySelector(".cam-shot").addEventListener("click", () => {
+        const w = video.videoWidth, h = video.videoHeight;
+        if (!w || !h) {
+          setStatus("Camera not ready yet \u2014 try again.", "error");
+          return;
+        }
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        c.getContext("2d").drawImage(video, 0, 0, w, h);
+        c.toBlob((b) => finish(b ? new File([b], "photo.jpg", { type: b.type || "image/jpeg" }) : null), "image/jpeg", 0.92);
+      });
+    });
   }
   function openCropModal(file) {
     return new Promise((resolve) => {
@@ -27212,7 +27264,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"26bbde6"} \xB7 ${"2026-06-21"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"a45a998"} \xB7 ${"2026-06-21"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -27269,6 +27321,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
     $("edCover").onchange = () => void onCoverSelected();
+    $("edCoverCam").onclick = () => void onTakePhoto();
     $("btnFeeFixed").onclick = () => setFeeMode("fixed");
     $("btnFeePct").onclick = () => setFeeMode("pct");
     $("edPrice").addEventListener("input", updateFeePctPreview);
