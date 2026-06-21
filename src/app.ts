@@ -545,15 +545,66 @@ function paintCoverPreview(blob: Blob | null): void {
   host.innerHTML = `<img src="${coverPrevUrl}" alt="cover" /><span class="muted" style="font-size:12px">Cropped cover — ${kb(blob.size)}, square WebP</span>`
 }
 
-/** When a cover file is picked, open the crop modal; store the processed bytes (or clear on cancel). */
+/** Crop a chosen image (file or photo) and store the processed cover bytes. Returns false if cancelled. */
+async function cropAndStoreCover(f: File): Promise<boolean> {
+  const blob = await openCropModal(f)
+  if (!blob) return false
+  croppedCover = { mimeType: blob.type || 'image/webp', fileName: 'cover.webp', bytes: Array.from(new Uint8Array(await blob.arrayBuffer())) }
+  paintCoverPreview(blob)
+  return true
+}
+
+/** Cover file picked from disk → crop + store (clear the input if the crop is cancelled). */
 async function onCoverSelected(): Promise<void> {
   const input = $('edCover') as HTMLInputElement
   const f = input.files?.[0]
   if (!f) { croppedCover = null; paintCoverPreview(null); return }
-  const blob = await openCropModal(f)
-  if (!blob) { input.value = ''; croppedCover = null; paintCoverPreview(null); return }
-  croppedCover = { mimeType: blob.type || 'image/webp', fileName: 'cover.webp', bytes: Array.from(new Uint8Array(await blob.arrayBuffer())) }
-  paintCoverPreview(blob)
+  if (!(await cropAndStoreCover(f))) input.value = ''
+}
+
+/** "Take photo" → open the camera, capture a frame, then run it through the same crop flow. */
+async function onTakePhoto(): Promise<void> {
+  const photo = await capturePhotoModal()
+  if (!photo) return
+  ;($('edCover') as HTMLInputElement).value = '' // a captured photo supersedes any file selection
+  await cropAndStoreCover(photo)
+}
+
+/** Open the device camera in a modal; resolve a captured still as a File, or null if cancelled. */
+async function capturePhotoModal(): Promise<File | null> {
+  if (navigator.mediaDevices?.getUserMedia == null) {
+    setStatus('This browser can’t access a camera (needs HTTPS + camera support).', 'error'); return null
+  }
+  let stream: MediaStream
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }) }
+  catch { setStatus('Camera unavailable — allow camera access (and use HTTPS) to take a photo.', 'error'); return null }
+  const overlay = document.createElement('div'); overlay.className = 'modal'
+  overlay.innerHTML =
+    '<div class="modal-box" style="max-width:380px">' +
+    '<div class="modal-head"><span>📷 Take a cover photo</span><button class="secondary cam-close">✕ Cancel</button></div>' +
+    '<video class="qr-scan-video" playsinline muted></video>' +
+    '<div class="row" style="justify-content:center;margin-top:10px"><button class="cam-shot">📸 Capture</button></div></div>'
+  document.body.append(overlay)
+  const video = overlay.querySelector('video') as HTMLVideoElement
+  video.srcObject = stream
+  await video.play().catch(() => { /* autoplay quirks — the still capture still works */ })
+
+  return new Promise<File | null>(resolve => {
+    let done = false
+    const finish = (file: File | null): void => {
+      if (done) return; done = true
+      stream.getTracks().forEach(t => t.stop()); overlay.remove(); resolve(file)
+    }
+    overlay.querySelector('.cam-close')!.addEventListener('click', () => finish(null))
+    overlay.addEventListener('click', e => { if (e.target === overlay) finish(null) })
+    overlay.querySelector('.cam-shot')!.addEventListener('click', () => {
+      const w = video.videoWidth, h = video.videoHeight
+      if (!w || !h) { setStatus('Camera not ready yet — try again.', 'error'); return }
+      const c = document.createElement('canvas'); c.width = w; c.height = h
+      c.getContext('2d')!.drawImage(video, 0, 0, w, h)
+      c.toBlob(b => finish(b ? new File([b], 'photo.jpg', { type: b.type || 'image/jpeg' }) : null), 'image/jpeg', 0.92)
+    })
+  })
 }
 
 /** Interactive square crop + downscale → WebP (JPEG fallback). Resolves the Blob, or null if cancelled. */
@@ -3336,6 +3387,7 @@ function init(): void {
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
   ;($('edCover') as HTMLInputElement).onchange = () => void onCoverSelected()
+  $('edCoverCam').onclick = () => void onTakePhoto()
   $('btnFeeFixed').onclick = () => setFeeMode('fixed')
   $('btnFeePct').onclick = () => setFeeMode('pct')
   ;($('edPrice') as HTMLInputElement).addEventListener('input', updateFeePctPreview)
