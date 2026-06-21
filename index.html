@@ -208,6 +208,11 @@
     .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:flex; align-items:center; justify-content:center; padding:24px; z-index:10; }
     .modal-box { background:var(--card); border:1px solid var(--line); border-radius:10px; max-width:92vw; max-height:92vh; overflow:auto; padding:16px; }
     .modal-head { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:12px; font-size:12px; color:var(--muted); }
+    .crop-canvas { width:300px; max-width:78vw; aspect-ratio:1/1; height:auto; display:block; margin:0 auto; border-radius:10px; background:#0d1117; touch-action:none; cursor:grab; }
+    .crop-canvas.grabbing { cursor:grabbing; }
+    .cover-preview { display:flex; align-items:center; gap:8px; margin-top:6px; }
+    .cover-preview:empty { display:none; }
+    .cover-preview img { width:56px; height:56px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
     .viewer-img { max-width:100%; max-height:74vh; border-radius:6px; display:block; }
     .viewer-pre { white-space:pre-wrap; word-break:break-word; max-height:74vh; overflow:auto; background:#0d1117; padding:12px; border-radius:6px; font-size:12px; }
     .viewer-dl { color:var(--accent2); }
@@ -541,6 +546,7 @@
       <textarea id="edDescription" placeholder="What is this? What do holders get? (a short blurb buyers see before purchase)"></textarea>
       <label>Cover image (optional — public storefront art, shown even if the content is encrypted)</label>
       <input id="edCover" type="file" accept="image/*" />
+      <div id="edCoverPreview" class="cover-preview"></div>
       <label>Bond per edition (sats) — refundable, reclaimed by burning a copy</label>
       <input id="edBond" type="number" min="1" value="2100" />
       <p class="muted" style="font-size:12px;margin:2px 0 0">Each edition rides on this many sats; the owner reclaims them by burning. Higher = stronger price floor (and pricier gifts); set low (e.g. 1) for free-content drops.</p>
