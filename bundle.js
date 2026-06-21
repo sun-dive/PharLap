@@ -24191,6 +24191,134 @@ Proceed?`
       ...note?.bonusValue ? { bonusKind: note.bonusKind, bonusValue: note.bonusValue } : {}
     });
   }
+  var COVER_OUT = 800;
+  var croppedCover = null;
+  var coverPrevUrl = null;
+  function paintCoverPreview(blob) {
+    const host = $("edCoverPreview");
+    if (!host) return;
+    if (coverPrevUrl) {
+      URL.revokeObjectURL(coverPrevUrl);
+      coverPrevUrl = null;
+    }
+    if (!blob) {
+      host.innerHTML = "";
+      return;
+    }
+    coverPrevUrl = URL.createObjectURL(blob);
+    host.innerHTML = `<img src="${coverPrevUrl}" alt="cover" /><span class="muted" style="font-size:12px">Cropped cover \u2014 ${kb(blob.size)}, square WebP</span>`;
+  }
+  async function onCoverSelected() {
+    const input = $("edCover");
+    const f2 = input.files?.[0];
+    if (!f2) {
+      croppedCover = null;
+      paintCoverPreview(null);
+      return;
+    }
+    const blob = await openCropModal(f2);
+    if (!blob) {
+      input.value = "";
+      croppedCover = null;
+      paintCoverPreview(null);
+      return;
+    }
+    croppedCover = { mimeType: blob.type || "image/webp", fileName: "cover.webp", bytes: Array.from(new Uint8Array(await blob.arrayBuffer())) };
+    paintCoverPreview(blob);
+  }
+  function openCropModal(file) {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        setStatus("Could not read that image.", "error");
+        resolve(null);
+      };
+      img.onload = () => {
+        const VIEW = 300;
+        const overlay = document.createElement("div");
+        overlay.className = "modal";
+        overlay.innerHTML = `<div class="modal-box" style="max-width:360px"><div class="modal-head"><span>\u2702\uFE0F Position your cover</span><button class="secondary crop-cancel">\u2715 Cancel</button></div><canvas class="crop-canvas" width="${VIEW}" height="${VIEW}"></canvas><label style="margin-top:10px">Zoom</label><input type="range" class="crop-zoom" min="1" max="4" step="0.01" value="1" style="width:100%" /><p class="muted" style="font-size:11px;margin:6px 0 12px">Drag to position, slide to zoom. Saved as a ${COVER_OUT}\xD7${COVER_OUT} WebP \u2014 small for on-chain storage.</p><div class="row" style="justify-content:flex-end;gap:8px"><button class="secondary crop-cancel2">Cancel</button><button class="crop-use">Use this crop</button></div></div>`;
+        document.body.appendChild(overlay);
+        const canvas = overlay.querySelector(".crop-canvas");
+        const ctx = canvas.getContext("2d");
+        const zoom = overlay.querySelector(".crop-zoom");
+        const base = Math.max(VIEW / img.width, VIEW / img.height);
+        let z = 1, ox = 0, oy = 0;
+        const dims = () => ({ w: img.width * base * z, h: img.height * base * z });
+        const clamp = () => {
+          const { w, h } = dims();
+          ox = Math.min(0, Math.max(VIEW - w, ox));
+          oy = Math.min(0, Math.max(VIEW - h, oy));
+        };
+        const draw = () => {
+          const { w, h } = dims();
+          ctx.fillStyle = "#0d1117";
+          ctx.fillRect(0, 0, VIEW, VIEW);
+          ctx.drawImage(img, ox, oy, w, h);
+        };
+        {
+          const { w, h } = dims();
+          ox = (VIEW - w) / 2;
+          oy = (VIEW - h) / 2;
+        }
+        draw();
+        let drag = false, lx = 0, ly = 0;
+        canvas.addEventListener("pointerdown", (e) => {
+          drag = true;
+          lx = e.clientX;
+          ly = e.clientY;
+          canvas.setPointerCapture(e.pointerId);
+          canvas.classList.add("grabbing");
+        });
+        canvas.addEventListener("pointermove", (e) => {
+          if (!drag) return;
+          ox += e.clientX - lx;
+          oy += e.clientY - ly;
+          lx = e.clientX;
+          ly = e.clientY;
+          clamp();
+          draw();
+        });
+        const endDrag = () => {
+          drag = false;
+          canvas.classList.remove("grabbing");
+        };
+        canvas.addEventListener("pointerup", endDrag);
+        canvas.addEventListener("pointercancel", endDrag);
+        zoom.addEventListener("input", () => {
+          const nz = parseFloat(zoom.value);
+          const r2 = nz / z;
+          const c = VIEW / 2;
+          ox = c - (c - ox) * r2;
+          oy = c - (c - oy) * r2;
+          z = nz;
+          clamp();
+          draw();
+        });
+        const close = (b) => {
+          URL.revokeObjectURL(url);
+          overlay.remove();
+          resolve(b);
+        };
+        overlay.querySelector(".crop-cancel").addEventListener("click", () => close(null));
+        overlay.querySelector(".crop-cancel2").addEventListener("click", () => close(null));
+        overlay.querySelector(".crop-use").addEventListener("click", () => {
+          const s2 = base * z, sx = -ox / s2, sy = -oy / s2, sSize = VIEW / s2;
+          const out = document.createElement("canvas");
+          out.width = COVER_OUT;
+          out.height = COVER_OUT;
+          out.getContext("2d").drawImage(img, sx, sy, sSize, sSize, 0, 0, COVER_OUT, COVER_OUT);
+          out.toBlob((b) => {
+            if (b && b.type === "image/webp") close(b);
+            else out.toBlob((j) => close(j), "image/jpeg", 0.85);
+          }, "image/webp", 0.8);
+        });
+      };
+      img.src = url;
+    });
+  }
   async function onMintEdition() {
     const k = requireKey();
     if (k == null) return;
@@ -24204,7 +24332,7 @@ Proceed?`
     const description = val("edDescription");
     try {
       const file = await readFile($("edFile"));
-      const cover = await readFile($("edCover"));
+      const cover = croppedCover ?? await readFile($("edCover"));
       if (encrypt && !file) {
         setStatus("Encryption needs a file \u2014 attach one or uncheck encrypt.", "error");
         return;
@@ -27083,7 +27211,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6ca396b"} \xB7 ${"2026-06-21"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"043efd2"} \xB7 ${"2026-06-21"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -27139,6 +27267,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     wireScanButtons();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
+    $("edCover").onchange = () => void onCoverSelected();
     $("btnFeeFixed").onclick = () => setFeeMode("fixed");
     $("btnFeePct").onclick = () => setFeeMode("pct");
     $("edPrice").addEventListener("input", updateFeePctPreview);
