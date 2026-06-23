@@ -1043,27 +1043,6 @@ export async function burnEdition(provider: WalletProvider, ownerKey: PrivateKey
   return { txId: r.txId, reclaimSats: r.reclaimSats }
 }
 
-/**
- * Cheapest possible de-risk: broadcast a trivial VERSION-2 P2PKH self-send. If the network relays/mines
- * it, version-2 (Chronicle) transactions are accepted — a prerequisite for any covenant spend. Returns txid.
- */
-export async function broadcastV2Probe(provider: WalletProvider, key: PrivateKey, feePerKb?: number): Promise<string> {
-  const selected = selectFunding(await getSafeUtxos(provider), 1000)
-  const funding = await toFundingInputs(provider, selected)
-  const tx = new Transaction()
-  tx.version = 2
-  for (const f of funding) {
-    tx.addInput({ sourceTransaction: f.sourceTx, sourceOutputIndex: f.utxo.outputIndex, unlockingScriptTemplate: new P2PKH().unlock(key) })
-  }
-  tx.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), change: true })
-  await tx.fee(new SatoshisPerKilobyte(feePerKb ?? DEFAULT_FEE_PER_KB))
-  await tx.sign()
-  await provider.broadcast(tx.toHex())
-  provider.registerPendingTx(tx.id('hex'), selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
-    tx.outputs[0]?.satoshis != null ? { outputIndex: 0, satoshis: tx.outputs[0].satoshis } : undefined)
-  return tx.id('hex')
-}
-
 /** WoC script hash for an output: SHA-256(scriptBytes) byte-reversed (Electrum/WoC convention). */
 export function wocScriptHash(scriptBytes: number[]): string {
   return Utils.toHex(Hash.sha256(scriptBytes).reverse())
