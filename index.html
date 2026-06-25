@@ -314,6 +314,10 @@
     .cv-noteedit textarea { min-height:54px; }
     .cv-noteedit select { background:#0d1117; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:8px 10px; font:inherit; width:100%; }
 
+    /* Top hero CTA — a duplicate of the buy button, kept above the fold */
+    .cv-buy-top { margin:0 0 16px; }
+    .cv-buy-top .cv-cta { width:100%; padding:14px 20px; font-size:16px; }
+
     /* Buy card — the conversion surface */
     .cv-buy { margin:18px 0 0; padding:18px; border-radius:16px;
       background:linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.012));
@@ -861,6 +865,10 @@
         <h1 id="cvTitle" class="cv-title"></h1>
         <div id="cvBadges" class="cv-badges"></div>
         <div id="cvPublisher" class="mono cv-publisher muted"></div>
+      </div>
+
+      <div class="cv-buy-top">
+        <button id="cvGetTop" class="cv-cta">Get a copy</button>
       </div>
 
       <p id="cvDesc" class="cv-desc"></p>
