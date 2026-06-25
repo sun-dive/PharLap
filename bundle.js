@@ -26253,6 +26253,15 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     el.textContent = msg;
     el.className = `cv-status ${kind === "info" ? "" : kind}`.trim();
   }
+  function cvGetButtons() {
+    return ["cvGet", "cvGetTop"].map((id) => document.getElementById(id)).filter(Boolean);
+  }
+  function setCvGetLabel(text) {
+    for (const b of cvGetButtons()) b.textContent = text;
+  }
+  function setCvGetDisabled(disabled) {
+    for (const b of cvGetButtons()) b.disabled = disabled;
+  }
   function parseHashRoute() {
     const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
     if (!raw) return null;
@@ -26356,8 +26365,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     } else {
       $("cvPrice").innerHTML = '<span class="muted">This collection is not a replicable edition.</span>';
     }
-    ;
-    $("cvGet").disabled = info.fees == null && !info.isV2;
+    setCvGetDisabled(info.fees == null && !info.isV2);
     const holdsIt = store2.active().some((t) => t.collectionId === info.tx1Ref);
     showViewButton(info, holdsIt);
     $("collectionView").style.display = "flex";
@@ -26387,8 +26395,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       currentCollection = { info, holderPubKey };
       renderCollectionView(info);
       if (cvGiftWif) {
-        ;
-        $("cvGet").textContent = "\u{1F381} Get your free copy";
+        setCvGetLabel("\u{1F381} Get your free copy");
         $("cvPrice").innerHTML = '\u{1F381} <b>A free gift from the publisher</b> <span class="muted">\u2014 claim your copy, no payment and no funds needed.</span>';
       }
       setCvStatus("");
@@ -26591,7 +26598,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       return;
     }
     buying = true;
-    $("cvGet").disabled = true;
+    setCvGetDisabled(true);
     try {
       setCvStatus("Finding the seller\u2019s current edition\u2026");
       let tip = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex });
@@ -26718,7 +26725,7 @@ Instant, on-chain purchase.`
       setCvStatus(`Could not complete the purchase: ${msg}`, "error");
     } finally {
       buying = false;
-      $("cvGet").disabled = false;
+      setCvGetDisabled(false);
     }
   }
   async function onBroadcast(t) {
@@ -27291,7 +27298,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"863f933"} \xB7 ${"2026-06-25"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"09be41e"} \xB7 ${"2026-06-25"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -27468,6 +27475,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       if (l) showQrModal("Scan to open this sales page", l);
     };
     $("cvGet").onclick = () => void onGetCopy();
+    $("cvGetTop").onclick = () => void onGetCopy();
     $("cvView").onclick = () => {
       if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name);
     };

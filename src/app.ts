@@ -2418,6 +2418,14 @@ function setCvStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void 
   el.className = `cv-status ${kind === 'info' ? '' : kind}`.trim()
 }
 
+// The buy/claim CTA appears twice — a hero copy up top (above the fold) and the one in the buy card —
+// so it's reachable without scrolling. These keep both in lockstep (same label + disabled state).
+function cvGetButtons(): HTMLButtonElement[] {
+  return (['cvGet', 'cvGetTop'].map(id => document.getElementById(id)).filter(Boolean) as HTMLButtonElement[])
+}
+function setCvGetLabel(text: string): void { for (const b of cvGetButtons()) b.textContent = text }
+function setCvGetDisabled(disabled: boolean): void { for (const b of cvGetButtons()) b.disabled = disabled }
+
 /** Read a `#c=…&h=…` hash route, or null if absent. Also captures a referral `aff` ref-code for this session. */
 function parseHashRoute(): { c: string; h: string | null; g: string | null } | null {
   const raw = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
@@ -2505,7 +2513,7 @@ function renderCollectionView(info: CollectionInfo): void {
   } else {
     $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
   }
-  ;($('cvGet') as HTMLButtonElement).disabled = info.fees == null && !info.isV2
+  setCvGetDisabled(info.fees == null && !info.isV2)
   // Show a "View content" button if this wallet already holds an edition of this collection.
   const holdsIt = store.active().some(t => t.collectionId === info.tx1Ref)
   showViewButton(info, holdsIt)
@@ -2540,7 +2548,7 @@ async function openCollectionView(tx1Ref: string, holderPubKey: string | null, g
     renderCollectionView(info)
     if (cvGiftWif) {
       // Reframe the page as a free gift claim.
-      ;($('cvGet') as HTMLButtonElement).textContent = '🎁 Get your free copy'
+      setCvGetLabel('🎁 Get your free copy')
       $('cvPrice').innerHTML = '🎁 <b>A free gift from the publisher</b> <span class="muted">— claim your copy, no payment and no funds needed.</span>'
     }
     setCvStatus('')
@@ -2735,7 +2743,7 @@ async function onGetCopy(): Promise<void> {
   if (!sellerPub) { setCvStatus('No seller could be determined for this link.', 'error'); return }
 
   buying = true
-  ;($('cvGet') as HTMLButtonElement).disabled = true
+  setCvGetDisabled(true)
   try {
     setCvStatus('Finding the seller’s current edition…')
     let tip = await resolveHolderEdition(provider, { tx1RefHex: info.tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: info.covenantHex })
@@ -2853,7 +2861,7 @@ async function onGetCopy(): Promise<void> {
     setCvStatus(`Could not complete the purchase: ${msg}`, 'error')
   } finally {
     buying = false
-    ;($('cvGet') as HTMLButtonElement).disabled = false
+    setCvGetDisabled(false)
   }
 }
 
@@ -3506,6 +3514,7 @@ function init(): void {
   $('cvShare').onclick = () => shareCollectionLink()
   $('cvQr').onclick = () => { const l = currentShareLink(); if (l) showQrModal('Scan to open this sales page', l) }
   $('cvGet').onclick = () => void onGetCopy()
+  $('cvGetTop').onclick = () => void onGetCopy()
   $('cvView').onclick = () => { if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name) }
   $('cvNoteSave').onclick = () => void onSaveSellerNote()
   $('cvFundCopy').onclick = () => void navigator.clipboard?.writeText(address)
