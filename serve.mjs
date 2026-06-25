@@ -4,12 +4,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { execSync } from 'node:child_process'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = 3000
 const WOC_BASE = 'https://api.whatsonchain.com'
 
-// Build first
+// Build first — these version defines MUST match build.mjs; without them __APP_VERSION__ is left
+// un-replaced in the bundle and init() throws (ReferenceError → no buttons wire up).
+const APP_VERSION = '0.1'
+const buildId = (() => { try { return execSync('git rev-parse --short HEAD').toString().trim() } catch { return 'dev' } })()
+const buildDate = new Date().toISOString().slice(0, 10)
 await build({
   entryPoints: ['src/app.ts'],
   bundle: true,
@@ -18,9 +23,14 @@ await build({
   format: 'iife',
   sourcemap: true,
   target: 'es2020',
-  define: { 'global': 'window' },
+  define: {
+    'global': 'window',
+    '__APP_VERSION__': JSON.stringify(APP_VERSION),
+    '__BUILD_ID__': JSON.stringify(buildId),
+    '__BUILD_DATE__': JSON.stringify(buildDate),
+  },
 })
-console.log('Build complete: bundle.js')
+console.log(`Build complete: bundle.js (v${APP_VERSION} · ${buildId} · ${buildDate})`)
 
 const MIME = {
   '.html': 'text/html',

@@ -19412,6 +19412,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     // ── Address History ───────────────────────────────────────────
     async getAddressHistory(address2 = this.getAddress()) {
       const resp = await fetchWithRetry(`${WOC_BASE}/address/${address2}/history`);
+      if (resp.status === 404) return [];
       if (!resp.ok) throw new Error(`WoC history fetch failed: ${resp.status}`);
       const data = await resp.json();
       if (!Array.isArray(data)) return [];
@@ -23740,6 +23741,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     el.className = `status ${kind}`;
   }
   var MNEMONIC_KEY = "p:wallet:mnemonic";
+  var BACKED_UP_KEY = "p:wallet:backedUp";
   var DERIVATION_PATH = "m/44'/236'/0'/0/0";
   function keyFromMnemonic(phrase, passphrase = "") {
     const m = phrase.trim().replace(/\s+/g, " ");
@@ -23762,6 +23764,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     localStorage.setItem(WIF_KEY, key2.toWif());
     localStorage.setItem(MNEMONIC_KEY, mnemonic);
     return key2;
+  }
+  function markBackedUp() {
+    localStorage.setItem(BACKED_UP_KEY, "1");
+  }
+  function needsSeedBackup() {
+    return !!localStorage.getItem(MNEMONIC_KEY) && !localStorage.getItem(BACKED_UP_KEY);
   }
   function useKey(k) {
     localStorage.removeItem(WATCH_KEY);
@@ -23857,14 +23865,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const blurred = el.classList.toggle("blurred");
     btn.textContent = blurred ? "\u{1F441} Reveal" : "\u{1F648} Hide";
   }
-  function showSeedModal(mnemonic) {
+  function showSeedModal(mnemonic, opts = {}) {
     const words = mnemonic.split(" ");
     const overlay = document.createElement("div");
     overlay.className = "modal";
-    overlay.innerHTML = `<div class="modal-box" style="max-width:460px"><div class="modal-head"><span>\u{1F511} Your new seed phrase</span><button class="secondary seed-close">\u2715 Close</button></div><p class="muted" style="font-size:13px;margin:0 0 10px">Write these 12 words down, in order, and keep them secret &amp; safe. <b>Anyone with them controls this wallet</b>, and if you lose them with no backup it <b>cannot be recovered</b>.</p><div class="seed-grid">${words.map((w, i) => `<div class="seed-word"><span class="seed-num">${i + 1}</span> ${escapeHtml(w)}</div>`).join("")}</div><div class="row" style="margin-top:12px"><button class="seed-copy">Copy phrase</button><button class="secondary seed-done">I\u2019ve written it down</button></div></div>`;
+    const closeBtn = opts.gated ? "" : '<button class="secondary seed-close">\u2715 Close</button>';
+    const intro = opts.intro ? `<p style="font-size:13px;margin:0 0 8px;color:#eab300;font-weight:600">${escapeHtml(opts.intro)}</p>` : "";
+    const doneLabel = opts.gated ? "\u2705 I\u2019ve written down my seed phrase \u2014 claim my NFT gift" : "I\u2019ve written it down";
+    overlay.innerHTML = `<div class="modal-box" style="max-width:460px"><div class="modal-head"><span>\u{1F511} Your new seed phrase</span>${closeBtn}</div>` + intro + `<p class="muted" style="font-size:13px;margin:0 0 10px">Write these 12 words down, in order, and keep them secret &amp; safe. <b>Anyone with them controls this wallet</b>, and if you lose them with no backup it <b>cannot be recovered</b>.</p><div class="seed-grid">${words.map((w, i) => `<div class="seed-word"><span class="seed-num">${i + 1}</span> ${escapeHtml(w)}</div>`).join("")}</div><div class="row" style="margin-top:12px"><button class="seed-copy">Copy phrase</button><button class="secondary seed-done">${doneLabel}</button></div></div>`;
     const close = () => overlay.remove();
     overlay.querySelector(".seed-close")?.addEventListener("click", close);
-    overlay.querySelector(".seed-done")?.addEventListener("click", close);
+    overlay.querySelector(".seed-done")?.addEventListener("click", () => {
+      markBackedUp();
+      close();
+      opts.onDone?.();
+    });
     overlay.querySelector(".seed-copy")?.addEventListener("click", () => void navigator.clipboard?.writeText(mnemonic));
     document.body.append(overlay);
   }
@@ -26585,6 +26600,17 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
         return;
       }
       if (cvGiftWif) {
+        if (!confirm("Add this NFT gift to your wallet now?\n\nIt will be claimed to the wallet on THIS browser and device \u2014 make sure this is where you want to keep it.\n\nOr you can cancel and instead claim it later, on a different browser or device, from the same link.")) {
+          setCvStatus("No problem \u2014 your gift is still waiting. Claim it any time from this link.");
+          return;
+        }
+        if (needsSeedBackup()) {
+          await new Promise((resolve) => showSeedModal(localStorage.getItem(MNEMONIC_KEY) ?? "", {
+            gated: true,
+            intro: "First, secure your new wallet \u2014 this seed phrase is the ONLY key to the NFT gift you\u2019re about to claim. Write it down before we add it to your wallet.",
+            onDone: () => resolve()
+          }));
+        }
         let giftNote = cvNote;
         if (!giftNote) {
           try {
@@ -26610,8 +26636,9 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
         renderTokens();
         rememberGifter();
         showViewButton(info, true);
-        setCvStatus("\u{1F381} It\u2019s yours! Your free copy is now in My NFTs.", "ok");
         cvGiftWif = null;
+        setCvStatus("\u2705 Added to your wallet \u2014 opening your gift\u2026", "ok");
+        void onView(info.tx1Ref, info.name);
         return;
       }
       const publisherCut = tip.isV2 ? Math.floor(tip.priceSats * info.pBps / 1e4) : tip.terms.publisherFeeSats;
@@ -27264,7 +27291,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"14cc296"} \xB7 ${"2026-06-25"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"863f933"} \xB7 ${"2026-06-25"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -27346,6 +27373,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       const { mnemonic, key: key2 } = newSeedWallet();
       switchWallet(key2, false, mnemonic);
       setStatus("New wallet created \u2014 back up your seed phrase!", "ok");
+      localStorage.removeItem(BACKED_UP_KEY);
       showSeedModal(mnemonic);
     };
     $("btnRestore").onclick = () => {
@@ -27368,6 +27396,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
         return;
       }
       switchWallet(k, true, phrase);
+      markBackedUp();
       $("restoreSeed").value = "";
       setStatus("Wallet restored from seed phrase \u2014 recovering from chain\u2026", "ok");
     };
@@ -27388,6 +27417,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       const { mnemonic, key: key2 } = newSeedWallet();
       switchWallet(key2, false, mnemonic);
       setStatus("Exited watch-only \u2014 a fresh local wallet was created. Back up its seed phrase.", "ok");
+      localStorage.removeItem(BACKED_UP_KEY);
       showSeedModal(mnemonic);
     };
     $("btnSendBsv").onclick = () => void onSendBsv();

@@ -71,6 +71,7 @@ function setStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
 
 // ─── wallet ─────────────────────────────────────────────────────────
 const MNEMONIC_KEY = 'p:wallet:mnemonic'
+const BACKED_UP_KEY = 'p:wallet:backedUp' // set once the user confirms they've written the seed down
 // Fixed BIP-44 path (236 = BSV coin type). MUST never change — restores derive the same key from it.
 const DERIVATION_PATH = "m/44'/236'/0'/0/0"
 
@@ -98,6 +99,10 @@ function loadKey(): PrivateKey {
   localStorage.setItem(MNEMONIC_KEY, mnemonic)
   return key
 }
+
+function markBackedUp(): void { localStorage.setItem(BACKED_UP_KEY, '1') }
+/** A fresh seed wallet the user hasn't confirmed backing up yet (WIF-only wallets have no seed → false). */
+function needsSeedBackup(): boolean { return !!localStorage.getItem(MNEMONIC_KEY) && !localStorage.getItem(BACKED_UP_KEY) }
 
 function useKey(k: PrivateKey): void {
   localStorage.removeItem(WATCH_KEY) // a real key supersedes any watch-only state
@@ -206,19 +211,23 @@ function toggleSeed(): void {
 }
 
 /** Force the backup moment when a new seed wallet is created: show the 12 words, numbered, with a warning. */
-function showSeedModal(mnemonic: string): void {
+function showSeedModal(mnemonic: string, opts: { gated?: boolean; intro?: string; onDone?: () => void } = {}): void {
   const words = mnemonic.split(' ')
   const overlay = document.createElement('div'); overlay.className = 'modal'
+  const closeBtn = opts.gated ? '' : '<button class="secondary seed-close">✕ Close</button>'
+  const intro = opts.intro ? `<p style="font-size:13px;margin:0 0 8px;color:#eab300;font-weight:600">${escapeHtml(opts.intro)}</p>` : ''
+  const doneLabel = opts.gated ? '✅ I’ve written down my seed phrase — claim my NFT gift' : 'I’ve written it down'
   overlay.innerHTML =
     '<div class="modal-box" style="max-width:460px">' +
-    '<div class="modal-head"><span>🔑 Your new seed phrase</span><button class="secondary seed-close">✕ Close</button></div>' +
+    `<div class="modal-head"><span>🔑 Your new seed phrase</span>${closeBtn}</div>` +
+    intro +
     '<p class="muted" style="font-size:13px;margin:0 0 10px">Write these 12 words down, in order, and keep them secret &amp; safe. <b>Anyone with them controls this wallet</b>, and if you lose them with no backup it <b>cannot be recovered</b>.</p>' +
     `<div class="seed-grid">${words.map((w, i) => `<div class="seed-word"><span class="seed-num">${i + 1}</span> ${escapeHtml(w)}</div>`).join('')}</div>` +
-    '<div class="row" style="margin-top:12px"><button class="seed-copy">Copy phrase</button><button class="secondary seed-done">I’ve written it down</button></div>' +
+    `<div class="row" style="margin-top:12px"><button class="seed-copy">Copy phrase</button><button class="secondary seed-done">${doneLabel}</button></div>` +
     '</div>'
   const close = (): void => overlay.remove()
   overlay.querySelector('.seed-close')?.addEventListener('click', close)
-  overlay.querySelector('.seed-done')?.addEventListener('click', close)
+  overlay.querySelector('.seed-done')?.addEventListener('click', () => { markBackedUp(); close(); opts.onDone?.() })
   overlay.querySelector('.seed-copy')?.addEventListener('click', () => void navigator.clipboard?.writeText(mnemonic))
   document.body.append(overlay)
 }
@@ -2735,6 +2744,20 @@ async function onGetCopy(): Promise<void> {
     // ── Gift claim: a funded voucher (in the link) pays the whole tx; the recipient just owns the copy.
     //    No price prompt, no fund check, works for a brand-new or existing wallet.
     if (cvGiftWif) {
+      if (!confirm('Add this NFT gift to your wallet now?\n\nIt will be claimed to the wallet on THIS browser and device — make sure this is where you want to keep it.\n\nOr you can cancel and instead claim it later, on a different browser or device, from the same link.')) {
+        setCvStatus('No problem — your gift is still waiting. Claim it any time from this link.')
+        return // finally re-enables the button + clears the buying flag
+      }
+      // Brand-new wallet? Secure the seed FIRST — it's the only key to the NFT we're about to add, so
+      // back it up BEFORE broadcasting the claim. The gated modal's only exit is its confirm button, so
+      // this await resolves once the user has written the phrase down; only then does the claim proceed.
+      if (needsSeedBackup()) {
+        await new Promise<void>(resolve => showSeedModal(localStorage.getItem(MNEMONIC_KEY) ?? '', {
+          gated: true,
+          intro: 'First, secure your new wallet — this seed phrase is the ONLY key to the NFT gift you’re about to claim. Write it down before we add it to your wallet.',
+          onDone: () => resolve(),
+        }))
+      }
       let giftNote: SellerNote | null = cvNote
       if (!giftNote) { try { giftNote = readNoteFromTx(await provider.getSourceTransaction(tip.txId), info.tx1Ref) } catch { /* best-effort */ } }
       setCvStatus('🎁 Claiming your free copy…')
@@ -2746,8 +2769,10 @@ async function onGetCopy(): Promise<void> {
       renderTokens()
       rememberGifter() // persist the gifter's Buy-BSV referral on this (often brand-new) wallet
       showViewButton(info, true)
-      setCvStatus('🎁 It’s yours! Your free copy is now in My NFTs.', 'ok')
       cvGiftWif = null // single-use — the voucher is now spent
+      // Confirm it landed, then open the content.
+      setCvStatus('✅ Added to your wallet — opening your gift…', 'ok')
+      void onView(info.tx1Ref, info.name)
       return
     }
 
@@ -3410,7 +3435,7 @@ function init(): void {
     const { mnemonic, key } = newSeedWallet()
     switchWallet(key, false, mnemonic)
     setStatus('New wallet created — back up your seed phrase!', 'ok')
-    showSeedModal(mnemonic) // force the backup moment
+    localStorage.removeItem(BACKED_UP_KEY); showSeedModal(mnemonic) // new seed → not backed up until confirmed
   }
   $('btnRestore').onclick = () => {
     let k: PrivateKey
@@ -3422,6 +3447,7 @@ function init(): void {
     const phrase = val('restoreSeed').trim().replace(/\s+/g, ' ')
     try { k = keyFromMnemonic(phrase) } catch { setStatus('Invalid seed phrase — check the words and order.', 'error'); return }
     switchWallet(k, true, phrase) // recover purchases from chain + keep the phrase
+    markBackedUp() // they typed their own seed → it's already backed up
     ;($('restoreSeed') as HTMLInputElement).value = ''
     setStatus('Wallet restored from seed phrase — recovering from chain…', 'ok')
   }
@@ -3436,7 +3462,7 @@ function init(): void {
     const { mnemonic, key } = newSeedWallet()
     switchWallet(key, false, mnemonic)
     setStatus('Exited watch-only — a fresh local wallet was created. Back up its seed phrase.', 'ok')
-    showSeedModal(mnemonic)
+    localStorage.removeItem(BACKED_UP_KEY); showSeedModal(mnemonic)
   }
   // Send BSV (plain payment) + air-gap export
   $('btnSendBsv').onclick = () => void onSendBsv()
