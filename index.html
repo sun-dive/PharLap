@@ -238,6 +238,7 @@
     .badge { font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:var(--accent2); color:#04122a; padding:1px 6px; border-radius:10px; vertical-align:middle; }
     .warn { border-color:#9e6a03; }
     .warn h2 { color:#e3a008; }
+    .seed-warn { display:block; color:#eab300; font-weight:700; font-size:13px; margin:8px 0 5px; padding:6px 10px; border:1px solid #9e6a03; border-left:3px solid #eab300; border-radius:6px; background:rgba(234,179,3,0.08); }
     .foot { text-align:center; color:var(--muted); font-size:12px; margin:28px 0 8px; }
     .foot a { color:var(--accent2); }
     .woc-badge { height:56px; width:auto; opacity:.9; }
@@ -444,7 +445,7 @@
       </div>
 
       <div data-needs-key>
-      <label>Seed phrase (your backup — write the words down, keep them secret)</label>
+      <label class="seed-warn">⚠️ Seed phrase — your backup. Write the words down and keep them secret.</label>
       <div class="row" style="flex-wrap:nowrap; align-items:stretch">
         <textarea id="seedPhrase" readonly rows="2" autocomplete="off" class="blurred" placeholder="(this wallet was imported from a WIF — it has no seed phrase; back up the WIF below)" style="flex:1 1 auto; min-width:0; resize:none"></textarea>
         <button id="btnSeedShow" class="secondary" style="white-space:nowrap">👁 Reveal</button>
