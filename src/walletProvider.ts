@@ -333,6 +333,10 @@ export class WalletProvider {
 
   async getAddressHistory(address: string = this.getAddress()): Promise<{ txId: string; blockHeight: number }[]> {
     const resp = await fetchWithRetry(`${WOC_BASE}/address/${address}/history`)
+    // WoC returns 404 for an address it has never seen — i.e. a brand-new wallet with zero
+    // transactions. That's an empty history, not a failure; treat it as [] so fresh wallets
+    // (e.g. a gift recipient) load and can claim instead of throwing on first run.
+    if (resp.status === 404) return []
     if (!resp.ok) throw new Error(`WoC history fetch failed: ${resp.status}`)
     const data = await resp.json()
     if (!Array.isArray(data)) return []
