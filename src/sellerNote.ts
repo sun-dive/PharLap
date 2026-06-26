@@ -20,8 +20,10 @@ import { buildNoteScript, parseNoteScript, type NoteFields, type BonusKind } fro
 import { PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding } from './collectionBuilder.ts'
 import type { WalletProvider } from './walletProvider.ts'
 
-/** Cap the note so it stays cheap and on the notification output comfortably. */
-export const MAX_NOTE_BYTES = 280
+/** Cap the note so it stays cheap and rides comfortably on the notification/propagation output. Raised
+ *  280→560 (2026-06-26): the extra bytes per resale are negligible, and the full text is on-chain +
+ *  search-engine-indexable even when the UI truncates the visible portion. */
+export const MAX_NOTE_BYTES = 560
 /** Bound how far back we scan a seller's history looking for their latest note. */
 const MAX_HISTORY_SCAN = 30
 
