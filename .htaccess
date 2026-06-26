@@ -2,6 +2,8 @@
 # Everything else (the SPA at /, bundle.js, /brand, /og/*.jpg …) is served normally as static files.
 RewriteEngine On
 RewriteRule ^c/([0-9a-fA-F]{64})/?$ share.php?c=$1 [L,QSA]
+# Shortened share links: /s/<code> → share.php resolves the code to {txid, holder, aff} (public only).
+RewriteRule ^s/([0-9A-Za-z]{1,16})/?$ share.php?s=$1 [L,QSA]
 
 # Don't expose directory listings (e.g. of the /og cache). Its files are only public cover JPEGs +
 # title/description JSON, so direct access is harmless — just no browsable index.
