@@ -22127,6 +22127,55 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return tracks;
   }
 
+  // src/flacMeta.ts
+  function u32(b, o) {
+    return (b[o] << 24 | b[o + 1] << 16 | b[o + 2] << 8 | b[o + 3]) >>> 0;
+  }
+  function parseFlacPictures(bytes2) {
+    if (bytes2.length < 8 || bytes2[0] !== 102 || bytes2[1] !== 76 || bytes2[2] !== 97 || bytes2[3] !== 67) return [];
+    const pics = [];
+    let off = 4;
+    for (let guard = 0; guard < 4096; guard++) {
+      if (off + 4 > bytes2.length) break;
+      const header = bytes2[off];
+      const isLast = (header & 128) !== 0;
+      const type = header & 127;
+      const len = bytes2[off + 1] << 16 | bytes2[off + 2] << 8 | bytes2[off + 3];
+      const body = off + 4;
+      if (body + len > bytes2.length) break;
+      if (type === 6) {
+        const p = parsePictureBlock(bytes2, body, body + len);
+        if (p != null) pics.push(p);
+      }
+      off = body + len;
+      if (isLast) break;
+    }
+    return pics;
+  }
+  function parsePictureBlock(b, start, end) {
+    let o = start;
+    const dec = new TextDecoder();
+    if (o + 4 > end) return null;
+    const pictureType = u32(b, o);
+    o += 4;
+    if (o + 4 > end) return null;
+    const mimeLen = u32(b, o);
+    o += 4;
+    if (o + mimeLen + 4 > end) return null;
+    const mimeType = dec.decode(new Uint8Array(b.slice(o, o + mimeLen)));
+    o += mimeLen;
+    const descLen = u32(b, o);
+    o += 4;
+    if (o + descLen + 16 + 4 > end) return null;
+    const description = dec.decode(new Uint8Array(b.slice(o, o + descLen)));
+    o += descLen;
+    o += 16;
+    const dataLen = u32(b, o);
+    o += 4;
+    if (o + dataLen > end) return null;
+    return { pictureType, mimeType, description, data: b.slice(o, o + dataLen) };
+  }
+
   // src/messageCodec.ts
   var ENVELOPE_VERSION = 1;
   var FLAG_ENCRYPTED = 1;
@@ -25435,7 +25484,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const tracks = srcTracks.map((t) => {
       const url = URL.createObjectURL(new Blob([new Uint8Array(t.bytes)], { type: t.mimeType }));
       albumUrls.push(url);
-      return { name: t.name, mimeType: t.mimeType, url };
+      const isFlac = t.mimeType.includes("flac") || /\.flac$/i.test(t.name);
+      const artUrls = (isFlac ? parseFlacPictures(t.bytes) : []).map((p) => {
+        const u = URL.createObjectURL(new Blob([new Uint8Array(p.data)], { type: p.mimeType || "image/jpeg" }));
+        albumUrls.push(u);
+        return u;
+      });
+      return { name: t.name, mimeType: t.mimeType, url, artUrls };
     });
     const probe = document.createElement("audio");
     const GOOD_EXT = /\.(mp3|m4a|aac|mp4|opus|ogg|oga|wav|wave|aif|aiff|flac|weba)$/i;
@@ -25445,7 +25500,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const otherTracks = tracks.filter((t) => !(isAudioFile(t) && canPlayInBrowser(t)));
     const stage = document.createElement("div");
     stage.className = "ep-stage";
-    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><div class="ep-disc-container"><div class="ep-disc"></div><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
+    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
     host.append(stage);
     const q = (sel) => stage.querySelector(sel);
     const songList = q(".ep-song-list");
@@ -25466,6 +25521,30 @@ It's posted to your own address and spends a small network fee. Proceed?`
     let analyser = null;
     let dataArray = null;
     let rafId = 0, isPlaying = false, current = 0, tornDown = false;
+    const art = q(".ep-art");
+    let artTimer = 0;
+    function showArt(urls) {
+      window.clearInterval(artTimer);
+      if (urls.length === 0) {
+        art.style.display = "none";
+        art.style.opacity = "0";
+        return;
+      }
+      let i = 0;
+      art.style.display = "block";
+      art.src = urls[0];
+      art.style.opacity = "1";
+      if (urls.length > 1) {
+        artTimer = window.setInterval(() => {
+          i = (i + 1) % urls.length;
+          art.style.opacity = "0";
+          window.setTimeout(() => {
+            art.src = urls[i];
+            art.style.opacity = "1";
+          }, 400);
+        }, 6e3);
+      }
+    }
     let dlBox = null;
     const dlAdded = /* @__PURE__ */ new Set();
     const addDownload = (t, note) => {
@@ -25515,6 +25594,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       initAudioContext();
       void audioCtx?.resume();
       audio.src = audioTracks[current].url;
+      showArt(audioTracks[current].artUrls);
       nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`;
       void audio.play().catch(() => {
         nowPlaying.textContent = "Tap a track to play";
@@ -25614,6 +25694,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     if (audioTracks.length > 0) {
       songList.children[0].classList.add("active");
       nowPlaying.textContent = "Tap a track to play";
+      showArt(audioTracks[0].artUrls);
     } else {
       nowPlaying.textContent = otherTracks.some(isAudioFile) ? "No in-browser-playable audio \u2014 see downloads below." : "This release has no playable audio.";
     }
@@ -25621,6 +25702,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     epTeardown = () => {
       tornDown = true;
       cancelAnimationFrame(rafId);
+      window.clearInterval(artTimer);
       try {
         audio.pause();
       } catch {
@@ -27811,7 +27893,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"1297945"} \xB7 ${"2026-06-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"641f175"} \xB7 ${"2026-06-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
