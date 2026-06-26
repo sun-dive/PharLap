@@ -232,6 +232,55 @@
     .viewer-img { max-width:100%; max-height:74vh; border-radius:6px; display:block; }
     .viewer-pre { white-space:pre-wrap; word-break:break-word; max-height:74vh; overflow:auto; background:#0d1117; padding:12px; border-radius:6px; font-size:12px; }
     .viewer-dl { color:var(--accent2); }
+    /* ── Ethereal EP player (ported from MusicPlayer-test; scoped ep-, no external font/deps) ── */
+    .ep-stage { position:relative; width:100%; max-height:74vh; overflow:auto; border-radius:18px; padding:22px 14px;
+      background:linear-gradient(135deg,#0f0c29,#302b63,#24243e); display:flex; justify-content:center; }
+    .ep-orbs { position:absolute; inset:0; overflow:hidden; z-index:0; border-radius:18px; }
+    .ep-orb { position:absolute; border-radius:50%; filter:blur(80px); opacity:.5; transition:transform .1s ease-out, opacity .1s ease-out, filter .1s ease-out; }
+    .ep-orb:nth-child(1){ width:340px; height:340px; background:linear-gradient(45deg,#ff006e,#8338ec); top:-120px; left:-80px; }
+    .ep-orb:nth-child(2){ width:300px; height:300px; background:linear-gradient(45deg,#3a86ff,#00f5d4); bottom:-100px; right:-80px; }
+    .ep-orb:nth-child(3){ width:240px; height:240px; background:linear-gradient(45deg,#fb5607,#ffbe0b); top:50%; left:50%; transform:translate(-50%,-50%); }
+    .ep-player { position:relative; z-index:1; width:100%; max-width:380px; background:rgba(255,255,255,.03); backdrop-filter:blur(20px);
+      border-radius:24px; padding:22px; border:1px solid rgba(255,255,255,.1); box-shadow:0 25px 50px -12px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.1); }
+    .ep-disc-container { position:relative; width:180px; height:180px; margin:0 auto 20px; }
+    .ep-disc { width:100%; height:100%; border-radius:50%;
+      background:
+        radial-gradient(circle at 50% 50%, #111 0%, #111 15%, transparent 15.5%),
+        radial-gradient(circle at 50% 50%, #333 16%, #222 17%, #111 18%, #222 19%, #333 20%, transparent 20.5%),
+        repeating-radial-gradient(circle at 50% 50%, #1a1a1a 21%, #222 22%, #1a1a1a 23%),
+        conic-gradient(from 0deg, #2a2a2a, #1a1a1a, #2a2a2a, #1a1a1a, #2a2a2a);
+      box-shadow:0 0 0 8px #111, 0 0 30px rgba(0,0,0,.5), inset 0 0 30px rgba(0,0,0,.3);
+      animation:ep-spin 3s linear infinite; animation-play-state:paused; }
+    .ep-disc.playing { animation-play-state:running; }
+    .ep-disc::after { content:''; position:absolute; top:50%; left:50%; width:52px; height:52px; transform:translate(-50%,-50%);
+      border-radius:50%; background:linear-gradient(135deg,#8338ec,#ff006e); box-shadow:0 0 20px rgba(131,56,236,.5); }
+    @keyframes ep-spin { from{transform:rotate(0)} to{transform:rotate(360deg)} }
+    .ep-visualizer-container { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:252px; height:252px; pointer-events:none; }
+    .ep-visualizer { width:100%; height:100%; }
+    .ep-song-list { list-style:none; max-height:160px; overflow-y:auto; margin:0 0 14px; padding:0; scrollbar-width:thin; }
+    .ep-song-list li { padding:10px 14px; margin-bottom:6px; background:rgba(255,255,255,.05); border-radius:14px; cursor:pointer;
+      transition:all .25s; color:rgba(255,255,255,.7); border:1px solid transparent; font-size:14px; word-break:break-word; }
+    .ep-song-list li:hover { background:rgba(255,255,255,.1); transform:translateX(4px); color:#fff; }
+    .ep-song-list li.active { background:linear-gradient(135deg,rgba(131,56,236,.3),rgba(255,0,110,.3)); border-color:rgba(255,0,110,.3);
+      color:#fff; font-weight:600; box-shadow:0 0 30px rgba(255,0,110,.2); }
+    .ep-now-playing { text-align:center; color:rgba(255,255,255,.6); margin-bottom:12px; font-size:13px; min-height:1.4em; letter-spacing:1px; }
+    .ep-now-playing span { background:linear-gradient(90deg,#ff006e,#8338ec,#3a86ff); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; font-weight:600; }
+    .ep-progress-container { width:100%; height:6px; background:rgba(255,255,255,.1); border-radius:3px; margin-bottom:10px; cursor:pointer; overflow:hidden; }
+    .ep-progress-bar { height:100%; background:linear-gradient(90deg,#ff006e,#8338ec); border-radius:3px; width:0%; transition:width .1s linear; }
+    .ep-time-display { display:flex; justify-content:space-between; font-size:11px; color:rgba(255,255,255,.4); margin-bottom:16px; }
+    .ep-controls { display:flex; justify-content:center; align-items:center; gap:20px; }
+    .ep-control-btn { background:none; border:none; cursor:pointer; padding:8px; border-radius:50%; display:flex; align-items:center; justify-content:center; transition:all .25s; }
+    .ep-control-btn svg { width:24px; height:24px; fill:rgba(255,255,255,.7); transition:all .25s; }
+    .ep-control-btn:hover svg { fill:#fff; filter:drop-shadow(0 0 10px rgba(255,255,255,.5)); }
+    .ep-play-btn { width:60px; height:60px; background:linear-gradient(135deg,#ff006e,#8338ec); box-shadow:0 0 30px rgba(255,0,110,.4); }
+    .ep-play-btn:hover { transform:scale(1.08); box-shadow:0 0 40px rgba(255,0,110,.6); }
+    .ep-play-btn svg { width:26px; height:26px; fill:#fff; }
+    .ep-volume-container { display:flex; align-items:center; justify-content:center; gap:10px; margin-top:16px; }
+    .ep-volume-container svg { width:18px; height:18px; fill:rgba(255,255,255,.5); }
+    .ep-volume-slider { -webkit-appearance:none; appearance:none; width:100px; height:4px; background:rgba(255,255,255,.1); border-radius:2px; outline:none; }
+    .ep-volume-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:14px; height:14px; background:linear-gradient(135deg,#ff006e,#8338ec); border-radius:50%; cursor:pointer; box-shadow:0 0 10px rgba(255,0,110,.5); }
+    .ep-downloads { margin-top:12px; display:flex; flex-direction:column; gap:6px; }
+    .ep-dl-label { font-size:12px; color:rgba(255,255,255,.5); margin-bottom:2px; }
     .viewer-banner { padding:9px 12px; margin-bottom:12px; border-radius:6px; font-size:13px; font-weight:600; border:1px solid var(--line); }
     .viewer-banner.ok { border-color:var(--accent); color:var(--accent); background:rgba(46,160,67,0.10); }
     .viewer-banner.error { border-color:var(--err); color:#ffb4ae; background:rgba(248,81,73,0.10); }
@@ -549,7 +598,7 @@
       <label>Editions to mint</label>
       <input id="mintCount" type="number" min="1" value="1" />
       <label>Embed a file (optional)</label>
-      <input id="mintFile" type="file" />
+      <input id="mintFile" type="file" multiple />
       <div class="row" style="margin-top:10px"><button id="btnMint">Mint collection</button></div>
       <p class="muted" style="font-size:12px;margin:8px 0 0">Creates TX1 (template, the Collection ID) then TX2 (genesis editions). Requires funds on your address.</p>
     </div>
@@ -594,7 +643,8 @@
       <label>Editions to mint now</label>
       <input id="edCount" type="number" min="1" value="1" />
       <label>Embed a file (optional — viewable by holders)</label>
-      <input id="edFile" type="file" />
+      <input id="edFile" type="file" multiple />
+      <small class="muted" style="display:block;margin:3px 0 0;font-size:12px">Pick several files to publish a multi-track <b>album/EP</b> as one NFT — they play inline in the viewer. Number them 01…, 02… to set the track order.</small>
       <label class="check"><input id="edEncrypt" type="checkbox" /> Encrypt the file (Tier 1 — holders decrypt; an inconvenience, not DRM)</label>
       <div class="row" style="margin-top:10px">
         <button id="btnMintEdition">Mint edition collection</button>

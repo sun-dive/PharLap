@@ -17,6 +17,7 @@ import { buildAirgapRequest, buildAirgapPaymentRequest, signAirgapRequest, encod
 import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress } from './payment.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
+import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, noteHasContent, type SellerNote } from './sellerNote.ts'
 import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
@@ -433,6 +434,43 @@ async function readFile(input: HTMLInputElement): Promise<{ mimeType: string; fi
   return { mimeType: f.type || 'application/octet-stream', fileName: f.name, bytes: Array.from(buf) }
 }
 
+/** Read a content input: ONE file → that file; MULTIPLE → packed into a single PharLap album container
+ *  (one blob to the chain — covenant/provenance unchanged). Tracks are ordered by filename, so numbering
+ *  them 01.., 02.. controls the order. The whole release is hash-committed + timestamped as one unit. */
+async function readContent(input: HTMLInputElement, albumName: string): Promise<{ mimeType: string; fileName: string; bytes: number[] } | undefined> {
+  const fs = input.files
+  if (!fs || fs.length === 0) return undefined
+  if (fs.length === 1) return readFile(input)
+  if (fs.length > MAX_ALBUM_TRACKS) throw new Error(`Select at most ${MAX_ALBUM_TRACKS} tracks for one release (got ${fs.length}).`)
+  const ordered = Array.from(fs).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+  const tracks: AlbumTrack[] = []
+  for (const f of ordered) tracks.push({ name: f.name, mimeType: f.type || 'application/octet-stream', bytes: Array.from(new Uint8Array(await f.arrayBuffer())) })
+  const safe = (albumName || 'album').replace(/[^\w.-]+/g, '_')
+  return { mimeType: ALBUM_MIME, fileName: `${safe}.plep`, bytes: packAlbum(tracks) }
+}
+
+/** Non-blocking heads-up before embedding large or lossless audio on-chain (it's permanent and the fee
+ *  scales with size). A WARNING, not a gate — returns true to proceed (always an option, for max-fidelity
+ *  masters), false only if the user explicitly cancels. Silent when there's nothing to flag. */
+function confirmAudioFidelity(file: { mimeType: string; fileName: string; bytes: number[] }): boolean {
+  const isLossless = (mime: string, name: string): boolean =>
+    /wav|aiff|x-aiff|flac|x-flac|x-pn-wav/.test(mime.toLowerCase()) || /\.(wav|aif|aiff|flac|alac)$/i.test(name)
+  let lossless = false
+  if (file.mimeType === ALBUM_MIME) {
+    for (const t of parseAlbum(file.bytes) ?? []) if (isLossless(t.mimeType, t.name)) { lossless = true; break }
+  } else {
+    lossless = isLossless(file.mimeType, file.fileName)
+  }
+  const big = file.bytes.length > 8 * 1024 * 1024 // 8 MB
+  if (!lossless && !big) return true
+  const advice = lossless
+    ? 'Compressing to MP3/Opus first can cut the cost dramatically — but if you want maximum fidelity, keeping it lossless is totally fine.'
+    : 'Compressing it first can cut the cost — but if you need the full file, that’s fine.'
+  return confirm(
+    `Heads up — you’re embedding ${lossless ? 'uncompressed / lossless audio' : 'a large file'} (${kb(file.bytes.length)}).\n\n` +
+    `It’s stored permanently on-chain, so the mint fee scales with its size. ${advice}\n\nMint as-is?`)
+}
+
 async function onMint(): Promise<void> {
   const k = requireKey(); if (k == null) return
   const name = val('mintName')
@@ -440,7 +478,8 @@ async function onMint(): Promise<void> {
   if (!name) { setStatus('Enter a collection name.', 'error'); return }
   setStatus('Preparing the mint transaction…')
   try {
-    const file = await readFile($('mintFile') as HTMLInputElement)
+    const file = await readContent($('mintFile') as HTMLInputElement, name)
+    if (file != null && !confirmAudioFidelity(file)) { setStatus('Mint cancelled — compress the file first, or proceed as-is when you’re ready.'); return }
     const result = await createCollection(provider, k, {
       tokenName: name, supply: count, mintCount: count, file,
       confirmSpend: total => confirm(
@@ -683,9 +722,14 @@ async function onMintEdition(): Promise<void> {
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
   const description = val('edDescription')
   try {
-    const file = await readFile($('edFile') as HTMLInputElement)
+    const file = await readContent($('edFile') as HTMLInputElement, name)
     const cover = croppedCover ?? await readFile($('edCover') as HTMLInputElement) // prefer the cropped/resized cover
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
+    const trackCount = file?.mimeType === ALBUM_MIME ? (parseAlbum(file.bytes)?.length ?? 0) : 0
+    const fileLabel = file == null ? ''
+      : trackCount > 0 ? ` (embedding a ${trackCount}-track album, ${kb(file.bytes.length)})`
+      : ` (embedding a ${kb(file.bytes.length)} file)`
+    if (file != null && !confirmAudioFidelity(file)) { setStatus('Mint cancelled — compress the file first, or proceed as-is when you’re ready.'); return }
     // v1 fixed-fee editions only. Covenant v2 (percentage/ranged pricing) stays in the codebase
     // (createEditionV2 / replicateEditionV2 / parseEditionScriptV2) but is hidden from the UI until built out.
     const terms = ownTerms()
@@ -693,7 +737,7 @@ async function onMintEdition(): Promise<void> {
     const result = await createEdition(provider, k, {
       tokenName: name, terms, mintCount: count, file, encrypt, description, cover,
       confirmSpend: total => confirm(
-        `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ''}?\n\n` +
+        `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${fileLabel}?\n\n` +
         `This spends ${total.toLocaleString()} sats from your wallet — including a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.\n\n` +
         `Buyers later pay the publisher ${terms.publisherFeeSats} + holder ${terms.holderFeeSats} sats per copy.\n\nProceed?`),
     })
@@ -1366,8 +1410,214 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
   }
 }
 
+// Object URLs for unpacked album tracks + the live player's teardown — released when the viewer
+// re-renders or closes (stops the animation loop, audio, and AudioContext; revokes the blob URLs).
+let albumUrls: string[] = []
+let epTeardown: (() => void) | null = null
+function revokeAlbumUrls(): void {
+  if (epTeardown) { try { epTeardown() } catch { /* ignore */ } epTeardown = null }
+  for (const u of albumUrls) URL.revokeObjectURL(u)
+  albumUrls = []
+}
+
+/** Render one or more tracks (a packed album, or a single audio file) as the "Ethereal" EP player —
+ *  spinning disc, circular audio visualizer, reactive background orbs, playlist, seek, prev/play/next,
+ *  volume. Plays the in-memory tracks; non-audio files are offered as downloads below. Ported (scoped
+ *  ep-) from the MusicPlayer-test player. */
+function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
+  if (srcTracks.length === 0) { host.textContent = 'This release has no playable content.'; return }
+  const stripExt = (n: string): string => n.replace(/\.[^./\\]+$/, '')
+  const tracks = srcTracks.map(t => {
+    const url = URL.createObjectURL(new Blob([new Uint8Array(t.bytes)], { type: t.mimeType }))
+    albumUrls.push(url)
+    return { name: t.name, mimeType: t.mimeType, url }
+  })
+  // Route only browser-PLAYABLE audio into the player; formats it can't decode (WMA/APE/DSD…) and non-audio
+  // files become downloads instead of a silent dead player. canPlayType is the source of truth; when the MIME
+  // is missing we trust a known-good extension and let the runtime error handler catch any remaining miss.
+  const probe = document.createElement('audio')
+  const GOOD_EXT = /\.(mp3|m4a|aac|mp4|opus|ogg|oga|wav|wave|aif|aiff|flac|weba)$/i
+  const isAudioFile = (t: { mimeType: string; name: string }): boolean => t.mimeType.startsWith('audio/') || GOOD_EXT.test(t.name)
+  const canPlayInBrowser = (t: { mimeType: string; name: string }): boolean =>
+    (t.mimeType !== '' && t.mimeType !== 'application/octet-stream') ? probe.canPlayType(t.mimeType) !== '' : GOOD_EXT.test(t.name)
+  const audioTracks = tracks.filter(t => isAudioFile(t) && canPlayInBrowser(t))
+  const otherTracks = tracks.filter(t => !(isAudioFile(t) && canPlayInBrowser(t)))
+
+  const stage = document.createElement('div')
+  stage.className = 'ep-stage'
+  stage.innerHTML =
+    '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div>' +
+    '<div class="ep-player">' +
+      '<div class="ep-disc-container"><div class="ep-disc"></div>' +
+        '<div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div>' +
+      '<ul class="ep-song-list"></ul>' +
+      '<div class="ep-now-playing"></div>' +
+      '<div class="ep-progress-container"><div class="ep-progress-bar"></div></div>' +
+      '<div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div>' +
+      '<div class="ep-controls">' +
+        '<button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>' +
+        '<button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button>' +
+        '<button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>' +
+      '</div>' +
+      '<div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg>' +
+        '<input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div>' +
+    '</div>'
+  host.append(stage)
+
+  const q = <T extends Element>(sel: string): T => stage.querySelector(sel) as T
+  const songList = q<HTMLUListElement>('.ep-song-list')
+  const disc = q<HTMLElement>('.ep-disc')
+  const nowPlaying = q<HTMLElement>('.ep-now-playing')
+  const progressBar = q<HTMLElement>('.ep-progress-bar')
+  const progressContainer = q<HTMLElement>('.ep-progress-container')
+  const curEl = q<HTMLElement>('.ep-cur'), durEl = q<HTMLElement>('.ep-dur')
+  const playIcon = q<SVGElement>('.ep-play-icon')
+  const canvas = q<HTMLCanvasElement>('.ep-visualizer')
+  const cctx = canvas.getContext('2d')!
+  const orbs = Array.from(stage.querySelectorAll('.ep-orb')) as HTMLElement[]
+  const volume = q<HTMLInputElement>('.ep-volume-slider')
+
+  const audio = new Audio()
+  audio.preload = 'metadata'
+  audio.volume = parseFloat(volume.value)
+  let audioCtx: AudioContext | null = null
+  let analyser: AnalyserNode | null = null
+  let dataArray: Uint8Array<ArrayBuffer> | null = null
+  let rafId = 0, isPlaying = false, current = 0, tornDown = false
+
+  // Lazy "Downloads" list under the player — for non-audio files and any track the browser can't play.
+  let dlBox: HTMLElement | null = null
+  const dlAdded = new Set<string>()
+  const addDownload = (t: { name: string; url: string }, note?: string): void => {
+    if (dlAdded.has(t.url)) return
+    dlAdded.add(t.url)
+    if (dlBox == null) {
+      dlBox = document.createElement('div'); dlBox.className = 'ep-downloads'
+      const lbl = document.createElement('div'); lbl.className = 'ep-dl-label'; lbl.textContent = 'Downloads'
+      dlBox.append(lbl); host.append(dlBox)
+    }
+    const a = document.createElement('a')
+    a.href = t.url; a.download = t.name; a.className = 'viewer-dl'
+    a.textContent = `Download ${t.name}${note ? ` — ${note}` : ''}`
+    dlBox.append(a)
+  }
+
+  const fmt = (s: number): string => Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00'
+
+  function initAudioContext(): void {
+    if (audioCtx) return
+    try {
+      const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      audioCtx = new AC()
+      analyser = audioCtx.createAnalyser(); analyser.fftSize = 256
+      audioCtx.createMediaElementSource(audio).connect(analyser)
+      analyser.connect(audioCtx.destination)
+      dataArray = new Uint8Array(analyser.frequencyBinCount)
+    } catch { /* the visualizer is best-effort; audio still plays without it */ }
+  }
+  const updatePlayIcon = (): void => { playIcon.innerHTML = isPlaying ? '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>' : '<path d="M8 5v14l11-7z"/>' }
+  function updateProgress(): void {
+    if (audio.duration) progressBar.style.width = `${(audio.currentTime / audio.duration) * 100}%`
+    curEl.textContent = fmt(audio.currentTime)
+  }
+  function play(i: number): void {
+    if (audioTracks.length === 0) return
+    current = ((i % audioTracks.length) + audioTracks.length) % audioTracks.length
+    Array.from(songList.children).forEach((li, k) => li.classList.toggle('active', k === current))
+    initAudioContext(); void audioCtx?.resume()
+    audio.src = audioTracks[current].url
+    nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`
+    void audio.play().catch(() => { nowPlaying.textContent = 'Tap a track to play' })
+  }
+
+  audioTracks.forEach((t, i) => {
+    const li = document.createElement('li'); li.textContent = stripExt(t.name)
+    li.onclick = () => play(i)
+    songList.append(li)
+  })
+  audio.addEventListener('timeupdate', updateProgress)
+  audio.addEventListener('loadedmetadata', () => { durEl.textContent = fmt(audio.duration) })
+  audio.addEventListener('play', () => { isPlaying = true; disc.classList.add('playing'); updatePlayIcon() })
+  audio.addEventListener('pause', () => { isPlaying = false; disc.classList.remove('playing'); updatePlayIcon() })
+  audio.addEventListener('ended', () => play(current + 1))
+  audio.addEventListener('error', () => {
+    if (tornDown || !audio.src) return // ignore the error fired when src is cleared on teardown
+    const t = audioTracks[current]
+    if (t == null) return
+    nowPlaying.innerHTML = `<span>Can’t play “${escapeHtml(stripExt(t.name))}” in this browser — download it below.</span>`
+    addDownload(t, 'unsupported format')
+  })
+
+  q<HTMLElement>('.ep-prev').onclick = () => play(current - 1)
+  q<HTMLElement>('.ep-next').onclick = () => play(current + 1)
+  q<HTMLElement>('.ep-play-btn').onclick = () => {
+    if (!audio.src) { play(0); return }
+    if (isPlaying) audio.pause(); else { void audioCtx?.resume(); void audio.play() }
+  }
+  progressContainer.onclick = (e: MouseEvent) => {
+    if (!audio.duration) return
+    const r = progressContainer.getBoundingClientRect()
+    audio.currentTime = ((e.clientX - r.left) / r.width) * audio.duration
+  }
+  volume.oninput = () => { audio.volume = parseFloat(volume.value) }
+
+  // Reactive orbs + circular bars — one rAF loop, both best-effort (no analyser ⇒ static).
+  function frame(): void {
+    rafId = requestAnimationFrame(frame)
+    if (analyser != null && isPlaying && dataArray != null) {
+      analyser.getByteFrequencyData(dataArray)
+      let bass = 0, mids = 0, highs = 0
+      for (let i = 0; i < 10; i++) bass += dataArray[i]
+      for (let i = 10; i < 40; i++) mids += dataArray[i]
+      for (let i = 40; i < 80; i++) highs += dataArray[i]
+      bass /= 10 * 255; mids /= 30 * 255; highs /= 40 * 255
+      const t = Date.now()
+      orbs[0].style.transform = `translate(${Math.sin(t / 1000) * 30 * bass}px, ${Math.cos(t / 1200) * 30 * bass}px) scale(${1 + bass * 0.5})`
+      orbs[0].style.opacity = `${0.4 + bass * 0.4}`
+      orbs[1].style.transform = `translate(${Math.cos(t / 1100) * 40 * mids}px, ${Math.sin(t / 900) * 40 * mids}px) scale(${1 + mids * 0.4})`
+      orbs[1].style.opacity = `${0.4 + mids * 0.4}`
+      orbs[2].style.transform = `translate(calc(-50% + ${Math.sin(t / 800) * 50 * highs}px), calc(-50% + ${Math.cos(t / 1000) * 50 * highs}px)) scale(${1 + highs * 0.3})`
+      orbs[2].style.opacity = `${0.4 + highs * 0.5}`
+    }
+    cctx.clearRect(0, 0, canvas.width, canvas.height)
+    if (analyser != null && isPlaying && dataArray != null) {
+      const cx = canvas.width / 2, cy = canvas.height / 2, radius = 95, bars = 64
+      for (let i = 0; i < bars; i++) {
+        const h = (dataArray[i] / 255) * 42
+        const a = (i / bars) * Math.PI * 2 - Math.PI / 2
+        const x1 = cx + Math.cos(a) * radius, y1 = cy + Math.sin(a) * radius
+        const x2 = cx + Math.cos(a) * (radius + h), y2 = cy + Math.sin(a) * (radius + h)
+        const g = cctx.createLinearGradient(x1, y1, x2, y2)
+        g.addColorStop(0, 'rgba(255,0,110,0.85)'); g.addColorStop(0.5, 'rgba(131,56,236,0.85)'); g.addColorStop(1, 'rgba(58,134,255,0.85)')
+        cctx.beginPath(); cctx.moveTo(x1, y1); cctx.lineTo(x2, y2)
+        cctx.strokeStyle = g; cctx.lineWidth = 3; cctx.lineCap = 'round'; cctx.stroke()
+      }
+    }
+  }
+  frame()
+
+  if (audioTracks.length > 0) {
+    (songList.children[0] as HTMLElement).classList.add('active')
+    nowPlaying.textContent = 'Tap a track to play'
+  } else {
+    nowPlaying.textContent = otherTracks.some(isAudioFile) ? 'No in-browser-playable audio — see downloads below.' : 'This release has no playable audio.'
+  }
+
+  // Non-audio files (artwork, liner notes…) and any unplayable audio → downloads under the player.
+  for (const t of otherTracks) addDownload(t, isAudioFile(t) ? 'can’t play in this browser' : undefined)
+
+  epTeardown = () => {
+    tornDown = true
+    cancelAnimationFrame(rafId)
+    try { audio.pause() } catch { /* ignore */ }
+    audio.src = ''
+    try { void audioCtx?.close() } catch { /* ignore */ }
+  }
+}
+
 function showFile(title: string, file: { mimeType: string; fileName: string; fileBytes: number[] }, verified: boolean, note?: string): void {
   const content = $('viewerContent')
+  revokeAlbumUrls()
   if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
   viewerUrl = URL.createObjectURL(new Blob([new Uint8Array(file.fileBytes)], { type: file.mimeType }))
   $('viewerTitle').textContent =
@@ -1381,7 +1631,13 @@ function showFile(title: string, file: { mimeType: string; fileName: string; fil
     banner.style.display = 'none'
   }
   content.innerHTML = ''
-  if (file.mimeType.startsWith('image/')) {
+  // An album unpacks to many tracks; a lone audio file plays as a one-track release — both get the player.
+  const albumTracks = isAlbum(file.mimeType, file.fileBytes) ? parseAlbum(file.fileBytes) : null
+  if (albumTracks != null) {
+    renderPlayer(content, albumTracks)
+  } else if (file.mimeType.startsWith('audio/')) {
+    renderPlayer(content, [{ name: file.fileName, mimeType: file.mimeType, bytes: file.fileBytes }])
+  } else if (file.mimeType.startsWith('image/')) {
     const img = document.createElement('img')
     img.src = viewerUrl
     img.className = 'viewer-img'
@@ -1405,6 +1661,7 @@ function showFile(title: string, file: { mimeType: string; fileName: string; fil
 function closeViewer(): void {
   $('viewer').style.display = 'none'
   if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
+  revokeAlbumUrls()
   $('viewerContent').innerHTML = ''
 }
 
@@ -1423,6 +1680,7 @@ const CATS: { key: Cat; label: string; icon: string }[] = [
 function mimeCategory(mime: string | null): Cat {
   if (mime == null || mime === '') return 'other'
   const m = mime.toLowerCase()
+  if (m === ALBUM_MIME) return 'audio' // a packed album is a music release
   if (m.startsWith('image/')) return 'image'
   if (m.startsWith('audio/')) return 'audio'
   if (m.startsWith('video/')) return 'video'
