@@ -18,6 +18,7 @@ import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress }
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
+import { parseFlacPictures } from './flacMeta.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, noteHasContent, type SellerNote } from './sellerNote.ts'
 import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
@@ -1541,7 +1542,14 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   const tracks = srcTracks.map(t => {
     const url = URL.createObjectURL(new Blob([new Uint8Array(t.bytes)], { type: t.mimeType }))
     albumUrls.push(url)
-    return { name: t.name, mimeType: t.mimeType, url }
+    // Embedded cover art (FLAC PICTURE blocks — e.g. front + back cover added in Kid3) → object URLs for a
+    // slideshow on the disc. Only FLAC for now (MP3 ID3/APIC could be added the same way).
+    const isFlac = t.mimeType.includes('flac') || /\.flac$/i.test(t.name)
+    const artUrls = (isFlac ? parseFlacPictures(t.bytes) : []).map(p => {
+      const u = URL.createObjectURL(new Blob([new Uint8Array(p.data)], { type: p.mimeType || 'image/jpeg' }))
+      albumUrls.push(u); return u
+    })
+    return { name: t.name, mimeType: t.mimeType, url, artUrls }
   })
   // Route only browser-PLAYABLE audio into the player; formats it can't decode (WMA/APE/DSD…) and non-audio
   // files become downloads instead of a silent dead player. canPlayType is the source of truth; when the MIME
@@ -1559,7 +1567,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   stage.innerHTML =
     '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div>' +
     '<div class="ep-player">' +
-      '<div class="ep-disc-container"><div class="ep-disc"></div>' +
+      '<div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" />' +
         '<div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div>' +
       '<ul class="ep-song-list"></ul>' +
       '<div class="ep-now-playing"></div>' +
@@ -1595,6 +1603,23 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   let analyser: AnalyserNode | null = null
   let dataArray: Uint8Array<ArrayBuffer> | null = null
   let rafId = 0, isPlaying = false, current = 0, tornDown = false
+
+  // Embedded cover art on the disc — slideshow (cross-fade) if a track carries more than one picture.
+  const art = q<HTMLImageElement>('.ep-art')
+  let artTimer = 0
+  function showArt(urls: string[]): void {
+    window.clearInterval(artTimer)
+    if (urls.length === 0) { art.style.display = 'none'; art.style.opacity = '0'; return }
+    let i = 0
+    art.style.display = 'block'; art.src = urls[0]; art.style.opacity = '1'
+    if (urls.length > 1) {
+      artTimer = window.setInterval(() => {
+        i = (i + 1) % urls.length
+        art.style.opacity = '0'
+        window.setTimeout(() => { art.src = urls[i]; art.style.opacity = '1' }, 400)
+      }, 6000)
+    }
+  }
 
   // Lazy "Downloads" list under the player — for non-audio files and any track the browser can't play.
   let dlBox: HTMLElement | null = null
@@ -1637,6 +1662,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     Array.from(songList.children).forEach((li, k) => li.classList.toggle('active', k === current))
     initAudioContext(); void audioCtx?.resume()
     audio.src = audioTracks[current].url
+    showArt(audioTracks[current].artUrls)
     nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`
     void audio.play().catch(() => { nowPlaying.textContent = 'Tap a track to play' })
   }
@@ -1710,6 +1736,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   if (audioTracks.length > 0) {
     (songList.children[0] as HTMLElement).classList.add('active')
     nowPlaying.textContent = 'Tap a track to play'
+    showArt(audioTracks[0].artUrls) // show the first track's cover up front, before playback
   } else {
     nowPlaying.textContent = otherTracks.some(isAudioFile) ? 'No in-browser-playable audio — see downloads below.' : 'This release has no playable audio.'
   }
@@ -1720,6 +1747,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   epTeardown = () => {
     tornDown = true
     cancelAnimationFrame(rafId)
+    window.clearInterval(artTimer)
     try { audio.pause() } catch { /* ignore */ }
     audio.src = ''
     try { void audioCtx?.close() } catch { /* ignore */ }
