@@ -24025,6 +24025,55 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const code = myRefCode();
     return code != null && code !== "" ? `${url}&aff=${encodeURIComponent(code)}` : url;
   }
+  function collectionShareUrl(txid, holder, giftWif) {
+    const params = new URLSearchParams({ h: holder });
+    if (giftWif) params.set("g", giftWif);
+    return withAff(`${location.origin}/c/${txid}#${params.toString()}`);
+  }
+  function coverToJpegDataUrl(cover) {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(new Blob([new Uint8Array(cover.bytes)], { type: cover.mimeType }));
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const c = document.createElement("canvas");
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          const ctx = c.getContext("2d");
+          if (ctx == null) {
+            resolve(null);
+            return;
+          }
+          ctx.drawImage(img, 0, 0);
+          resolve(c.toDataURL("image/jpeg", 0.85));
+        } catch {
+          resolve(null);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
+      img.src = url;
+    });
+  }
+  var ogRegistered = /* @__PURE__ */ new Set();
+  async function registerOgAssets(info) {
+    if (ogRegistered.has(info.tx1Ref)) return;
+    ogRegistered.add(info.tx1Ref);
+    try {
+      const cover = info.cover ? await coverToJpegDataUrl(info.cover) : null;
+      await fetch("/register.php", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ txid: info.tx1Ref, title: info.name, description: info.description, cover: cover ?? void 0 })
+      });
+    } catch {
+      ogRegistered.delete(info.tx1Ref);
+    }
+  }
   function renderAffField() {
     const el = document.getElementById("affRefCode");
     if (el != null) el.value = myRefCode() ?? "";
@@ -24750,7 +24799,7 @@ Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or
       store2.markSent(t.txId, t.outputIndex);
       renderTokens();
       pendingListPartner = null;
-      const link = `${location.origin}${location.pathname}#c=${t.collectionId}&h=${partner}`;
+      const link = collectionShareUrl(t.collectionId, partner);
       setStatus(`\u2705 Partner onboarded. Tx ${short(r2.txId)} \u2014 share their listing link.`, "ok");
       showPartnerLinkModal(name, link, partner);
     } catch (e) {
@@ -26787,6 +26836,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       const info = await loadCollection(tx1Ref, holderPubKey);
       currentCollection = { info, holderPubKey };
       renderCollectionView(info);
+      void registerOgAssets(info);
       if (cvGiftWif) {
         setCvGetLabel("\u{1F381} Get your free copy");
         $("cvPrice").innerHTML = '\u{1F381} <b>A free gift from the publisher</b> <span class="muted">\u2014 claim your copy, no payment and no funds needed.</span>';
@@ -26815,7 +26865,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     if (!currentCollection) return null;
     const { info, holderPubKey } = currentCollection;
     const h = holderPubKey ?? pubKeyHex;
-    return withAff(`${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`);
+    return collectionShareUrl(info.tx1Ref, h);
   }
   function shareCollectionLink() {
     const link = currentShareLink();
@@ -27183,7 +27233,7 @@ Proceed?`
     try {
       const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId);
       const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, k, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach });
-      const links = voucherWifs.map((wif) => withAff(`${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`));
+      const links = voucherWifs.map((wif) => collectionShareUrl(t.collectionId, pubKeyHex, wif));
       setStatus(`\u2705 ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, "ok");
       showGiftLinksModal(t.collectionName ?? "Free gift", links);
     } catch (e) {
@@ -27196,7 +27246,7 @@ Proceed?`
     setStatus("Recovering your gift links from chain\u2026");
     try {
       const scan = await scanGiftVouchers(provider, k, t.collectionId);
-      const links = scan.live.map((v) => withAff(`${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`));
+      const links = scan.live.map((v) => collectionShareUrl(t.collectionId, pubKeyHex, v.wif));
       if (links.length === 0) {
         setStatus(scan.claimedCount > 0 ? `No unclaimed gift links left \u2014 all ${scan.claimedCount} have been claimed.` : "No gift links found for this collection yet.", "info");
         return;
@@ -27691,7 +27741,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6c8b650"} \xB7 ${"2026-06-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"efda565"} \xB7 ${"2026-06-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
