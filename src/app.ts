@@ -19,6 +19,7 @@ import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './co
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
 import { parseFlacPictures } from './flacMeta.ts'
+import { parseId3Pictures } from './id3.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, noteHasContent, type SellerNote } from './sellerNote.ts'
 import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
@@ -1542,10 +1543,12 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   const tracks = srcTracks.map(t => {
     const url = URL.createObjectURL(new Blob([new Uint8Array(t.bytes)], { type: t.mimeType }))
     albumUrls.push(url)
-    // Embedded cover art (FLAC PICTURE blocks — e.g. front + back cover added in Kid3) → object URLs for a
-    // slideshow on the disc. Only FLAC for now (MP3 ID3/APIC could be added the same way).
+    // Embedded cover art (FLAC PICTURE blocks / MP3 ID3 APIC frames — e.g. front + back cover added in Kid3)
+    // → object URLs for a slideshow on the disc.
     const isFlac = t.mimeType.includes('flac') || /\.flac$/i.test(t.name)
-    const artUrls = (isFlac ? parseFlacPictures(t.bytes) : []).map(p => {
+    const isMp3 = t.mimeType.includes('mpeg') || t.mimeType.includes('mp3') || /\.mp3$/i.test(t.name)
+    const pics: { mimeType: string; data: number[] }[] = isFlac ? parseFlacPictures(t.bytes) : isMp3 ? parseId3Pictures(t.bytes) : []
+    const artUrls = pics.map(p => {
       const u = URL.createObjectURL(new Blob([new Uint8Array(p.data)], { type: p.mimeType || 'image/jpeg' }))
       albumUrls.push(u); return u
     })
