@@ -8,7 +8,8 @@
 # user's home at deploy time) avoids hardcoding the username — so it never lands in this repo.
 # Current target: the smartnfts.com addon domain, whose cPanel Document Root shows as
 # "/smartnfts.com" (i.e. relative to home → $HOME/smartnfts.com). PHAR LAP runs at the domain
-# ROOT with all-relative asset paths, so copying index.html + bundle.js + brand/ there is enough.
+# ROOT with all-relative asset paths, so copying index.html + bundle.js + brand/ there is enough —
+# plus the link-preview layer (share.php + register.php + .htaccess) and its writable /og cache dir.
 #
 # Note: bundle.js is committed on this (main) branch specifically for this copy step — it is the
 # esbuild output of src/, refreshed on every publish.
@@ -18,3 +19,7 @@ deployment:
     - /bin/cp index.html "$DEPLOYPATH"
     - /bin/cp bundle.js "$DEPLOYPATH"
     - /bin/cp -R brand "$DEPLOYPATH"
+    - /bin/cp share.php "$DEPLOYPATH"
+    - /bin/cp register.php "$DEPLOYPATH"
+    - /bin/cp .htaccess "$DEPLOYPATH"
+    - /bin/mkdir -p "$DEPLOYPATH/og"
