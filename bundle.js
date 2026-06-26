@@ -22028,6 +22028,54 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return found;
   }
 
+  // src/album.ts
+  var ALBUM_MIME = "application/x-pharlap-album";
+  var MAX_ALBUM_TRACKS = 12;
+  var MAGIC = [80, 76, 69, 80];
+  var VERSION = 1;
+  function packAlbum(tracks) {
+    if (tracks.length === 0) throw new Error("an album needs at least one track");
+    if (tracks.length > MAX_ALBUM_TRACKS) throw new Error(`an album can hold at most ${MAX_ALBUM_TRACKS} tracks`);
+    const header = { v: VERSION, tracks: tracks.map((t) => ({ n: t.name, m: t.mimeType, l: t.bytes.length })) };
+    const headerBytes = Array.from(new TextEncoder().encode(JSON.stringify(header)));
+    const len = headerBytes.length >>> 0;
+    const out = [...MAGIC, VERSION, len >>> 24 & 255, len >>> 16 & 255, len >>> 8 & 255, len & 255, ...headerBytes];
+    for (const t of tracks) for (const b of t.bytes) out.push(b);
+    return out;
+  }
+  function isAlbum(mimeType, bytes2) {
+    if (mimeType === ALBUM_MIME) return true;
+    if (bytes2 != null && bytes2.length >= 4 && bytes2[0] === MAGIC[0] && bytes2[1] === MAGIC[1] && bytes2[2] === MAGIC[2] && bytes2[3] === MAGIC[3]) return true;
+    return false;
+  }
+  function parseAlbum(bytes2) {
+    if (bytes2.length < 9) return null;
+    for (let i = 0; i < 4; i++) if (bytes2[i] !== MAGIC[i]) return null;
+    const len = (bytes2[5] << 24 | bytes2[6] << 16 | bytes2[7] << 8 | bytes2[8]) >>> 0;
+    const headEnd = 9 + len;
+    if (headEnd > bytes2.length) return null;
+    let header;
+    try {
+      header = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes2.slice(9, headEnd))));
+    } catch {
+      return null;
+    }
+    if (header == null || !Array.isArray(header.tracks)) return null;
+    const tracks = [];
+    let off = headEnd;
+    for (const t of header.tracks) {
+      const l = Math.max(0, Number(t.l) || 0);
+      if (off + l > bytes2.length) return null;
+      tracks.push({
+        name: String(t.n ?? "track"),
+        mimeType: String(t.m ?? "application/octet-stream"),
+        bytes: bytes2.slice(off, off + l)
+      });
+      off += l;
+    }
+    return tracks;
+  }
+
   // src/messageCodec.ts
   var ENVELOPE_VERSION = 1;
   var FLAG_ENCRYPTED = 1;
@@ -24097,6 +24145,39 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const buf = new Uint8Array(await f2.arrayBuffer());
     return { mimeType: f2.type || "application/octet-stream", fileName: f2.name, bytes: Array.from(buf) };
   }
+  async function readContent(input, albumName) {
+    const fs = input.files;
+    if (!fs || fs.length === 0) return void 0;
+    if (fs.length === 1) return readFile(input);
+    if (fs.length > MAX_ALBUM_TRACKS) throw new Error(`Select at most ${MAX_ALBUM_TRACKS} tracks for one release (got ${fs.length}).`);
+    const ordered = Array.from(fs).sort((a, b) => a.name.localeCompare(b.name, void 0, { numeric: true }));
+    const tracks = [];
+    for (const f2 of ordered) tracks.push({ name: f2.name, mimeType: f2.type || "application/octet-stream", bytes: Array.from(new Uint8Array(await f2.arrayBuffer())) });
+    const safe = (albumName || "album").replace(/[^\w.-]+/g, "_");
+    return { mimeType: ALBUM_MIME, fileName: `${safe}.plep`, bytes: packAlbum(tracks) };
+  }
+  function confirmAudioFidelity(file) {
+    const isLossless = (mime, name) => /wav|aiff|x-aiff|flac|x-flac|x-pn-wav/.test(mime.toLowerCase()) || /\.(wav|aif|aiff|flac|alac)$/i.test(name);
+    let lossless = false;
+    if (file.mimeType === ALBUM_MIME) {
+      for (const t of parseAlbum(file.bytes) ?? []) if (isLossless(t.mimeType, t.name)) {
+        lossless = true;
+        break;
+      }
+    } else {
+      lossless = isLossless(file.mimeType, file.fileName);
+    }
+    const big = file.bytes.length > 8 * 1024 * 1024;
+    if (!lossless && !big) return true;
+    const advice = lossless ? "Compressing to MP3/Opus first can cut the cost dramatically \u2014 but if you want maximum fidelity, keeping it lossless is totally fine." : "Compressing it first can cut the cost \u2014 but if you need the full file, that\u2019s fine.";
+    return confirm(
+      `Heads up \u2014 you\u2019re embedding ${lossless ? "uncompressed / lossless audio" : "a large file"} (${kb(file.bytes.length)}).
+
+It\u2019s stored permanently on-chain, so the mint fee scales with its size. ${advice}
+
+Mint as-is?`
+    );
+  }
   async function onMint() {
     const k = requireKey();
     if (k == null) return;
@@ -24108,7 +24189,11 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     setStatus("Preparing the mint transaction\u2026");
     try {
-      const file = await readFile($("mintFile"));
+      const file = await readContent($("mintFile"), name);
+      if (file != null && !confirmAudioFidelity(file)) {
+        setStatus("Mint cancelled \u2014 compress the file first, or proceed as-is when you\u2019re ready.");
+        return;
+      }
       const result = await createCollection(provider, k, {
         tokenName: name,
         supply: count,
@@ -24399,10 +24484,16 @@ Proceed?`
     const encrypt = $("edEncrypt").checked;
     const description = val("edDescription");
     try {
-      const file = await readFile($("edFile"));
+      const file = await readContent($("edFile"), name);
       const cover = croppedCover ?? await readFile($("edCover"));
       if (encrypt && !file) {
         setStatus("Encryption needs a file \u2014 attach one or uncheck encrypt.", "error");
+        return;
+      }
+      const trackCount = file?.mimeType === ALBUM_MIME ? parseAlbum(file.bytes)?.length ?? 0 : 0;
+      const fileLabel = file == null ? "" : trackCount > 0 ? ` (embedding a ${trackCount}-track album, ${kb(file.bytes.length)})` : ` (embedding a ${kb(file.bytes.length)} file)`;
+      if (file != null && !confirmAudioFidelity(file)) {
+        setStatus("Mint cancelled \u2014 compress the file first, or proceed as-is when you\u2019re ready.");
         return;
       }
       const terms = ownTerms();
@@ -24416,7 +24507,7 @@ Proceed?`
         description,
         cover,
         confirmSpend: (total) => confirm(
-          `Mint ${count} edition${count > 1 ? "s" : ""} of \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${file ? ` (embedding a ${kb(file.bytes.length)} file)` : ""}?
+          `Mint ${count} edition${count > 1 ? "s" : ""} of \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${fileLabel}?
 
 This spends ${total.toLocaleString()} sats from your wallet \u2014 including a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.
 
@@ -25154,8 +25245,228 @@ It's posted to your own address and spends a small network fee. Proceed?`
       setStatus(`View failed: ${e.message}`, "error");
     }
   }
+  var albumUrls = [];
+  var epTeardown = null;
+  function revokeAlbumUrls() {
+    if (epTeardown) {
+      try {
+        epTeardown();
+      } catch {
+      }
+      epTeardown = null;
+    }
+    for (const u of albumUrls) URL.revokeObjectURL(u);
+    albumUrls = [];
+  }
+  function renderPlayer(host, srcTracks) {
+    if (srcTracks.length === 0) {
+      host.textContent = "This release has no playable content.";
+      return;
+    }
+    const stripExt = (n) => n.replace(/\.[^./\\]+$/, "");
+    const tracks = srcTracks.map((t) => {
+      const url = URL.createObjectURL(new Blob([new Uint8Array(t.bytes)], { type: t.mimeType }));
+      albumUrls.push(url);
+      return { name: t.name, mimeType: t.mimeType, url };
+    });
+    const probe = document.createElement("audio");
+    const GOOD_EXT = /\.(mp3|m4a|aac|mp4|opus|ogg|oga|wav|wave|aif|aiff|flac|weba)$/i;
+    const isAudioFile = (t) => t.mimeType.startsWith("audio/") || GOOD_EXT.test(t.name);
+    const canPlayInBrowser = (t) => t.mimeType !== "" && t.mimeType !== "application/octet-stream" ? probe.canPlayType(t.mimeType) !== "" : GOOD_EXT.test(t.name);
+    const audioTracks = tracks.filter((t) => isAudioFile(t) && canPlayInBrowser(t));
+    const otherTracks = tracks.filter((t) => !(isAudioFile(t) && canPlayInBrowser(t)));
+    const stage = document.createElement("div");
+    stage.className = "ep-stage";
+    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><div class="ep-disc-container"><div class="ep-disc"></div><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
+    host.append(stage);
+    const q = (sel) => stage.querySelector(sel);
+    const songList = q(".ep-song-list");
+    const disc = q(".ep-disc");
+    const nowPlaying = q(".ep-now-playing");
+    const progressBar = q(".ep-progress-bar");
+    const progressContainer = q(".ep-progress-container");
+    const curEl = q(".ep-cur"), durEl = q(".ep-dur");
+    const playIcon = q(".ep-play-icon");
+    const canvas = q(".ep-visualizer");
+    const cctx = canvas.getContext("2d");
+    const orbs = Array.from(stage.querySelectorAll(".ep-orb"));
+    const volume = q(".ep-volume-slider");
+    const audio = new Audio();
+    audio.preload = "metadata";
+    audio.volume = parseFloat(volume.value);
+    let audioCtx = null;
+    let analyser = null;
+    let dataArray = null;
+    let rafId = 0, isPlaying = false, current = 0, tornDown = false;
+    let dlBox = null;
+    const dlAdded = /* @__PURE__ */ new Set();
+    const addDownload = (t, note) => {
+      if (dlAdded.has(t.url)) return;
+      dlAdded.add(t.url);
+      if (dlBox == null) {
+        dlBox = document.createElement("div");
+        dlBox.className = "ep-downloads";
+        const lbl = document.createElement("div");
+        lbl.className = "ep-dl-label";
+        lbl.textContent = "Downloads";
+        dlBox.append(lbl);
+        host.append(dlBox);
+      }
+      const a = document.createElement("a");
+      a.href = t.url;
+      a.download = t.name;
+      a.className = "viewer-dl";
+      a.textContent = `Download ${t.name}${note ? ` \u2014 ${note}` : ""}`;
+      dlBox.append(a);
+    };
+    const fmt = (s2) => Number.isFinite(s2) ? `${Math.floor(s2 / 60)}:${String(Math.floor(s2 % 60)).padStart(2, "0")}` : "0:00";
+    function initAudioContext() {
+      if (audioCtx) return;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AC();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        audioCtx.createMediaElementSource(audio).connect(analyser);
+        analyser.connect(audioCtx.destination);
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+      } catch {
+      }
+    }
+    const updatePlayIcon = () => {
+      playIcon.innerHTML = isPlaying ? '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
+    };
+    function updateProgress() {
+      if (audio.duration) progressBar.style.width = `${audio.currentTime / audio.duration * 100}%`;
+      curEl.textContent = fmt(audio.currentTime);
+    }
+    function play(i) {
+      if (audioTracks.length === 0) return;
+      current = (i % audioTracks.length + audioTracks.length) % audioTracks.length;
+      Array.from(songList.children).forEach((li, k) => li.classList.toggle("active", k === current));
+      initAudioContext();
+      void audioCtx?.resume();
+      audio.src = audioTracks[current].url;
+      nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`;
+      void audio.play().catch(() => {
+        nowPlaying.textContent = "Tap a track to play";
+      });
+    }
+    audioTracks.forEach((t, i) => {
+      const li = document.createElement("li");
+      li.textContent = stripExt(t.name);
+      li.onclick = () => play(i);
+      songList.append(li);
+    });
+    audio.addEventListener("timeupdate", updateProgress);
+    audio.addEventListener("loadedmetadata", () => {
+      durEl.textContent = fmt(audio.duration);
+    });
+    audio.addEventListener("play", () => {
+      isPlaying = true;
+      disc.classList.add("playing");
+      updatePlayIcon();
+    });
+    audio.addEventListener("pause", () => {
+      isPlaying = false;
+      disc.classList.remove("playing");
+      updatePlayIcon();
+    });
+    audio.addEventListener("ended", () => play(current + 1));
+    audio.addEventListener("error", () => {
+      if (tornDown || !audio.src) return;
+      const t = audioTracks[current];
+      if (t == null) return;
+      nowPlaying.innerHTML = `<span>Can\u2019t play \u201C${escapeHtml(stripExt(t.name))}\u201D in this browser \u2014 download it below.</span>`;
+      addDownload(t, "unsupported format");
+    });
+    q(".ep-prev").onclick = () => play(current - 1);
+    q(".ep-next").onclick = () => play(current + 1);
+    q(".ep-play-btn").onclick = () => {
+      if (!audio.src) {
+        play(0);
+        return;
+      }
+      if (isPlaying) audio.pause();
+      else {
+        void audioCtx?.resume();
+        void audio.play();
+      }
+    };
+    progressContainer.onclick = (e) => {
+      if (!audio.duration) return;
+      const r2 = progressContainer.getBoundingClientRect();
+      audio.currentTime = (e.clientX - r2.left) / r2.width * audio.duration;
+    };
+    volume.oninput = () => {
+      audio.volume = parseFloat(volume.value);
+    };
+    function frame() {
+      rafId = requestAnimationFrame(frame);
+      if (analyser != null && isPlaying && dataArray != null) {
+        analyser.getByteFrequencyData(dataArray);
+        let bass = 0, mids = 0, highs = 0;
+        for (let i = 0; i < 10; i++) bass += dataArray[i];
+        for (let i = 10; i < 40; i++) mids += dataArray[i];
+        for (let i = 40; i < 80; i++) highs += dataArray[i];
+        bass /= 10 * 255;
+        mids /= 30 * 255;
+        highs /= 40 * 255;
+        const t = Date.now();
+        orbs[0].style.transform = `translate(${Math.sin(t / 1e3) * 30 * bass}px, ${Math.cos(t / 1200) * 30 * bass}px) scale(${1 + bass * 0.5})`;
+        orbs[0].style.opacity = `${0.4 + bass * 0.4}`;
+        orbs[1].style.transform = `translate(${Math.cos(t / 1100) * 40 * mids}px, ${Math.sin(t / 900) * 40 * mids}px) scale(${1 + mids * 0.4})`;
+        orbs[1].style.opacity = `${0.4 + mids * 0.4}`;
+        orbs[2].style.transform = `translate(calc(-50% + ${Math.sin(t / 800) * 50 * highs}px), calc(-50% + ${Math.cos(t / 1e3) * 50 * highs}px)) scale(${1 + highs * 0.3})`;
+        orbs[2].style.opacity = `${0.4 + highs * 0.5}`;
+      }
+      cctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (analyser != null && isPlaying && dataArray != null) {
+        const cx = canvas.width / 2, cy = canvas.height / 2, radius = 95, bars = 64;
+        for (let i = 0; i < bars; i++) {
+          const h = dataArray[i] / 255 * 42;
+          const a = i / bars * Math.PI * 2 - Math.PI / 2;
+          const x1 = cx + Math.cos(a) * radius, y1 = cy + Math.sin(a) * radius;
+          const x2 = cx + Math.cos(a) * (radius + h), y2 = cy + Math.sin(a) * (radius + h);
+          const g = cctx.createLinearGradient(x1, y1, x2, y2);
+          g.addColorStop(0, "rgba(255,0,110,0.85)");
+          g.addColorStop(0.5, "rgba(131,56,236,0.85)");
+          g.addColorStop(1, "rgba(58,134,255,0.85)");
+          cctx.beginPath();
+          cctx.moveTo(x1, y1);
+          cctx.lineTo(x2, y2);
+          cctx.strokeStyle = g;
+          cctx.lineWidth = 3;
+          cctx.lineCap = "round";
+          cctx.stroke();
+        }
+      }
+    }
+    frame();
+    if (audioTracks.length > 0) {
+      songList.children[0].classList.add("active");
+      nowPlaying.textContent = "Tap a track to play";
+    } else {
+      nowPlaying.textContent = otherTracks.some(isAudioFile) ? "No in-browser-playable audio \u2014 see downloads below." : "This release has no playable audio.";
+    }
+    for (const t of otherTracks) addDownload(t, isAudioFile(t) ? "can\u2019t play in this browser" : void 0);
+    epTeardown = () => {
+      tornDown = true;
+      cancelAnimationFrame(rafId);
+      try {
+        audio.pause();
+      } catch {
+      }
+      audio.src = "";
+      try {
+        void audioCtx?.close();
+      } catch {
+      }
+    };
+  }
   function showFile(title, file, verified, note) {
     const content = $("viewerContent");
+    revokeAlbumUrls();
     if (viewerUrl) {
       URL.revokeObjectURL(viewerUrl);
       viewerUrl = null;
@@ -25171,7 +25482,12 @@ It's posted to your own address and spends a small network fee. Proceed?`
       banner.style.display = "none";
     }
     content.innerHTML = "";
-    if (file.mimeType.startsWith("image/")) {
+    const albumTracks = isAlbum(file.mimeType, file.fileBytes) ? parseAlbum(file.fileBytes) : null;
+    if (albumTracks != null) {
+      renderPlayer(content, albumTracks);
+    } else if (file.mimeType.startsWith("audio/")) {
+      renderPlayer(content, [{ name: file.fileName, mimeType: file.mimeType, bytes: file.fileBytes }]);
+    } else if (file.mimeType.startsWith("image/")) {
       const img = document.createElement("img");
       img.src = viewerUrl;
       img.className = "viewer-img";
@@ -25197,6 +25513,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       URL.revokeObjectURL(viewerUrl);
       viewerUrl = null;
     }
+    revokeAlbumUrls();
     $("viewerContent").innerHTML = "";
   }
   var CATS = [
@@ -25211,6 +25528,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
   function mimeCategory(mime) {
     if (mime == null || mime === "") return "other";
     const m = mime.toLowerCase();
+    if (m === ALBUM_MIME) return "audio";
     if (m.startsWith("image/")) return "image";
     if (m.startsWith("audio/")) return "audio";
     if (m.startsWith("video/")) return "video";
@@ -27298,7 +27616,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"09be41e"} \xB7 ${"2026-06-25"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"71030a2"} \xB7 ${"2026-06-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
