@@ -22176,6 +22176,99 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return { pictureType, mimeType, description, data: b.slice(o, o + dataLen) };
   }
 
+  // src/id3.ts
+  var syncsafe = (b, o) => (b[o] & 127) << 21 | (b[o + 1] & 127) << 14 | (b[o + 2] & 127) << 7 | b[o + 3] & 127;
+  var u322 = (b, o) => (b[o] << 24 | b[o + 1] << 16 | b[o + 2] << 8 | b[o + 3]) >>> 0;
+  var u24 = (b, o) => b[o] << 16 | b[o + 1] << 8 | b[o + 2];
+  var latin1 = (b, s2, e) => {
+    let r2 = "";
+    for (let i = s2; i < e; i++) r2 += String.fromCharCode(b[i]);
+    return r2;
+  };
+  function normalizeMime(m) {
+    const s2 = m.trim().toLowerCase();
+    if (s2.startsWith("image/")) return s2;
+    if (s2.includes("png")) return "image/png";
+    if (s2.includes("jpg") || s2.includes("jpeg")) return "image/jpeg";
+    if (s2.includes("gif")) return "image/gif";
+    if (s2.includes("webp")) return "image/webp";
+    return "image/jpeg";
+  }
+  function skipDescription(b, o, end, encoding) {
+    if (encoding === 1 || encoding === 2) {
+      while (o + 1 < end) {
+        if (b[o] === 0 && b[o + 1] === 0) return o + 2;
+        o += 2;
+      }
+      return end;
+    }
+    while (o < end) {
+      if (b[o] === 0) return o + 1;
+      o++;
+    }
+    return end;
+  }
+  function parseApic(b, start, end) {
+    let o = start;
+    if (o >= end) return null;
+    const encoding = b[o];
+    o++;
+    let m = o;
+    while (m < end && b[m] !== 0) m++;
+    const mimeType = latin1(b, o, m);
+    o = m + 1;
+    if (o >= end) return null;
+    const pictureType = b[o];
+    o++;
+    o = skipDescription(b, o, end, encoding);
+    if (o > end) return null;
+    return { pictureType, mimeType: normalizeMime(mimeType), data: b.slice(o, end) };
+  }
+  function parsePic(b, start, end) {
+    let o = start;
+    if (o + 5 > end) return null;
+    const encoding = b[o];
+    o++;
+    const fmt = latin1(b, o, o + 3);
+    o += 3;
+    const pictureType = b[o];
+    o++;
+    o = skipDescription(b, o, end, encoding);
+    if (o > end) return null;
+    return { pictureType, mimeType: normalizeMime(fmt), data: b.slice(o, end) };
+  }
+  function parseId3Pictures(bytes2) {
+    if (bytes2.length < 10 || bytes2[0] !== 73 || bytes2[1] !== 68 || bytes2[2] !== 51) return [];
+    const major = bytes2[3];
+    const flags = bytes2[5];
+    if ((flags & 128) !== 0) return [];
+    const end = Math.min(10 + syncsafe(bytes2, 6), bytes2.length);
+    let o = 10;
+    if ((flags & 64) !== 0) {
+      if (o + 4 > end) return [];
+      o += major >= 4 ? syncsafe(bytes2, o) : u322(bytes2, o) + 4;
+    }
+    const pics = [];
+    const idLen = major === 2 ? 3 : 4;
+    const hdrLen = major === 2 ? 6 : 10;
+    for (let guard = 0; guard < 4096 && o + hdrLen <= end; guard++) {
+      if (bytes2[o] === 0) break;
+      const id = latin1(bytes2, o, o + idLen);
+      const frameSize = major === 2 ? u24(bytes2, o + 3) : major >= 4 ? syncsafe(bytes2, o + 4) : u322(bytes2, o + 4);
+      const fstart = o + hdrLen;
+      if (frameSize <= 0 || fstart + frameSize > end) break;
+      if (major === 2 && id === "PIC") {
+        const p = parsePic(bytes2, fstart, fstart + frameSize);
+        if (p != null) pics.push(p);
+      } else if (id === "APIC") {
+        const p = parseApic(bytes2, fstart, fstart + frameSize);
+        if (p != null) pics.push(p);
+      }
+      o = fstart + frameSize;
+    }
+    return pics;
+  }
+
   // src/messageCodec.ts
   var ENVELOPE_VERSION = 1;
   var FLAG_ENCRYPTED = 1;
@@ -25485,7 +25578,9 @@ It's posted to your own address and spends a small network fee. Proceed?`
       const url = URL.createObjectURL(new Blob([new Uint8Array(t.bytes)], { type: t.mimeType }));
       albumUrls.push(url);
       const isFlac = t.mimeType.includes("flac") || /\.flac$/i.test(t.name);
-      const artUrls = (isFlac ? parseFlacPictures(t.bytes) : []).map((p) => {
+      const isMp3 = t.mimeType.includes("mpeg") || t.mimeType.includes("mp3") || /\.mp3$/i.test(t.name);
+      const pics = isFlac ? parseFlacPictures(t.bytes) : isMp3 ? parseId3Pictures(t.bytes) : [];
+      const artUrls = pics.map((p) => {
         const u = URL.createObjectURL(new Blob([new Uint8Array(p.data)], { type: p.mimeType || "image/jpeg" }));
         albumUrls.push(u);
         return u;
@@ -27900,7 +27995,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"64fc475"} \xB7 ${"2026-06-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c9166ba"} \xB7 ${"2026-06-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
