@@ -19356,6 +19356,57 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       this.parsedTxCache.set(txId, tx);
       return tx;
     }
+    /**
+     * Fetch ONE output's locking-script hex via WoC, STREAMING the body and bailing the moment it exceeds
+     * `maxBytes` — so the sales page can read a collection's small storefront/template outputs without pulling
+     * a large embedded content file (e.g. a 40 MB audio track). Returns the hex; the sentinel 'oversized' if it
+     * blew the cap (skipped without downloading the body); or null if the output doesn't exist (past the last
+     * index). Hex is 2 chars/byte, so the byte cap is doubled internally.
+     */
+    async getOutputScriptHexCapped(txId, index, maxBytes = 512 * 1024) {
+      const resp = await fetchWithRetry(`${WOC_BASE}/tx/${txId}/out/${index}/hex`);
+      if (resp.status === 404) return null;
+      if (!resp.ok) throw new Error(`WoC output fetch failed: ${resp.status}`);
+      const capHex = maxBytes * 2;
+      const cl = Number(resp.headers.get("content-length") ?? 0);
+      if (cl > capHex) {
+        try {
+          await resp.body?.cancel();
+        } catch {
+        }
+        return "oversized";
+      }
+      const reader = resp.body?.getReader();
+      if (reader == null) {
+        const t = (await resp.text()).trim();
+        return t.length > capHex ? "oversized" : t || null;
+      }
+      const chunks = [];
+      let received = 0;
+      for (; ; ) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.length;
+        if (received > capHex) {
+          try {
+            await reader.cancel();
+          } catch {
+          }
+          return "oversized";
+        }
+        chunks.push(value);
+      }
+      let total = 0;
+      for (const c of chunks) total += c.length;
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) {
+        buf.set(c, off);
+        off += c.length;
+      }
+      const hex = new TextDecoder().decode(buf).trim();
+      return hex.length === 0 ? null : hex;
+    }
     // ── Block Headers (feeds into SPV verification) ───────────────
     /** WoC-reported confirmation of a tx: its block height + block time (unix seconds), or null if unconfirmed
      *  (mempool) or not found. For provenance display only — not an SPV proof (use getMerkleProof for that). */
@@ -26590,23 +26641,36 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     if (!c) return null;
     return { c, h: params.get("h"), g: params.get("g") };
   }
-  async function loadCollection(tx1Ref) {
-    const tx1 = await provider.getSourceTransaction(tx1Ref);
+  async function loadCollection(tx1Ref, holderPubKeyHint) {
     let template;
     let publisherPubKeyHex = null;
     let storefront = null;
     let hasContentFile = false;
-    let bondSats = 0;
-    for (const o of tx1.outputs) {
-      const t = parseTemplateScript(o.lockingScript);
+    for (let i = 0; i < 6; i++) {
+      let hex;
+      try {
+        hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 1024 * 1024);
+      } catch {
+        hex = null;
+      }
+      if (hex == null) {
+        if (template != null) break;
+        continue;
+      }
+      if (hex === "oversized") {
+        hasContentFile = true;
+        continue;
+      }
+      const script = LockingScript.fromHex(hex);
+      const t = parseTemplateScript(script);
       if (t) {
         template = t.fields;
         publisherPubKeyHex = t.publisherPubKeyHex;
-        bondSats = o.satoshis ?? 0;
       }
-      const s2 = parseStorefrontScript(o.lockingScript);
+      const s2 = parseStorefrontScript(script);
       if (s2) storefront = s2.fields;
-      if (parseFileScript(o.lockingScript)) hasContentFile = true;
+      if (parseFileScript(script)) hasContentFile = true;
+      if (template != null && storefront != null) break;
     }
     if (!template) throw new Error("not a SMART NFTs collection (no template output in TX1)");
     const rules = decodeTokenRules(template.tokenRules);
@@ -26621,6 +26685,17 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
           v2PriceSats = ed.priceSats;
         } else if (ed) fees = { publisher: ed.terms.publisherFeeSats, holder: ed.terms.holderFeeSats };
       } catch {
+      }
+    }
+    let bondSats = 0;
+    if (holderPubKeyHint !== void 0 && template.covenantScript) {
+      const sellerPub = holderPubKeyHint ?? publisherPubKeyHex;
+      if (sellerPub != null) {
+        try {
+          const tip = await resolveHolderEdition(provider, { tx1RefHex: tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: template.covenantScript });
+          if (tip) bondSats = tip.tokenSats ?? 0;
+        } catch {
+        }
       }
     }
     const cover = storefront?.coverBytes ? { mimeType: storefront.coverMimeType ?? "application/octet-stream", bytes: storefront.coverBytes } : null;
@@ -26709,7 +26784,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     $("cvPrice").innerHTML = "";
     setCvStatus("Loading collection from the chain\u2026");
     try {
-      const info = await loadCollection(tx1Ref);
+      const info = await loadCollection(tx1Ref, holderPubKey);
       currentCollection = { info, holderPubKey };
       renderCollectionView(info);
       if (cvGiftWif) {
@@ -27616,7 +27691,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"2256887"} \xB7 ${"2026-06-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6c8b650"} \xB7 ${"2026-06-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

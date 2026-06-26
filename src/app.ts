@@ -2697,21 +2697,31 @@ function parseHashRoute(): { c: string; h: string | null; g: string | null } | n
 }
 
 /** Fetch TX1 and extract everything the storefront page needs (template + storefront + fees). */
-async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
-  const tx1 = await provider.getSourceTransaction(tx1Ref)
+async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null): Promise<CollectionInfo> {
+  // Read ONLY the small metadata outputs (template + storefront), skipping any large embedded content file,
+  // so the sales page renders without pulling the whole (possibly tens-of-MB) TX1. Layout is deterministic:
+  // [0]=template, [1]=file (may be huge), [2]=storefront, [last]=change. We scan outputs with a size cap; an
+  // output too big to fetch IS the content file (→ hasContentFile), skipped without downloading its body.
   let template: TemplateFields | undefined
   let publisherPubKeyHex: string | null = null
   let storefront: { description: string; coverMimeType?: string; coverBytes?: number[] } | null = null
   let hasContentFile = false
-  let bondSats = 0
-  for (const o of tx1.outputs) {
-    const t = parseTemplateScript(o.lockingScript)
-    // Genesis mints every output (template/file/storefront) and each edition at one value — the refundable
-    // bond every copy carries forward (covenant-enforced). Read it off the template output (always present).
-    if (t) { template = t.fields; publisherPubKeyHex = t.publisherPubKeyHex; bondSats = o.satoshis ?? 0 }
-    const s = parseStorefrontScript(o.lockingScript)
+  // template is [0]; storefront comes after the (possibly huge) file, so once we have both we can stop — that
+  // also avoids WoC's 502-on-out-of-range past the last output. Any fetch error on an index is treated as a
+  // skip (not a hard failure) so a transient/late hiccup can't break a load that already has what it needs.
+  for (let i = 0; i < 6; i++) {
+    let hex: string | 'oversized' | null
+    try { hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 1024 * 1024) }
+    catch { hex = null }
+    if (hex == null) { if (template != null) break; continue }
+    if (hex === 'oversized') { hasContentFile = true; continue } // the embedded content file — skipped, not downloaded
+    const script = LockingScript.fromHex(hex)
+    const t = parseTemplateScript(script)
+    if (t) { template = t.fields; publisherPubKeyHex = t.publisherPubKeyHex }
+    const s = parseStorefrontScript(script)
     if (s) storefront = s.fields
-    if (parseFileScript(o.lockingScript)) hasContentFile = true
+    if (parseFileScript(script)) hasContentFile = true          // a SMALL embedded file (fetched under the cap)
+    if (template != null && storefront != null) break           // have everything the sales page needs
   }
   if (!template) throw new Error('not a SMART NFTs collection (no template output in TX1)')
   const rules = decodeTokenRules(template.tokenRules)
@@ -2723,6 +2733,19 @@ async function loadCollection(tx1Ref: string): Promise<CollectionInfo> {
       if (ed?.isV2) { isV2 = true; pBps = ed.terms.pBps; v2PriceSats = ed.priceSats }
       else if (ed) fees = { publisher: ed.terms.publisherFeeSats, holder: ed.terms.holderFeeSats }
     } catch { /* leave null — non-replicable or unparseable covenant */ }
+  }
+  // Refundable bond: read it from the live edition tip (a small script-hash fetch), NOT the big TX1 — the
+  // template output's value isn't recoverable without the full tx. Resolved only when a holder context is
+  // supplied (the sales page); callers needing just name/publisher (the updates feed) omit it and skip this hop.
+  let bondSats = 0
+  if (holderPubKeyHint !== undefined && template.covenantScript) {
+    const sellerPub = holderPubKeyHint ?? publisherPubKeyHex
+    if (sellerPub != null) {
+      try {
+        const tip = await resolveHolderEdition(provider, { tx1RefHex: tx1Ref, holderPubKeyHex: sellerPub, templateCovenantHex: template.covenantScript })
+        if (tip) bondSats = tip.tokenSats ?? 0
+      } catch { /* best-effort — leave the bond unknown */ }
+    }
   }
   const cover = storefront?.coverBytes
     ? { mimeType: storefront.coverMimeType ?? 'application/octet-stream', bytes: storefront.coverBytes }
@@ -2801,7 +2824,7 @@ async function openCollectionView(tx1Ref: string, holderPubKey: string | null, g
   $('cvPrice').innerHTML = ''
   setCvStatus('Loading collection from the chain…')
   try {
-    const info = await loadCollection(tx1Ref)
+    const info = await loadCollection(tx1Ref, holderPubKey)
     currentCollection = { info, holderPubKey }
     renderCollectionView(info)
     if (cvGiftWif) {

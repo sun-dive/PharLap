@@ -264,6 +264,39 @@ export class WalletProvider {
     return tx
   }
 
+  /**
+   * Fetch ONE output's locking-script hex via WoC, STREAMING the body and bailing the moment it exceeds
+   * `maxBytes` — so the sales page can read a collection's small storefront/template outputs without pulling
+   * a large embedded content file (e.g. a 40 MB audio track). Returns the hex; the sentinel 'oversized' if it
+   * blew the cap (skipped without downloading the body); or null if the output doesn't exist (past the last
+   * index). Hex is 2 chars/byte, so the byte cap is doubled internally.
+   */
+  async getOutputScriptHexCapped(txId: string, index: number, maxBytes = 512 * 1024): Promise<string | 'oversized' | null> {
+    const resp = await fetchWithRetry(`${WOC_BASE}/tx/${txId}/out/${index}/hex`)
+    if (resp.status === 404) return null
+    if (!resp.ok) throw new Error(`WoC output fetch failed: ${resp.status}`)
+    const capHex = maxBytes * 2
+    // Fast path: a known Content-Length lets us skip a huge output without reading any of the body.
+    const cl = Number(resp.headers.get('content-length') ?? 0)
+    if (cl > capHex) { try { await resp.body?.cancel() } catch { /* ignore */ } return 'oversized' }
+    // Stream with a cap (also covers chunked / missing Content-Length): abort the moment we exceed it.
+    const reader = resp.body?.getReader()
+    if (reader == null) { const t = (await resp.text()).trim(); return t.length > capHex ? 'oversized' : (t || null) }
+    const chunks: Uint8Array[] = []
+    let received = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      received += value.length
+      if (received > capHex) { try { await reader.cancel() } catch { /* ignore */ } return 'oversized' }
+      chunks.push(value)
+    }
+    let total = 0; for (const c of chunks) total += c.length
+    const buf = new Uint8Array(total); let off = 0; for (const c of chunks) { buf.set(c, off); off += c.length }
+    const hex = new TextDecoder().decode(buf).trim()
+    return hex.length === 0 ? null : hex
+  }
+
   // ── Block Headers (feeds into SPV verification) ───────────────
 
   /** WoC-reported confirmation of a tx: its block height + block time (unix seconds), or null if unconfirmed
