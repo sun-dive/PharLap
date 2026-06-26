@@ -25500,7 +25500,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const otherTracks = tracks.filter((t) => !(isAudioFile(t) && canPlayInBrowser(t)));
     const stage = document.createElement("div");
     stage.className = "ep-stage";
-    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
+    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>\u{1F5BC}\uFE0F</button><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
     host.append(stage);
     const q = (sel) => stage.querySelector(sel);
     const songList = q(".ep-song-list");
@@ -25522,12 +25522,16 @@ It's posted to your own address and spends a small network fee. Proceed?`
     let dataArray = null;
     let rafId = 0, isPlaying = false, current = 0, tornDown = false;
     const art = q(".ep-art");
+    const player = q(".ep-player");
+    const artToggle = q(".ep-art-toggle");
     let artTimer = 0;
     function showArt(urls) {
       window.clearInterval(artTimer);
+      player.classList.toggle("has-art", urls.length > 0);
       if (urls.length === 0) {
         art.style.display = "none";
         art.style.opacity = "0";
+        player.classList.remove("art-view");
         return;
       }
       let i = 0;
@@ -25545,6 +25549,9 @@ It's posted to your own address and spends a small network fee. Proceed?`
         }, 6e3);
       }
     }
+    artToggle.onclick = () => {
+      artToggle.textContent = player.classList.toggle("art-view") ? "\u{1F4BF}" : "\u{1F5BC}\uFE0F";
+    };
     let dlBox = null;
     const dlAdded = /* @__PURE__ */ new Set();
     const addDownload = (t, note) => {
@@ -27893,7 +27900,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"641f175"} \xB7 ${"2026-06-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"64fc475"} \xB7 ${"2026-06-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

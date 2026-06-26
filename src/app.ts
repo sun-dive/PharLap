@@ -1567,6 +1567,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   stage.innerHTML =
     '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div>' +
     '<div class="ep-player">' +
+      '<button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>🖼️</button>' +
       '<div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" />' +
         '<div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div>' +
       '<ul class="ep-song-list"></ul>' +
@@ -1605,11 +1606,15 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   let rafId = 0, isPlaying = false, current = 0, tornDown = false
 
   // Embedded cover art on the disc — slideshow (cross-fade) if a track carries more than one picture.
+  // The 🖼️/💿 toggle (shown only when art exists) flips between the player view and a full, uncropped cover view.
   const art = q<HTMLImageElement>('.ep-art')
+  const player = q<HTMLElement>('.ep-player')
+  const artToggle = q<HTMLElement>('.ep-art-toggle')
   let artTimer = 0
   function showArt(urls: string[]): void {
     window.clearInterval(artTimer)
-    if (urls.length === 0) { art.style.display = 'none'; art.style.opacity = '0'; return }
+    player.classList.toggle('has-art', urls.length > 0)
+    if (urls.length === 0) { art.style.display = 'none'; art.style.opacity = '0'; player.classList.remove('art-view'); return }
     let i = 0
     art.style.display = 'block'; art.src = urls[0]; art.style.opacity = '1'
     if (urls.length > 1) {
@@ -1620,6 +1625,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
       }, 6000)
     }
   }
+  artToggle.onclick = () => { artToggle.textContent = player.classList.toggle('art-view') ? '💿' : '🖼️' }
 
   // Lazy "Downloads" list under the player — for non-audio files and any track the browser can't play.
   let dlBox: HTMLElement | null = null
