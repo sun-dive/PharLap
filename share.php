@@ -5,7 +5,17 @@
 // client-only — THE VOUCHER KEY NEVER REACHES THIS SERVER. Preview assets (cover + title/desc) are pushed by
 // the wallet when it builds a share link (register.php), so this page never touches the chain or WoC.
 
-$txid = isset($_GET['c']) ? strtolower($_GET['c']) : '';
+// Resolve the target. A short code (/s/<code>) maps to {txid, holder, aff} (PUBLIC data only); a direct
+// /c/<txid> carries just the txid in the path (holder + voucher live in the #hash, client-side).
+$txid = ''; $holder = ''; $aff = '';
+if (isset($_GET['s']) && preg_match('/^[0-9A-Za-z]{1,16}$/', $_GET['s'])) {
+  $f = __DIR__ . '/links/' . $_GET['s'] . '.json';
+  if (is_file($f)) {
+    $rec = json_decode(@file_get_contents($f), true);
+    if (is_array($rec)) { $txid = strtolower($rec['txid'] ?? ''); $holder = strtolower($rec['holder'] ?? ''); $aff = (string)($rec['aff'] ?? ''); }
+  }
+}
+if ($txid === '' && isset($_GET['c'])) $txid = strtolower($_GET['c']);
 if (!preg_match('/^[0-9a-f]{64}$/', $txid)) { header('Location: /'); exit; }
 
 $base  = 'https://smartnfts.com';
@@ -45,14 +55,17 @@ header('Content-Type: text/html; charset=UTF-8');
 <meta name="twitter:description" content="<?= e($desc) ?>" />
 <meta name="twitter:image" content="<?= e($image) ?>" />
 <script>
-// Real visitors only (crawlers ignore this): rebuild the full app route, carrying the holder + gift voucher
-// that live in THIS page's #hash (never sent to the server), then hand off to the SPA at the root.
+// Real visitors only (crawlers ignore this): rebuild the full app route. Holder + referral come from the
+// short code when present (server-injected below), else from this page's #hash; the gift voucher ALWAYS
+// comes from the #hash (client-only — never sent to the server). Then hand off to the SPA at the root.
 (function () {
   try {
     var p = new URLSearchParams(location.hash.replace(/^#/, ''));
     var out = new URLSearchParams();
     out.set('c', <?= json_encode($txid) ?>);
-    ['h', 'g', 'aff'].forEach(function (k) { if (p.get(k)) out.set(k, p.get(k)); });
+    var h = <?= json_encode($holder) ?> || p.get('h'); if (h) out.set('h', h);
+    var aff = <?= json_encode($aff) ?> || p.get('aff'); if (aff) out.set('aff', aff);
+    if (p.get('g')) out.set('g', p.get('g'));
     location.replace('/#' + out.toString());
   } catch (e) { location.replace('/'); }
 })();

@@ -24030,6 +24030,19 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (giftWif) params.set("g", giftWif);
     return withAff(`${location.origin}/c/${txid}#${params.toString()}`);
   }
+  async function shortShareBase(txid, holder) {
+    try {
+      const r2 = await fetch("/shorten.php", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ txid, holder, aff: myRefCode() ?? void 0 })
+      });
+      const data = await r2.json().catch(() => null);
+      if (r2.ok && data != null && typeof data.code === "string" && data.code) return `${location.origin}/s/${data.code}`;
+    } catch {
+    }
+    return null;
+  }
   function coverToJpegDataUrl(cover) {
     return new Promise((resolve) => {
       const url = URL.createObjectURL(new Blob([new Uint8Array(cover.bytes)], { type: cover.mimeType }));
@@ -26861,14 +26874,14 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     }
     if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   }
-  function currentShareLink() {
+  async function currentShareLink() {
     if (!currentCollection) return null;
     const { info, holderPubKey } = currentCollection;
     const h = holderPubKey ?? pubKeyHex;
-    return collectionShareUrl(info.tx1Ref, h);
+    return await shortShareBase(info.tx1Ref, h) ?? collectionShareUrl(info.tx1Ref, h);
   }
-  function shareCollectionLink() {
-    const link = currentShareLink();
+  async function shareCollectionLink() {
+    const link = await currentShareLink();
     if (!link) return;
     void navigator.clipboard?.writeText(link);
     setCvStatus("Share link copied to clipboard.");
@@ -27233,7 +27246,8 @@ Proceed?`
     try {
       const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId);
       const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, k, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach });
-      const links = voucherWifs.map((wif) => collectionShareUrl(t.collectionId, pubKeyHex, wif));
+      const giftBase = await shortShareBase(t.collectionId, pubKeyHex);
+      const links = voucherWifs.map((wif) => giftBase ? `${giftBase}#g=${wif}` : collectionShareUrl(t.collectionId, pubKeyHex, wif));
       setStatus(`\u2705 ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, "ok");
       showGiftLinksModal(t.collectionName ?? "Free gift", links);
     } catch (e) {
@@ -27246,7 +27260,8 @@ Proceed?`
     setStatus("Recovering your gift links from chain\u2026");
     try {
       const scan = await scanGiftVouchers(provider, k, t.collectionId);
-      const links = scan.live.map((v) => collectionShareUrl(t.collectionId, pubKeyHex, v.wif));
+      const giftBase = await shortShareBase(t.collectionId, pubKeyHex);
+      const links = scan.live.map((v) => giftBase ? `${giftBase}#g=${v.wif}` : collectionShareUrl(t.collectionId, pubKeyHex, v.wif));
       if (links.length === 0) {
         setStatus(scan.claimedCount > 0 ? `No unclaimed gift links left \u2014 all ${scan.claimedCount} have been claimed.` : "No gift links found for this collection yet.", "info");
         return;
@@ -27741,7 +27756,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"ddce3cf"} \xB7 ${"2026-06-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"2bc9495"} \xB7 ${"2026-06-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -27912,11 +27927,11 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       if (e.target === $("viewer")) closeViewer();
     };
     $("cvWallet").onclick = () => closeCollectionView();
-    $("cvShare").onclick = () => shareCollectionLink();
-    $("cvQr").onclick = () => {
-      const l = currentShareLink();
+    $("cvShare").onclick = () => void shareCollectionLink();
+    $("cvQr").onclick = () => void (async () => {
+      const l = await currentShareLink();
       if (l) showQrModal("Scan to open this sales page", l);
-    };
+    })();
     $("cvGet").onclick = () => void onGetCopy();
     $("cvGetTop").onclick = () => void onGetCopy();
     $("cvView").onclick = () => {

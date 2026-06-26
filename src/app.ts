@@ -288,6 +288,22 @@ function collectionShareUrl(txid: string, holder: string, giftWif?: string): str
   return withAff(`${location.origin}/c/${txid}#${params.toString()}`)
 }
 
+/** Shorten a share link via the server: registers {txid, holder, referral} (PUBLIC only — never the
+ *  voucher) and returns `${origin}/s/<code>` for the caller to append a gift voucher to as a #hash, or
+ *  null if the server is unreachable (callers fall back to the full /c/<txid> link, which still works
+ *  and still previews). The referral is folded into the code, so it drops out of the visible link. */
+async function shortShareBase(txid: string, holder: string): Promise<string | null> {
+  try {
+    const r = await fetch('/shorten.php', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ txid, holder, aff: myRefCode() ?? undefined }),
+    })
+    const data = await r.json().catch(() => null)
+    if (r.ok && data != null && typeof data.code === 'string' && data.code) return `${location.origin}/s/${data.code}`
+  } catch { /* fall back to the full link */ }
+  return null
+}
+
 /** Re-encode a cover image to a JPEG data URL (crawler-friendly; some don't render WebP) via canvas. */
 function coverToJpegDataUrl(cover: { mimeType: string; bytes: number[] }): Promise<string | null> {
   return new Promise(resolve => {
@@ -2903,15 +2919,15 @@ function closeCollectionView(): void {
 
 /** The sales-page link for the current collection, from the current seller's perspective (routed holder
  *  else this wallet). Null if no collection is open. */
-function currentShareLink(): string | null {
+async function currentShareLink(): Promise<string | null> {
   if (!currentCollection) return null
   const { info, holderPubKey } = currentCollection
   const h = holderPubKey ?? pubKeyHex
-  return collectionShareUrl(info.tx1Ref, h)
+  return (await shortShareBase(info.tx1Ref, h)) ?? collectionShareUrl(info.tx1Ref, h)
 }
 
-function shareCollectionLink(): void {
-  const link = currentShareLink()
+async function shareCollectionLink(): Promise<void> {
+  const link = await currentShareLink()
   if (!link) return
   void navigator.clipboard?.writeText(link)
   setCvStatus('Share link copied to clipboard.')
@@ -3248,7 +3264,8 @@ async function onGiftCopies(t: StoredToken): Promise<void> {
     // Deterministic keys: scan for the next free index so a new batch doesn't collide with existing vouchers.
     const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId)
     const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, k, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach })
-    const links = voucherWifs.map(wif => collectionShareUrl(t.collectionId, pubKeyHex, wif))
+    const giftBase = await shortShareBase(t.collectionId, pubKeyHex)
+    const links = voucherWifs.map(wif => giftBase ? `${giftBase}#g=${wif}` : collectionShareUrl(t.collectionId, pubKeyHex, wif))
     setStatus(`✅ ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, 'ok')
     showGiftLinksModal(t.collectionName ?? 'Free gift', links)
   } catch (e) {
@@ -3263,7 +3280,8 @@ async function onViewGiftLinks(t: StoredToken): Promise<void> {
   setStatus('Recovering your gift links from chain…')
   try {
     const scan = await scanGiftVouchers(provider, k, t.collectionId)
-    const links = scan.live.map(v => collectionShareUrl(t.collectionId, pubKeyHex, v.wif))
+    const giftBase = await shortShareBase(t.collectionId, pubKeyHex)
+    const links = scan.live.map(v => giftBase ? `${giftBase}#g=${v.wif}` : collectionShareUrl(t.collectionId, pubKeyHex, v.wif))
     if (links.length === 0) {
       setStatus(scan.claimedCount > 0
         ? `No unclaimed gift links left — all ${scan.claimedCount} have been claimed.`
@@ -3838,8 +3856,8 @@ function init(): void {
 
   // Collection / sales view (shareable links).
   $('cvWallet').onclick = () => closeCollectionView()
-  $('cvShare').onclick = () => shareCollectionLink()
-  $('cvQr').onclick = () => { const l = currentShareLink(); if (l) showQrModal('Scan to open this sales page', l) }
+  $('cvShare').onclick = () => void shareCollectionLink()
+  $('cvQr').onclick = () => void (async () => { const l = await currentShareLink(); if (l) showQrModal('Scan to open this sales page', l) })()
   $('cvGet').onclick = () => void onGetCopy()
   $('cvGetTop').onclick = () => void onGetCopy()
   $('cvView').onclick = () => { if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name) }
