@@ -22,3 +22,6 @@ curate-publish.sh
 build-curator.sh
 SERVER_CURATION.md
 VIDEO_SCRIPTS.md
+
+# OG preview cache (created at runtime on the server)
+/og/

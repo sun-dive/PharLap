@@ -278,6 +278,51 @@ function withAff(url: string): string {
   return code != null && code !== '' ? `${url}&aff=${encodeURIComponent(code)}` : url
 }
 
+/** A shareable collection link. The collection id goes in the PATH (/c/<txid>) so link-preview crawlers
+ *  see it (share.php renders per-NFT Open Graph from that); the holder + gift voucher stay in the #hash —
+ *  client-only, so the voucher key is never sent to the server. share.php redirects real visitors to the
+ *  app's `#c=…` route, so the app itself is unchanged. */
+function collectionShareUrl(txid: string, holder: string, giftWif?: string): string {
+  const params = new URLSearchParams({ h: holder })
+  if (giftWif) params.set('g', giftWif)
+  return withAff(`${location.origin}/c/${txid}#${params.toString()}`)
+}
+
+/** Re-encode a cover image to a JPEG data URL (crawler-friendly; some don't render WebP) via canvas. */
+function coverToJpegDataUrl(cover: { mimeType: string; bytes: number[] }): Promise<string | null> {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(new Blob([new Uint8Array(cover.bytes)], { type: cover.mimeType }))
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight
+        const ctx = c.getContext('2d')
+        if (ctx == null) { resolve(null); return }
+        ctx.drawImage(img, 0, 0)
+        resolve(c.toDataURL('image/jpeg', 0.85))
+      } catch { resolve(null) } finally { URL.revokeObjectURL(url) }
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null) }
+    img.src = url
+  })
+}
+
+/** Push a collection's PUBLIC preview assets (cover + title + description) to the server cache so shared
+ *  links get a rich per-NFT preview. Idempotent + fire-and-forget — failure just falls back to the default
+ *  banner. NEVER sends the gift voucher (public data only). */
+const ogRegistered = new Set<string>()
+async function registerOgAssets(info: CollectionInfo): Promise<void> {
+  if (ogRegistered.has(info.tx1Ref)) return
+  ogRegistered.add(info.tx1Ref)
+  try {
+    const cover = info.cover ? await coverToJpegDataUrl(info.cover) : null
+    await fetch('/register.php', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ txid: info.tx1Ref, title: info.name, description: info.description, cover: cover ?? undefined }),
+    })
+  } catch { ogRegistered.delete(info.tx1Ref) /* allow a later retry */ }
+}
+
 /** Show the saved referral code in its field (called on load). */
 function renderAffField(): void {
   const el = document.getElementById('affRefCode') as HTMLInputElement | null
@@ -890,7 +935,7 @@ async function onOnboardPartner(t: StoredToken): Promise<void> {
     store.markSent(t.txId, t.outputIndex)
     renderTokens()
     pendingListPartner = null // consume the one-shot deep-link target
-    const link = `${location.origin}${location.pathname}#c=${t.collectionId}&h=${partner}`
+    const link = collectionShareUrl(t.collectionId, partner)
     setStatus(`✅ Partner onboarded. Tx ${short(r.txId)} — share their listing link.`, 'ok')
     showPartnerLinkModal(name, link, partner)
   } catch (e) {
@@ -2827,6 +2872,7 @@ async function openCollectionView(tx1Ref: string, holderPubKey: string | null, g
     const info = await loadCollection(tx1Ref, holderPubKey)
     currentCollection = { info, holderPubKey }
     renderCollectionView(info)
+    void registerOgAssets(info) // cache this collection's preview assets so its shared links get a rich card
     if (cvGiftWif) {
       // Reframe the page as a free gift claim.
       setCvGetLabel('🎁 Get your free copy')
@@ -2861,7 +2907,7 @@ function currentShareLink(): string | null {
   if (!currentCollection) return null
   const { info, holderPubKey } = currentCollection
   const h = holderPubKey ?? pubKeyHex
-  return withAff(`${location.origin}${location.pathname}#c=${info.tx1Ref}&h=${h}`)
+  return collectionShareUrl(info.tx1Ref, h)
 }
 
 function shareCollectionLink(): void {
@@ -3202,7 +3248,7 @@ async function onGiftCopies(t: StoredToken): Promise<void> {
     // Deterministic keys: scan for the next free index so a new batch doesn't collide with existing vouchers.
     const { nextIndex } = await scanGiftVouchers(provider, k, t.collectionId)
     const { fundingTxId, voucherWifs } = await createGiftVouchers(provider, k, { tx1RefHex: t.collectionId, startIndex: nextIndex, count, fundEachSats: fundEach })
-    const links = voucherWifs.map(wif => withAff(`${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${wif}`))
+    const links = voucherWifs.map(wif => collectionShareUrl(t.collectionId, pubKeyHex, wif))
     setStatus(`✅ ${count} gift link(s) funded (tx ${short(fundingTxId)}). Recover them anytime with "Gift links".`, 'ok')
     showGiftLinksModal(t.collectionName ?? 'Free gift', links)
   } catch (e) {
@@ -3217,7 +3263,7 @@ async function onViewGiftLinks(t: StoredToken): Promise<void> {
   setStatus('Recovering your gift links from chain…')
   try {
     const scan = await scanGiftVouchers(provider, k, t.collectionId)
-    const links = scan.live.map(v => withAff(`${location.origin}${location.pathname}#c=${t.collectionId}&h=${pubKeyHex}&g=${v.wif}`))
+    const links = scan.live.map(v => collectionShareUrl(t.collectionId, pubKeyHex, v.wif))
     if (links.length === 0) {
       setStatus(scan.claimedCount > 0
         ? `No unclaimed gift links left — all ${scan.claimedCount} have been claimed.`

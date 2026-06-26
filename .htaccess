@@ -1,0 +1,8 @@
+# Per-collection share/preview pages: /c/<txid> → share.php (server-rendered Open Graph for link crawlers).
+# Everything else (the SPA at /, bundle.js, /brand, /og/*.jpg …) is served normally as static files.
+RewriteEngine On
+RewriteRule ^c/([0-9a-fA-F]{64})/?$ share.php?c=$1 [L,QSA]
+
+# Don't expose directory listings (e.g. of the /og cache). Its files are only public cover JPEGs +
+# title/description JSON, so direct access is harmless — just no browsable index.
+Options -Indexes
