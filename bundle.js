@@ -25305,7 +25305,61 @@ It's posted to your own address and spends a small network fee. Proceed?`
     }
   }
   var viewerUrl = null;
+  var CONTENT_DB = "pharlap-content";
+  var CONTENT_STORE = "content";
+  var contentDbPromise = null;
+  function openContentDb() {
+    if (contentDbPromise != null) return contentDbPromise;
+    contentDbPromise = new Promise((resolve) => {
+      try {
+        const req = indexedDB.open(CONTENT_DB, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(CONTENT_STORE)) db.createObjectStore(CONTENT_STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+    return contentDbPromise;
+  }
+  async function cachedContentGet(key2) {
+    const db = await openContentDb();
+    if (db == null) return null;
+    return new Promise((resolve) => {
+      try {
+        const req = db.transaction(CONTENT_STORE, "readonly").objectStore(CONTENT_STORE).get(key2);
+        req.onsuccess = () => resolve(req.result ?? null);
+        req.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+  async function cachedContentPut(key2, value) {
+    const db = await openContentDb();
+    if (db == null) return;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(CONTENT_STORE, "readwrite");
+        tx.objectStore(CONTENT_STORE).put(value, key2);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  }
   async function onView(collectionId, collectionName) {
+    const hit = await cachedContentGet(collectionId);
+    if (hit != null) {
+      showFile(collectionName, { mimeType: hit.mimeType, fileName: hit.fileName, fileBytes: Array.from(hit.bytes) }, hit.verified, hit.msg);
+      setStatus(hit.msg, hit.verified ? "ok" : "error");
+      return;
+    }
     setStatus("Loading the embedded file from the collection\u2026");
     try {
       const tx1 = await provider.getSourceTransaction(collectionId);
@@ -25354,6 +25408,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       const msg = encrypted ? verified ? "\u{1F513} Decrypted \u2014 ciphertext matches the on-chain commitment \u2713" : "\u26A0 Decrypted, but the ciphertext hash does NOT match the collection!" : verified ? "\u2713 Verified exact replica \u2014 SHA-256 of the content matches the on-chain commitment (timestamped on mint)" : "\u26A0 File loaded, but its hash does NOT match the on-chain commitment!";
       showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes2 }, verified, msg);
       setStatus(msg, verified ? "ok" : "error");
+      if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes2), verified, msg });
     } catch (e) {
       setStatus(`View failed: ${e.message}`, "error");
     }
@@ -27756,7 +27811,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"2bc9495"} \xB7 ${"2026-06-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"1297945"} \xB7 ${"2026-06-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

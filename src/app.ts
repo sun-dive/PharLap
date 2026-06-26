@@ -1422,7 +1422,55 @@ async function onVerify(txId: string, outputIndex: number): Promise<void> {
 // ─── file viewer ────────────────────────────────────────────────────
 let viewerUrl: string | null = null
 
+// ─── Content cache (IndexedDB) ──────────────────────────────────────────────
+// Persist DECODED NFT content locally so re-opening it is instant + works offline, instead of re-pulling
+// (and re-decoding) the whole tx from chain every time. Keyed by collection id. localStorage is far too
+// small (~5 MB) for media; IndexedDB handles hundreds of MB. Entirely best-effort — any failure (private
+// mode, quota, no IndexedDB) silently falls back to fetching from chain.
+interface CachedContent { mimeType: string; fileName: string; bytes: Uint8Array; verified: boolean; msg: string }
+const CONTENT_DB = 'pharlap-content', CONTENT_STORE = 'content'
+let contentDbPromise: Promise<IDBDatabase | null> | null = null
+function openContentDb(): Promise<IDBDatabase | null> {
+  if (contentDbPromise != null) return contentDbPromise
+  contentDbPromise = new Promise(resolve => {
+    try {
+      const req = indexedDB.open(CONTENT_DB, 1)
+      req.onupgradeneeded = () => { const db = req.result; if (!db.objectStoreNames.contains(CONTENT_STORE)) db.createObjectStore(CONTENT_STORE) }
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => resolve(null)
+    } catch { resolve(null) }
+  })
+  return contentDbPromise
+}
+async function cachedContentGet(key: string): Promise<CachedContent | null> {
+  const db = await openContentDb(); if (db == null) return null
+  return new Promise(resolve => {
+    try {
+      const req = db.transaction(CONTENT_STORE, 'readonly').objectStore(CONTENT_STORE).get(key)
+      req.onsuccess = () => resolve((req.result as CachedContent) ?? null)
+      req.onerror = () => resolve(null)
+    } catch { resolve(null) }
+  })
+}
+async function cachedContentPut(key: string, value: CachedContent): Promise<void> {
+  const db = await openContentDb(); if (db == null) return
+  return new Promise(resolve => {
+    try {
+      const tx = db.transaction(CONTENT_STORE, 'readwrite')
+      tx.objectStore(CONTENT_STORE).put(value, key)
+      tx.oncomplete = () => resolve(); tx.onerror = () => resolve(); tx.onabort = () => resolve()
+    } catch { resolve() }
+  })
+}
+
 async function onView(collectionId: string, collectionName: string): Promise<void> {
+  // Instant path: serve decoded content straight from the local cache — no chain fetch, works offline.
+  const hit = await cachedContentGet(collectionId)
+  if (hit != null) {
+    showFile(collectionName, { mimeType: hit.mimeType, fileName: hit.fileName, fileBytes: Array.from(hit.bytes) }, hit.verified, hit.msg)
+    setStatus(hit.msg, hit.verified ? 'ok' : 'error')
+    return
+  }
   setStatus('Loading the embedded file from the collection…')
   try {
     const tx1 = await provider.getSourceTransaction(collectionId)
@@ -1466,6 +1514,8 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
       : (verified ? '✓ Verified exact replica — SHA-256 of the content matches the on-chain commitment (timestamped on mint)' : '⚠ File loaded, but its hash does NOT match the on-chain commitment!')
     showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes }, verified, msg)
     setStatus(msg, verified ? 'ok' : 'error')
+    // Persist the decoded content so the next open is instant + offline (only cache a verified replica).
+    if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes), verified, msg })
   } catch (e) {
     setStatus(`View failed: ${(e as Error).message}`, 'error')
   }
