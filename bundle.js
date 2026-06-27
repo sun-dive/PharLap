@@ -22152,6 +22152,55 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     return pics;
   }
+  var LYRIC_KEYS = /* @__PURE__ */ new Set(["LYRICS", "UNSYNCEDLYRICS", "SYNCEDLYRICS", "LYRICS-XXX"]);
+  var u32le = (b, o) => (b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24) >>> 0;
+  function parseFlacLyrics(bytes2) {
+    if (bytes2.length < 8 || bytes2[0] !== 102 || bytes2[1] !== 76 || bytes2[2] !== 97 || bytes2[3] !== 67) return null;
+    let off = 4;
+    for (let guard = 0; guard < 4096; guard++) {
+      if (off + 4 > bytes2.length) break;
+      const header = bytes2[off];
+      const isLast = (header & 128) !== 0;
+      const type = header & 127;
+      const len = bytes2[off + 1] << 16 | bytes2[off + 2] << 8 | bytes2[off + 3];
+      const body = off + 4;
+      if (body + len > bytes2.length) break;
+      if (type === 4) {
+        const found = readVorbisLyrics(bytes2, body, body + len);
+        if (found != null) return found;
+      }
+      off = body + len;
+      if (isLast) break;
+    }
+    return null;
+  }
+  function readVorbisLyrics(b, start, end) {
+    const dec = new TextDecoder();
+    let o = start;
+    if (o + 4 > end) return null;
+    o += 4 + u32le(b, o);
+    if (o + 4 > end) return null;
+    const count = u32le(b, o);
+    o += 4;
+    let fallback = null;
+    for (let i = 0; i < count && i < 4096; i++) {
+      if (o + 4 > end) break;
+      const clen = u32le(b, o);
+      o += 4;
+      if (o + clen > end) break;
+      const comment = dec.decode(new Uint8Array(b.slice(o, o + clen)));
+      o += clen;
+      const eq = comment.indexOf("=");
+      if (eq <= 0) continue;
+      const key2 = comment.slice(0, eq).toUpperCase();
+      if (!LYRIC_KEYS.has(key2)) continue;
+      const val2 = comment.slice(eq + 1);
+      if (val2.trim() === "") continue;
+      if (/\[\d{1,2}:\d{1,2}/.test(val2)) return val2;
+      if (fallback == null) fallback = val2;
+    }
+    return fallback;
+  }
   function parsePictureBlock(b, start, end) {
     let o = start;
     const dec = new TextDecoder();
@@ -22237,6 +22286,50 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (o > end) return null;
     return { pictureType, mimeType: normalizeMime(fmt), data: b.slice(o, end) };
   }
+  function decodeText(b, start, end, encoding) {
+    if (start >= end) return "";
+    const u8 = new Uint8Array(b.slice(start, end));
+    try {
+      if (encoding === 1) return new TextDecoder("utf-16").decode(u8);
+      if (encoding === 2) return new TextDecoder("utf-16be").decode(u8);
+      if (encoding === 3) return new TextDecoder("utf-8").decode(u8);
+    } catch {
+    }
+    return latin1(b, start, end);
+  }
+  function parseId3Lyrics(bytes2) {
+    if (bytes2.length < 10 || bytes2[0] !== 73 || bytes2[1] !== 68 || bytes2[2] !== 51) return null;
+    const major = bytes2[3];
+    const flags = bytes2[5];
+    if ((flags & 128) !== 0) return null;
+    const end = Math.min(10 + syncsafe(bytes2, 6), bytes2.length);
+    let o = 10;
+    if ((flags & 64) !== 0) {
+      if (o + 4 > end) return null;
+      o += major >= 4 ? syncsafe(bytes2, o) : u322(bytes2, o) + 4;
+    }
+    const idLen = major === 2 ? 3 : 4;
+    const hdrLen = major === 2 ? 6 : 10;
+    const wantId = major === 2 ? "ULT" : "USLT";
+    for (let guard = 0; guard < 4096 && o + hdrLen <= end; guard++) {
+      if (bytes2[o] === 0) break;
+      const id = latin1(bytes2, o, o + idLen);
+      const frameSize = major === 2 ? u24(bytes2, o + 3) : major >= 4 ? syncsafe(bytes2, o + 4) : u322(bytes2, o + 4);
+      const fstart = o + hdrLen;
+      if (frameSize <= 0 || fstart + frameSize > end) break;
+      if (id === wantId) {
+        const fend = fstart + frameSize;
+        let p = fstart;
+        const encoding = bytes2[p];
+        p += 1 + 3;
+        p = skipDescription(bytes2, p, fend, encoding);
+        const text = decodeText(bytes2, p, fend, encoding).replace(/ +$/, "").trim();
+        if (text !== "") return text;
+      }
+      o = fstart + frameSize;
+    }
+    return null;
+  }
   function parseId3Pictures(bytes2) {
     if (bytes2.length < 10 || bytes2[0] !== 73 || bytes2[1] !== 68 || bytes2[2] !== 51) return [];
     const major = bytes2[3];
@@ -22267,6 +22360,30 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       o = fstart + frameSize;
     }
     return pics;
+  }
+
+  // src/lyrics.ts
+  function parseLyrics(raw) {
+    if (raw == null || raw.trim() === "") return null;
+    const rawLines = raw.replace(/\r/g, "").split("\n");
+    const tsRe = /\[(\d{1,2}):(\d{1,2}(?:[.:]\d{1,3})?)\]/g;
+    const synced = [];
+    for (const line of rawLines) {
+      tsRe.lastIndex = 0;
+      const times = [];
+      let m;
+      while ((m = tsRe.exec(line)) != null) times.push(parseInt(m[1], 10) * 60 + parseFloat(m[2].replace(":", ".")));
+      if (times.length > 0) {
+        const text = line.replace(/\[[^\]]*\]/g, "").trim();
+        for (const t of times) synced.push({ t, text });
+      }
+    }
+    if (synced.length > 0) {
+      synced.sort((a, b) => a.t - b.t);
+      return { synced: true, lines: synced };
+    }
+    const plain = rawLines.map((l) => l.trim()).filter((l) => l !== "").map((text) => ({ t: -1, text }));
+    return plain.length > 0 ? { synced: false, lines: plain } : null;
   }
 
   // src/messageCodec.ts
@@ -23681,11 +23798,11 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var MAX_WALK_HOPS = 600;
   var MAX_FEED_POSTS = 200;
   var MAX_POST_BYTES = 1e3;
-  function u32le(n) {
+  function u32le2(n) {
     return [n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255];
   }
   function nodeSeed(tag, collectionId, birthTxId, birthVout) {
-    return [...utils_exports.toArray(tag, "utf8"), ...utils_exports.toArray(collectionId, "hex"), ...utils_exports.toArray(birthTxId, "hex"), ...u32le(birthVout)];
+    return [...utils_exports.toArray(tag, "utf8"), ...utils_exports.toArray(collectionId, "hex"), ...utils_exports.toArray(birthTxId, "hex"), ...u32le2(birthVout)];
   }
   function nodeFeedHash160(collectionId, birthTxId, birthVout) {
     return Hash_exports.hash160(nodeSeed("PHARLAP-DISC-NODE-v1", collectionId, birthTxId, birthVout));
@@ -25585,7 +25702,8 @@ It's posted to your own address and spends a small network fee. Proceed?`
         albumUrls.push(u);
         return u;
       });
-      return { name: t.name, mimeType: t.mimeType, url, artUrls };
+      const lyrics2 = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null);
+      return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics: lyrics2 };
     });
     const probe = document.createElement("audio");
     const GOOD_EXT = /\.(mp3|m4a|aac|mp4|opus|ogg|oga|wav|wave|aif|aiff|flac|weba)$/i;
@@ -25595,7 +25713,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const otherTracks = tracks.filter((t) => !(isAudioFile(t) && canPlayInBrowser(t)));
     const stage = document.createElement("div");
     stage.className = "ep-stage";
-    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>\u{1F5BC}\uFE0F</button><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
+    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>\u{1F5BC}\uFE0F</button><button class="ep-lyrics-toggle" type="button" aria-label="Toggle lyrics" title="Lyrics" hidden>\u{1F4DD}</button><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div><div class="ep-lyrics"><div class="ep-lyrics-scroll"></div></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
     host.append(stage);
     const q = (sel) => stage.querySelector(sel);
     const songList = q(".ep-song-list");
@@ -25647,6 +25765,53 @@ It's posted to your own address and spends a small network fee. Proceed?`
     artToggle.onclick = () => {
       artToggle.textContent = player.classList.toggle("art-view") ? "\u{1F4BF}" : "\u{1F5BC}\uFE0F";
     };
+    const lyricsToggle = q(".ep-lyrics-toggle");
+    const lyricsScroll = q(".ep-lyrics-scroll");
+    let lyrics = null;
+    let lyricEls = [];
+    let lastLyric = -1;
+    function loadLyrics(parsed) {
+      lyrics = parsed;
+      lastLyric = -1;
+      lyricEls = [];
+      lyricsScroll.innerHTML = "";
+      lyricsScroll.scrollTop = 0;
+      if (parsed == null) {
+        lyricsToggle.hidden = true;
+        player.classList.remove("lyrics-view");
+        return;
+      }
+      lyricsScroll.classList.toggle("ep-ly-synced", parsed.synced);
+      for (const ln of parsed.lines) {
+        const p = document.createElement("p");
+        p.className = "ep-ly-line";
+        p.textContent = ln.text !== "" ? ln.text : "\u266A";
+        lyricsScroll.append(p);
+        lyricEls.push(p);
+      }
+      lyricsToggle.hidden = false;
+    }
+    function syncLyrics() {
+      if (lyrics == null || !lyrics.synced || lyricEls.length === 0) return;
+      const ct = audio.currentTime;
+      let idx = -1;
+      for (let i = 0; i < lyrics.lines.length; i++) {
+        if (lyrics.lines[i].t <= ct) idx = i;
+        else break;
+      }
+      if (idx === lastLyric) return;
+      if (lastLyric >= 0 && lyricEls[lastLyric] != null) lyricEls[lastLyric].classList.remove("active");
+      lastLyric = idx;
+      if (idx < 0) return;
+      const el = lyricEls[idx];
+      el.classList.add("active");
+      if (player.classList.contains("lyrics-view")) lyricsScroll.scrollTop = el.offsetTop - lyricsScroll.clientHeight / 2 + el.clientHeight / 2;
+    }
+    lyricsToggle.onclick = () => {
+      const on = player.classList.toggle("lyrics-view");
+      lyricsToggle.textContent = on ? "\u2716\uFE0F" : "\u{1F4DD}";
+      if (on && lastLyric >= 0 && lyricEls[lastLyric] != null) lyricsScroll.scrollTop = lyricEls[lastLyric].offsetTop - lyricsScroll.clientHeight / 2;
+    };
     let dlBox = null;
     const dlAdded = /* @__PURE__ */ new Set();
     const addDownload = (t, note) => {
@@ -25688,6 +25853,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     function updateProgress() {
       if (audio.duration) progressBar.style.width = `${audio.currentTime / audio.duration * 100}%`;
       curEl.textContent = fmt(audio.currentTime);
+      syncLyrics();
     }
     function play(i) {
       if (audioTracks.length === 0) return;
@@ -25697,6 +25863,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       void audioCtx?.resume();
       audio.src = audioTracks[current].url;
       showArt(audioTracks[current].artUrls);
+      loadLyrics(audioTracks[current].lyrics);
       nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`;
       void audio.play().catch(() => {
         nowPlaying.textContent = "Tap a track to play";
@@ -25797,6 +25964,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       songList.children[0].classList.add("active");
       nowPlaying.textContent = "Tap a track to play";
       showArt(audioTracks[0].artUrls);
+      loadLyrics(audioTracks[0].lyrics);
     } else {
       nowPlaying.textContent = otherTracks.some(isAudioFile) ? "No in-browser-playable audio \u2014 see downloads below." : "This release has no playable audio.";
     }
@@ -27995,7 +28163,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c9166ba"} \xB7 ${"2026-06-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"8768f42"} \xB7 ${"2026-06-27"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

@@ -1,9 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFlacPictures } from '../src/flacMeta.ts'
+import { parseFlacPictures, parseFlacLyrics } from '../src/flacMeta.ts'
 
 const u32be = (n: number): number[] => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff]
+const u32le = (n: number): number[] => [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff]
 const str = (s: string): number[] => Array.from(new TextEncoder().encode(s))
+
+// VORBIS_COMMENT block (type 4): vendor(LE len + bytes) + comment count(LE) + each (LE len + "KEY=value"). Lengths are LITTLE-endian.
+function vorbisComment(comments: string[], last: boolean): number[] {
+  const vendor = str('ref')
+  let body = [...u32le(vendor.length), ...vendor, ...u32le(comments.length)]
+  for (const c of comments) { const cb = str(c); body = body.concat([...u32le(cb.length), ...cb]) }
+  return [(last ? 0x80 : 0) | 4, (body.length >> 16) & 0xff, (body.length >> 8) & 0xff, body.length & 0xff, ...body]
+}
 
 function pictureBlock(pictureType: number, mime: string, desc: string, data: number[], last: boolean): number[] {
   const body = [
@@ -40,4 +49,21 @@ test('returns [] for non-FLAC or truncated data', () => {
   assert.deepEqual(parseFlacPictures([0, 1, 2, 3, 4, 5, 6, 7]), [])
   const flac = [0x66, 0x4c, 0x61, 0x43, ...pictureBlock(3, 'image/png', '', [1, 2, 3, 4], true)]
   assert.deepEqual(parseFlacPictures(flac.slice(0, flac.length - 2)), [])
+})
+
+test('reads lyrics from a LYRICS Vorbis comment', () => {
+  const flac = [0x66, 0x4c, 0x61, 0x43, ...vorbisComment(['TITLE=Song', 'LYRICS=la la la\nfa fa fa'], true)]
+  assert.equal(parseFlacLyrics(flac), 'la la la\nfa fa fa')
+})
+
+test('prefers a synced (LRC) lyric field over a plain one regardless of order', () => {
+  const flac = [0x66, 0x4c, 0x61, 0x43,
+    ...vorbisComment(['UNSYNCEDLYRICS=plain words', 'SYNCEDLYRICS=[00:02.00]timed words'], true)]
+  assert.equal(parseFlacLyrics(flac), '[00:02.00]timed words')
+})
+
+test('returns null when no lyric comment is present', () => {
+  const flac = [0x66, 0x4c, 0x61, 0x43, ...vorbisComment(['TITLE=Song', 'ARTIST=Me'], true)]
+  assert.equal(parseFlacLyrics(flac), null)
+  assert.equal(parseFlacLyrics([1, 2, 3]), null)
 })

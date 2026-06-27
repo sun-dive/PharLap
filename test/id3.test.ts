@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseId3Pictures } from '../src/id3.ts'
+import { parseId3Pictures, parseId3Lyrics } from '../src/id3.ts'
 
 const str = (s: string): number[] => Array.from(new TextEncoder().encode(s))
 const syncsafeBytes = (n: number): number[] => [(n >>> 21) & 0x7f, (n >>> 14) & 0x7f, (n >>> 7) & 0x7f, n & 0x7f]
@@ -48,4 +48,25 @@ test('normalizes short MIME / format strings', () => {
 test('returns [] for non-ID3 input', () => {
   assert.deepEqual(parseId3Pictures([0xff, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0]), []) // a bare MP3 frame header, no ID3
   assert.deepEqual(parseId3Pictures([1, 2, 3]), [])
+})
+
+// USLT body: encoding(0=latin1) + 3-byte language + null-terminated descriptor + lyric text
+const usltBody = (lang: string, desc: string, text: string): number[] => [0, ...str(lang), ...str(desc), 0, ...str(text)]
+
+test('parses a USLT lyric frame (v2.3) past its descriptor', () => {
+  const lyr = parseId3Lyrics(id3(3, [
+    { id: 'TIT2', body: [0, ...str('Title')] },
+    { id: 'USLT', body: usltBody('eng', 'desc', 'line one\nline two') },
+  ]))
+  assert.equal(lyr, 'line one\nline two')
+})
+
+test('parses LRC-timestamped lyrics verbatim (player detects timing)', () => {
+  const lrc = '[00:01.00]first\n[00:04.50]second'
+  assert.equal(parseId3Lyrics(id3(4, [{ id: 'USLT', body: usltBody('eng', '', lrc) }])), lrc)
+})
+
+test('returns null when there is no lyric frame', () => {
+  assert.equal(parseId3Lyrics(id3(3, [{ id: 'APIC', body: apicBody('image/png', 3, '', [1, 2]) }])), null)
+  assert.equal(parseId3Lyrics([1, 2, 3]), null)
 })
