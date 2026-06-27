@@ -22386,6 +22386,23 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return plain.length > 0 ? { synced: false, lines: plain } : null;
   }
 
+  // src/sceneTimeline.ts
+  function resolveCue(cueText, available) {
+    const parsed = parseLyrics(cueText);
+    if (parsed == null || !parsed.synced) return null;
+    const byName = /* @__PURE__ */ new Map();
+    for (const a of available) {
+      byName.set(a.toLowerCase(), a);
+      byName.set(a.toLowerCase().replace(/^.*[/\\]/, ""), a);
+    }
+    const scenes = [];
+    for (const l of parsed.lines) {
+      const hit = byName.get(l.text.trim().toLowerCase());
+      if (hit != null) scenes.push({ t: l.t, name: hit });
+    }
+    return scenes.length > 0 ? scenes : null;
+  }
+
   // src/messageCodec.ts
   var ENVELOPE_VERSION = 1;
   var FLAG_ENCRYPTED = 1;
@@ -25691,6 +25708,28 @@ It's posted to your own address and spends a small network fee. Proceed?`
       return;
     }
     const stripExt = (n) => n.replace(/\.[^./\\]+$/, "");
+    const baseName = (n) => stripExt(n).replace(/^.*[/\\]/, "").toLowerCase();
+    const cueFiles = srcTracks.filter((t) => /\.(cue|lrc)$/i.test(t.name));
+    const availNames = srcTracks.map((s2) => s2.name);
+    const cueSceneNames = /* @__PURE__ */ new Set();
+    const sceneUrlByName = /* @__PURE__ */ new Map();
+    const sceneUrlFor = (name) => {
+      const key2 = name.toLowerCase();
+      let u = sceneUrlByName.get(key2);
+      if (u == null) {
+        const f2 = srcTracks.find((s2) => s2.name === name);
+        u = URL.createObjectURL(new Blob([new Uint8Array(f2.bytes)], { type: f2.mimeType || "image/webp" }));
+        albumUrls.push(u);
+        sceneUrlByName.set(key2, u);
+        cueSceneNames.add(key2);
+      }
+      return u;
+    };
+    const buildTimeline = (cueBytes) => {
+      const resolved = resolveCue(new TextDecoder().decode(new Uint8Array(cueBytes)), availNames);
+      return resolved == null ? null : { scenes: resolved.map((s2) => ({ t: s2.t, url: sceneUrlFor(s2.name) })) };
+    };
+    const cueTimelines = cueFiles.map((c) => ({ base: baseName(c.name), tl: buildTimeline(c.bytes) })).filter((c) => c.tl != null);
     const tracks = srcTracks.map((t) => {
       const url = URL.createObjectURL(new Blob([new Uint8Array(t.bytes)], { type: t.mimeType }));
       albumUrls.push(url);
@@ -25703,17 +25742,22 @@ It's posted to your own address and spends a small network fee. Proceed?`
         return u;
       });
       const lyrics2 = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null);
-      return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics: lyrics2 };
+      return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics: lyrics2, timeline: null };
     });
     const probe = document.createElement("audio");
     const GOOD_EXT = /\.(mp3|m4a|aac|mp4|opus|ogg|oga|wav|wave|aif|aiff|flac|weba)$/i;
     const isAudioFile = (t) => t.mimeType.startsWith("audio/") || GOOD_EXT.test(t.name);
     const canPlayInBrowser = (t) => t.mimeType !== "" && t.mimeType !== "application/octet-stream" ? probe.canPlayType(t.mimeType) !== "" : GOOD_EXT.test(t.name);
     const audioTracks = tracks.filter((t) => isAudioFile(t) && canPlayInBrowser(t));
-    const otherTracks = tracks.filter((t) => !(isAudioFile(t) && canPlayInBrowser(t)));
+    for (const at of audioTracks) {
+      const m = cueTimelines.find((c) => c.base === baseName(at.name)) ?? (cueTimelines.length === 1 ? cueTimelines[0] : void 0);
+      at.timeline = m?.tl ?? null;
+    }
+    const isCueOrScene = (t) => /\.(cue|lrc)$/i.test(t.name) || cueSceneNames.has(t.name.toLowerCase());
+    const otherTracks = tracks.filter((t) => !(isAudioFile(t) && canPlayInBrowser(t)) && !isCueOrScene(t));
     const stage = document.createElement("div");
     stage.className = "ep-stage";
-    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>\u{1F5BC}\uFE0F</button><button class="ep-lyrics-toggle" type="button" aria-label="Toggle lyrics" title="Lyrics" hidden>\u{1F4DD}</button><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div><div class="ep-lyrics"><div class="ep-lyrics-scroll"></div></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
+    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>\u{1F5BC}\uFE0F</button><button class="ep-lyrics-toggle" type="button" aria-label="Toggle lyrics" title="Lyrics" hidden>\u{1F4DD}</button><button class="ep-video-toggle" type="button" aria-label="Toggle music video" title="Music video" hidden>\u{1F3AC}</button><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div><img class="ep-scene" alt="" /><div class="ep-lyrics"><div class="ep-lyrics-scroll"></div></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
     host.append(stage);
     const q = (sel) => stage.querySelector(sel);
     const songList = q(".ep-song-list");
@@ -25812,6 +25856,41 @@ It's posted to your own address and spends a small network fee. Proceed?`
       lyricsToggle.textContent = on ? "\u2716\uFE0F" : "\u{1F4DD}";
       if (on && lastLyric >= 0 && lyricEls[lastLyric] != null) lyricsScroll.scrollTop = lyricEls[lastLyric].offsetTop - lyricsScroll.clientHeight / 2;
     };
+    const videoToggle = q(".ep-video-toggle");
+    const scene = q(".ep-scene");
+    let timeline = null;
+    let lastScene = -1;
+    function loadTimeline(tl) {
+      timeline = tl;
+      lastScene = -1;
+      scene.removeAttribute("src");
+      if (tl == null) {
+        videoToggle.hidden = true;
+        player.classList.remove("video-view");
+        return;
+      }
+      videoToggle.hidden = false;
+    }
+    function syncScene() {
+      if (timeline == null || timeline.scenes.length === 0) return;
+      const ct = audio.currentTime;
+      let idx = 0;
+      for (let i = 0; i < timeline.scenes.length; i++) {
+        if (timeline.scenes[i].t <= ct) idx = i;
+        else break;
+      }
+      if (idx === lastScene) return;
+      lastScene = idx;
+      scene.src = timeline.scenes[idx].url;
+    }
+    videoToggle.onclick = () => {
+      const on = player.classList.toggle("video-view");
+      videoToggle.textContent = on ? "\u2716\uFE0F" : "\u{1F3AC}";
+      if (on) {
+        lastScene = -1;
+        syncScene();
+      }
+    };
     let dlBox = null;
     const dlAdded = /* @__PURE__ */ new Set();
     const addDownload = (t, note) => {
@@ -25854,6 +25933,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       if (audio.duration) progressBar.style.width = `${audio.currentTime / audio.duration * 100}%`;
       curEl.textContent = fmt(audio.currentTime);
       syncLyrics();
+      syncScene();
     }
     function play(i) {
       if (audioTracks.length === 0) return;
@@ -25864,6 +25944,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       audio.src = audioTracks[current].url;
       showArt(audioTracks[current].artUrls);
       loadLyrics(audioTracks[current].lyrics);
+      loadTimeline(audioTracks[current].timeline);
       nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`;
       void audio.play().catch(() => {
         nowPlaying.textContent = "Tap a track to play";
@@ -25965,6 +26046,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       nowPlaying.textContent = "Tap a track to play";
       showArt(audioTracks[0].artUrls);
       loadLyrics(audioTracks[0].lyrics);
+      loadTimeline(audioTracks[0].timeline);
     } else {
       nowPlaying.textContent = otherTracks.some(isAudioFile) ? "No in-browser-playable audio \u2014 see downloads below." : "This release has no playable audio.";
     }
@@ -28163,7 +28245,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"8768f42"} \xB7 ${"2026-06-27"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"3572e50"} \xB7 ${"2026-06-27"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
