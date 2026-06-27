@@ -18,8 +18,9 @@ import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress }
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
-import { parseFlacPictures } from './flacMeta.ts'
-import { parseId3Pictures } from './id3.ts'
+import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
+import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
+import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, noteHasContent, type SellerNote } from './sellerNote.ts'
 import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
@@ -1552,7 +1553,9 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
       const u = URL.createObjectURL(new Blob([new Uint8Array(p.data)], { type: p.mimeType || 'image/jpeg' }))
       albumUrls.push(u); return u
     })
-    return { name: t.name, mimeType: t.mimeType, url, artUrls }
+    // Embedded lyrics (USLT for MP3, LYRICS/UNSYNCEDLYRICS for FLAC — added in Kid3). Plain text or LRC (timed).
+    const lyrics = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null)
+    return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics }
   })
   // Route only browser-PLAYABLE audio into the player; formats it can't decode (WMA/APE/DSD…) and non-audio
   // files become downloads instead of a silent dead player. canPlayType is the source of truth; when the MIME
@@ -1571,8 +1574,10 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div>' +
     '<div class="ep-player">' +
       '<button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>🖼️</button>' +
+      '<button class="ep-lyrics-toggle" type="button" aria-label="Toggle lyrics" title="Lyrics" hidden>📝</button>' +
       '<div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" />' +
-        '<div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div></div>' +
+        '<div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div>' +
+        '<div class="ep-lyrics"><div class="ep-lyrics-scroll"></div></div></div>' +
       '<ul class="ep-song-list"></ul>' +
       '<div class="ep-now-playing"></div>' +
       '<div class="ep-progress-container"><div class="ep-progress-bar"></div></div>' +
@@ -1630,6 +1635,45 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   }
   artToggle.onclick = () => { artToggle.textContent = player.classList.toggle('art-view') ? '💿' : '🖼️' }
 
+  // Lyrics overlay — a scrim-backed text layer over the disc/cover (shows through to the art behind). The 📝
+  // toggle appears only when the current track carries lyrics. Synced (LRC) lyrics highlight + auto-scroll the
+  // active line in time with playback; plain lyrics just scroll. Independent of the cover/disc view.
+  const lyricsToggle = q<HTMLElement>('.ep-lyrics-toggle')
+  const lyricsScroll = q<HTMLElement>('.ep-lyrics-scroll')
+  let lyrics: ParsedLyrics | null = null
+  let lyricEls: HTMLElement[] = []
+  let lastLyric = -1
+  function loadLyrics(parsed: ParsedLyrics | null): void {
+    lyrics = parsed; lastLyric = -1; lyricEls = []; lyricsScroll.innerHTML = ''; lyricsScroll.scrollTop = 0
+    if (parsed == null) { lyricsToggle.hidden = true; player.classList.remove('lyrics-view'); return }
+    lyricsScroll.classList.toggle('ep-ly-synced', parsed.synced)
+    for (const ln of parsed.lines) {
+      const p = document.createElement('p')
+      p.className = 'ep-ly-line'
+      p.textContent = ln.text !== '' ? ln.text : '♪'
+      lyricsScroll.append(p); lyricEls.push(p)
+    }
+    lyricsToggle.hidden = false
+  }
+  function syncLyrics(): void {
+    if (lyrics == null || !lyrics.synced || lyricEls.length === 0) return
+    const ct = audio.currentTime
+    let idx = -1
+    for (let i = 0; i < lyrics.lines.length; i++) { if (lyrics.lines[i].t <= ct) idx = i; else break }
+    if (idx === lastLyric) return
+    if (lastLyric >= 0 && lyricEls[lastLyric] != null) lyricEls[lastLyric].classList.remove('active')
+    lastLyric = idx
+    if (idx < 0) return
+    const el = lyricEls[idx]
+    el.classList.add('active')
+    if (player.classList.contains('lyrics-view')) lyricsScroll.scrollTop = el.offsetTop - lyricsScroll.clientHeight / 2 + el.clientHeight / 2
+  }
+  lyricsToggle.onclick = () => {
+    const on = player.classList.toggle('lyrics-view')
+    lyricsToggle.textContent = on ? '✖️' : '📝'
+    if (on && lastLyric >= 0 && lyricEls[lastLyric] != null) lyricsScroll.scrollTop = lyricEls[lastLyric].offsetTop - lyricsScroll.clientHeight / 2
+  }
+
   // Lazy "Downloads" list under the player — for non-audio files and any track the browser can't play.
   let dlBox: HTMLElement | null = null
   const dlAdded = new Set<string>()
@@ -1664,6 +1708,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   function updateProgress(): void {
     if (audio.duration) progressBar.style.width = `${(audio.currentTime / audio.duration) * 100}%`
     curEl.textContent = fmt(audio.currentTime)
+    syncLyrics()
   }
   function play(i: number): void {
     if (audioTracks.length === 0) return
@@ -1672,6 +1717,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     initAudioContext(); void audioCtx?.resume()
     audio.src = audioTracks[current].url
     showArt(audioTracks[current].artUrls)
+    loadLyrics(audioTracks[current].lyrics)
     nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`
     void audio.play().catch(() => { nowPlaying.textContent = 'Tap a track to play' })
   }
@@ -1746,6 +1792,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     (songList.children[0] as HTMLElement).classList.add('active')
     nowPlaying.textContent = 'Tap a track to play'
     showArt(audioTracks[0].artUrls) // show the first track's cover up front, before playback
+    loadLyrics(audioTracks[0].lyrics) // surface the 📝 toggle before playback if the first track has lyrics
   } else {
     nowPlaying.textContent = otherTracks.some(isAudioFile) ? 'No in-browser-playable audio — see downloads below.' : 'This release has no playable audio.'
   }

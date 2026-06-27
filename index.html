@@ -271,6 +271,24 @@
     .ep-player.art-view .ep-disc-container { width:100%; max-width:300px; height:auto; aspect-ratio:1; }
     .ep-player.art-view .ep-art { top:0; left:0; width:100%; height:100%; transform:none; border-radius:16px;
       object-fit:contain; box-shadow:0 10px 30px rgba(0,0,0,.5); }
+    /* 📝 lyrics overlay: a scrim-backed text layer over the disc/cover (art shows through behind). Synced LRC
+       lyrics highlight + auto-scroll the active line; plain lyrics just scroll. Independent of the cover toggle. */
+    .ep-lyrics-toggle { position:absolute; top:10px; left:10px; z-index:4; width:34px; height:34px; border-radius:50%;
+      border:1px solid rgba(255,255,255,.15); background:rgba(0,0,0,.35); color:#fff; font-size:15px; cursor:pointer;
+      align-items:center; justify-content:center; backdrop-filter:blur(6px); line-height:1; display:none; }
+    .ep-lyrics-toggle:not([hidden]) { display:flex; }
+    .ep-lyrics-toggle:hover { background:rgba(0,0,0,.55); }
+    .ep-lyrics { position:absolute; inset:0; z-index:2; display:none; border-radius:16px; overflow:hidden;
+      background:radial-gradient(circle at 50% 38%, rgba(10,8,20,.5), rgba(8,6,16,.84)); }
+    .ep-player.lyrics-view .ep-lyrics { display:block; }
+    .ep-player.lyrics-view .ep-disc-container { width:100%; max-width:300px; height:auto; aspect-ratio:1; }
+    .ep-lyrics-scroll { position:absolute; inset:0; overflow-y:auto; scroll-behavior:smooth; padding:44% 18px; text-align:center;
+      scrollbar-width:thin; -webkit-mask-image:linear-gradient(transparent,#000 16%,#000 84%,transparent);
+      mask-image:linear-gradient(transparent,#000 16%,#000 84%,transparent); }
+    .ep-ly-line { margin:0 0 11px; font-size:14px; line-height:1.45; color:rgba(255,255,255,.5);
+      transition:color .25s ease, transform .25s ease, text-shadow .25s ease; }
+    .ep-ly-synced .ep-ly-line { color:rgba(255,255,255,.36); }
+    .ep-ly-line.active { color:#fff; font-weight:600; transform:scale(1.06); text-shadow:0 0 18px rgba(255,0,110,.55); }
     .ep-song-list { list-style:none; max-height:160px; overflow-y:auto; margin:0 0 14px; padding:0; scrollbar-width:thin; }
     .ep-song-list li { padding:10px 14px; margin-bottom:6px; background:rgba(255,255,255,.05); border-radius:14px; cursor:pointer;
       transition:all .25s; color:rgba(255,255,255,.7); border:1px solid transparent; font-size:14px; word-break:break-word; }
