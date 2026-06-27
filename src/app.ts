@@ -21,6 +21,7 @@ import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type Albu
 import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
 import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
 import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
+import { resolveCue } from './sceneTimeline.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, noteHasContent, type SellerNote } from './sellerNote.ts'
 import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
@@ -1534,14 +1535,43 @@ function revokeAlbumUrls(): void {
   albumUrls = []
 }
 
+interface SceneTimeline { scenes: { t: number; url: string }[] }
+interface PlayerTrack { name: string; mimeType: string; url: string; artUrls: string[]; lyrics: ParsedLyrics | null; timeline: SceneTimeline | null }
+
 /** Render one or more tracks (a packed album, or a single audio file) as the "Ethereal" EP player —
  *  spinning disc, circular audio visualizer, reactive background orbs, playlist, seek, prev/play/next,
- *  volume. Plays the in-memory tracks; non-audio files are offered as downloads below. Ported (scoped
- *  ep-) from the MusicPlayer-test player. */
+ *  volume. Plays the in-memory tracks; non-audio files are offered as downloads below. A packed .cue/.lrc
+ *  file ([mm:ss.xx]scene.webp lines) drives a scene-timeline "music video" synced to playback. Ported
+ *  (scoped ep-) from the MusicPlayer-test player. */
 function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   if (srcTracks.length === 0) { host.textContent = 'This release has no playable content.'; return }
   const stripExt = (n: string): string => n.replace(/\.[^./\\]+$/, '')
-  const tracks = srcTracks.map(t => {
+  const baseName = (n: string): string => stripExt(n).replace(/^.*[/\\]/, '').toLowerCase()
+
+  // Scene-timeline "videos": a packed .cue/.lrc file whose lines are [mm:ss.xx]scene-file.webp maps song time to
+  // a scene image (each typically an animated WebP at its own fps). The player swaps the visible scene by playback
+  // time → a seekable, audio-synced music video. Reuses the LRC engine (parseLyrics): the "text" is the filename.
+  const cueFiles = srcTracks.filter(t => /\.(cue|lrc)$/i.test(t.name))
+  const availNames = srcTracks.map(s => s.name)
+  const cueSceneNames = new Set<string>() // packed files used as scenes (kept out of the downloads list)
+  const sceneUrlByName = new Map<string, string>()
+  const sceneUrlFor = (name: string): string => { // name is an actual srcTracks name (resolveCue matched it)
+    const key = name.toLowerCase()
+    let u = sceneUrlByName.get(key)
+    if (u == null) {
+      const f = srcTracks.find(s => s.name === name)!
+      u = URL.createObjectURL(new Blob([new Uint8Array(f.bytes)], { type: f.mimeType || 'image/webp' }))
+      albumUrls.push(u); sceneUrlByName.set(key, u); cueSceneNames.add(key)
+    }
+    return u
+  }
+  const buildTimeline = (cueBytes: number[]): SceneTimeline | null => {
+    const resolved = resolveCue(new TextDecoder().decode(new Uint8Array(cueBytes)), availNames)
+    return resolved == null ? null : { scenes: resolved.map(s => ({ t: s.t, url: sceneUrlFor(s.name) })) }
+  }
+  const cueTimelines = cueFiles.map(c => ({ base: baseName(c.name), tl: buildTimeline(c.bytes) })).filter(c => c.tl != null)
+
+  const tracks: PlayerTrack[] = srcTracks.map(t => {
     const url = URL.createObjectURL(new Blob([new Uint8Array(t.bytes)], { type: t.mimeType }))
     albumUrls.push(url)
     // Embedded cover art (FLAC PICTURE blocks / MP3 ID3 APIC frames — e.g. front + back cover added in Kid3)
@@ -1555,7 +1585,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     })
     // Embedded lyrics (USLT for MP3, LYRICS/UNSYNCEDLYRICS for FLAC — added in Kid3). Plain text or LRC (timed).
     const lyrics = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null)
-    return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics }
+    return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics, timeline: null }
   })
   // Route only browser-PLAYABLE audio into the player; formats it can't decode (WMA/APE/DSD…) and non-audio
   // files become downloads instead of a silent dead player. canPlayType is the source of truth; when the MIME
@@ -1566,7 +1596,14 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
   const canPlayInBrowser = (t: { mimeType: string; name: string }): boolean =>
     (t.mimeType !== '' && t.mimeType !== 'application/octet-stream') ? probe.canPlayType(t.mimeType) !== '' : GOOD_EXT.test(t.name)
   const audioTracks = tracks.filter(t => isAudioFile(t) && canPlayInBrowser(t))
-  const otherTracks = tracks.filter(t => !(isAudioFile(t) && canPlayInBrowser(t)))
+  // Attach a scene timeline to each audio track — matched by basename (01.cue ↔ 01.flac), else the sole cue sheet.
+  for (const at of audioTracks) {
+    const m = cueTimelines.find(c => c.base === baseName(at.name)) ?? (cueTimelines.length === 1 ? cueTimelines[0] : undefined)
+    at.timeline = m?.tl ?? null
+  }
+  // Downloads exclude the cue sheet(s) + any WebP scenes they reference — those are the video, not loose files.
+  const isCueOrScene = (t: PlayerTrack): boolean => /\.(cue|lrc)$/i.test(t.name) || cueSceneNames.has(t.name.toLowerCase())
+  const otherTracks = tracks.filter(t => !(isAudioFile(t) && canPlayInBrowser(t)) && !isCueOrScene(t))
 
   const stage = document.createElement('div')
   stage.className = 'ep-stage'
@@ -1575,8 +1612,10 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     '<div class="ep-player">' +
       '<button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>🖼️</button>' +
       '<button class="ep-lyrics-toggle" type="button" aria-label="Toggle lyrics" title="Lyrics" hidden>📝</button>' +
+      '<button class="ep-video-toggle" type="button" aria-label="Toggle music video" title="Music video" hidden>🎬</button>' +
       '<div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" />' +
         '<div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div>' +
+        '<img class="ep-scene" alt="" />' +
         '<div class="ep-lyrics"><div class="ep-lyrics-scroll"></div></div></div>' +
       '<ul class="ep-song-list"></ul>' +
       '<div class="ep-now-playing"></div>' +
@@ -1674,6 +1713,33 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     if (on && lastLyric >= 0 && lyricEls[lastLyric] != null) lyricsScroll.scrollTop = lyricEls[lastLyric].offsetTop - lyricsScroll.clientHeight / 2
   }
 
+  // Scene-timeline "music video" — the 🎬 toggle (shown only when the current track has a cue sheet) enters video
+  // view: the scene image fills the disc area and swaps by playback time, so it stays synced through seeks/pauses
+  // (lyrics can overlay on top). Same active-index drive as the lyrics.
+  const videoToggle = q<HTMLElement>('.ep-video-toggle')
+  const scene = q<HTMLImageElement>('.ep-scene')
+  let timeline: SceneTimeline | null = null
+  let lastScene = -1
+  function loadTimeline(tl: SceneTimeline | null): void {
+    timeline = tl; lastScene = -1; scene.removeAttribute('src')
+    if (tl == null) { videoToggle.hidden = true; player.classList.remove('video-view'); return }
+    videoToggle.hidden = false
+  }
+  function syncScene(): void {
+    if (timeline == null || timeline.scenes.length === 0) return
+    const ct = audio.currentTime
+    let idx = 0
+    for (let i = 0; i < timeline.scenes.length; i++) { if (timeline.scenes[i].t <= ct) idx = i; else break }
+    if (idx === lastScene) return
+    lastScene = idx
+    scene.src = timeline.scenes[idx].url
+  }
+  videoToggle.onclick = () => {
+    const on = player.classList.toggle('video-view')
+    videoToggle.textContent = on ? '✖️' : '🎬'
+    if (on) { lastScene = -1; syncScene() } // paint the current scene immediately (works while paused too)
+  }
+
   // Lazy "Downloads" list under the player — for non-audio files and any track the browser can't play.
   let dlBox: HTMLElement | null = null
   const dlAdded = new Set<string>()
@@ -1709,6 +1775,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     if (audio.duration) progressBar.style.width = `${(audio.currentTime / audio.duration) * 100}%`
     curEl.textContent = fmt(audio.currentTime)
     syncLyrics()
+    syncScene()
   }
   function play(i: number): void {
     if (audioTracks.length === 0) return
@@ -1718,6 +1785,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     audio.src = audioTracks[current].url
     showArt(audioTracks[current].artUrls)
     loadLyrics(audioTracks[current].lyrics)
+    loadTimeline(audioTracks[current].timeline)
     nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`
     void audio.play().catch(() => { nowPlaying.textContent = 'Tap a track to play' })
   }
@@ -1793,6 +1861,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
     nowPlaying.textContent = 'Tap a track to play'
     showArt(audioTracks[0].artUrls) // show the first track's cover up front, before playback
     loadLyrics(audioTracks[0].lyrics) // surface the 📝 toggle before playback if the first track has lyrics
+    loadTimeline(audioTracks[0].timeline) // surface the 🎬 toggle if the first track has a scene timeline
   } else {
     nowPlaying.textContent = otherTracks.some(isAudioFile) ? 'No in-browser-playable audio — see downloads below.' : 'This release has no playable audio.'
   }
