@@ -22127,6 +22127,51 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return tracks;
   }
 
+  // src/refManifest.ts
+  var MANIFEST_MIME = "application/x-pharlap-refs";
+  var MAX_MANIFEST_REFS = 24;
+  var MAGIC2 = [80, 82, 69, 70];
+  var VERSION2 = 1;
+  var HEX64 = /^[0-9a-fA-F]{64}$/;
+  function packManifest(refs) {
+    if (refs.length === 0) throw new Error("a reference manifest needs at least one entry");
+    if (refs.length > MAX_MANIFEST_REFS) throw new Error(`a reference manifest can hold at most ${MAX_MANIFEST_REFS} entries`);
+    for (const r2 of refs) {
+      if (!HEX64.test(r2.id)) throw new Error(`reference id must be a 32-byte txid hex: ${r2.id}`);
+      if (!HEX64.test(r2.hash)) throw new Error(`reference hash must be a 32-byte sha256 hex: ${r2.hash}`);
+    }
+    const header = { v: VERSION2, refs: refs.map((r2) => ({ i: r2.id.toLowerCase(), h: r2.hash.toLowerCase(), n: r2.name, m: r2.mimeType })) };
+    const headerBytes = Array.from(new TextEncoder().encode(JSON.stringify(header)));
+    const len = headerBytes.length >>> 0;
+    return [...MAGIC2, VERSION2, len >>> 24 & 255, len >>> 16 & 255, len >>> 8 & 255, len & 255, ...headerBytes];
+  }
+  function isManifest(mimeType, bytes2) {
+    if (mimeType === MANIFEST_MIME) return true;
+    if (bytes2 != null && bytes2.length >= 4 && bytes2[0] === MAGIC2[0] && bytes2[1] === MAGIC2[1] && bytes2[2] === MAGIC2[2] && bytes2[3] === MAGIC2[3]) return true;
+    return false;
+  }
+  function parseManifest(bytes2) {
+    if (bytes2.length < 9) return null;
+    for (let i = 0; i < 4; i++) if (bytes2[i] !== MAGIC2[i]) return null;
+    const len = (bytes2[5] << 24 | bytes2[6] << 16 | bytes2[7] << 8 | bytes2[8]) >>> 0;
+    const headEnd = 9 + len;
+    if (headEnd > bytes2.length) return null;
+    let header;
+    try {
+      header = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes2.slice(9, headEnd))));
+    } catch {
+      return null;
+    }
+    if (header == null || !Array.isArray(header.refs) || header.refs.length === 0) return null;
+    const refs = [];
+    for (const r2 of header.refs) {
+      const id = String(r2.i ?? ""), hash = String(r2.h ?? "");
+      if (!HEX64.test(id) || !HEX64.test(hash)) return null;
+      refs.push({ id: id.toLowerCase(), hash: hash.toLowerCase(), name: String(r2.n ?? "track"), mimeType: String(r2.m ?? "application/octet-stream") });
+    }
+    return refs;
+  }
+
   // src/flacMeta.ts
   function u32(b, o) {
     return (b[o] << 24 | b[o + 1] << 16 | b[o + 2] << 8 | b[o + 3]) >>> 0;
@@ -24872,15 +24917,21 @@ Proceed?`
     const count = Math.max(1, parseInt(val("edCount") || "1", 10));
     const encrypt = $("edEncrypt").checked;
     const description = val("edDescription");
+    const combineMode = $("edCombine")?.checked ?? false;
     try {
-      const file = await readContent($("edFile"), name);
+      const file = combineMode ? await buildCombinedManifest(name) : await readContent($("edFile"), name);
+      if (combineMode && file == null) {
+        setStatus("Combine mode: pick at least 2 of your collections to bundle.", "error");
+        return;
+      }
       const cover = croppedCover ?? await readFile($("edCover"));
       if (encrypt && !file) {
         setStatus("Encryption needs a file \u2014 attach one or uncheck encrypt.", "error");
         return;
       }
+      const manifestRefs = file != null && isManifest(file.mimeType, file.bytes) ? parseManifest(file.bytes) : null;
       const trackCount = file?.mimeType === ALBUM_MIME ? parseAlbum(file.bytes)?.length ?? 0 : 0;
-      const fileLabel = file == null ? "" : trackCount > 0 ? ` (embedding a ${trackCount}-track album, ${kb(file.bytes.length)})` : ` (embedding a ${kb(file.bytes.length)} file)`;
+      const fileLabel = file == null ? "" : manifestRefs != null ? ` (an EP referencing ${manifestRefs.length} mint${manifestRefs.length === 1 ? "" : "s"} \u2014 no re-upload)` : trackCount > 0 ? ` (embedding a ${trackCount}-track album, ${kb(file.bytes.length)})` : ` (embedding a ${kb(file.bytes.length)} file)`;
       if (file != null && !confirmAudioFidelity(file)) {
         setStatus("Mint cancelled \u2014 compress the file first, or proceed as-is when you\u2019re ready.");
         return;
@@ -24915,6 +24966,64 @@ Proceed?`
       }
       setStatus(`Edition mint failed: ${e.message}`, "error");
     }
+  }
+  async function buildCombinedManifest(epName) {
+    const ids = checkedCombineIds();
+    if (ids.length < 2) return void 0;
+    setStatus(`Reading ${ids.length} collections to build the EP\u2026`);
+    const refs = [];
+    for (const id of ids) {
+      const info = await loadCollection(id);
+      if (!info.hasContentFile || info.fileHash == null) throw new Error(`"${info.name || short(id)}" has no embedded content to reference`);
+      if (info.encrypted) throw new Error(`"${info.name || short(id)}" is encrypted \u2014 EPs can only reference public content for now`);
+      refs.push({ id, hash: info.fileHash, name: info.name || short(id), mimeType: "application/octet-stream" });
+    }
+    const safe = (epName || "ep").replace(/[^\w.-]+/g, "_");
+    return { mimeType: MANIFEST_MIME, fileName: `${safe}.pref`, bytes: packManifest(refs) };
+  }
+  function checkedCombineIds() {
+    return Array.from(document.querySelectorAll(".combine-pick:checked")).map((c) => c.value);
+  }
+  function updateCombineHint() {
+    const hint = $("edCombineHint");
+    if (hint == null) return;
+    const n = checkedCombineIds().length;
+    hint.textContent = n < 2 ? `Select 2 or more (${n} picked).` : `${n} selected \u2014 they\u2019ll play as one EP.`;
+  }
+  function renderCombinePicker() {
+    const list = $("edCombineList");
+    if (list == null) return;
+    list.innerHTML = "";
+    const seen = /* @__PURE__ */ new Set();
+    const cols = store2.active().filter((t) => {
+      if (seen.has(t.collectionId)) return false;
+      seen.add(t.collectionId);
+      return true;
+    });
+    if (cols.length === 0) {
+      list.innerHTML = '<li class="muted" style="font-size:12px">No collections in this wallet yet \u2014 mint or hold some singles first.</li>';
+      updateCombineHint();
+      return;
+    }
+    for (const t of cols) {
+      const li = document.createElement("li");
+      li.className = "combine-row";
+      const label = document.createElement("label");
+      label.className = "check";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "combine-pick";
+      cb.value = t.collectionId;
+      cb.onchange = updateCombineHint;
+      label.append(cb, document.createTextNode(" " + (t.collectionName || short(t.collectionId))));
+      const idSpan = document.createElement("span");
+      idSpan.className = "muted";
+      idSpan.style.fontSize = "11px";
+      idSpan.textContent = short(t.collectionId);
+      li.append(label, idSpan);
+      list.append(li);
+    }
+    updateCombineHint();
   }
   async function noteToPropagate(t) {
     try {
@@ -25629,65 +25738,85 @@ It's posted to your own address and spends a small network fee. Proceed?`
       }
     });
   }
-  async function onView(collectionId, collectionName) {
+  async function fetchCollectionContent(collectionId) {
     const hit = await cachedContentGet(collectionId);
-    if (hit != null) {
-      showFile(collectionName, { mimeType: hit.mimeType, fileName: hit.fileName, fileBytes: Array.from(hit.bytes) }, hit.verified, hit.msg);
-      setStatus(hit.msg, hit.verified ? "ok" : "error");
-      return;
+    if (hit != null) return { mimeType: hit.mimeType, fileName: hit.fileName, bytes: Array.from(hit.bytes), verified: hit.verified, msg: hit.msg };
+    const tx1 = await provider.getSourceTransaction(collectionId);
+    let file = null;
+    let template;
+    for (const o of tx1.outputs) {
+      const f2 = parseFileScript(o.lockingScript);
+      if (f2) file = f2.fields;
+      const t = parseTemplateScript(o.lockingScript);
+      if (t) template = t.fields;
     }
+    if (!file) return null;
+    const rules = template != null ? decodeTokenRules(template.tokenRules) : null;
+    const encrypted = rules?.isEncrypted ?? false;
+    const ciphertextOk = encrypted && template?.fileHash === utils_exports.toHex(Hash_exports.sha256(file.fileBytes));
+    let bytes2 = file.fileBytes;
+    if (encrypted) {
+      if (template?.wrappedKey == null || template?.keySalt == null) throw new Error("encrypted collection is missing its wrapped key");
+      const K2 = unwrapContentKey(template.wrappedKey, template.keySalt);
+      if (K2 == null) throw new Error("could not unwrap the content key");
+      bytes2 = decryptContent(bytes2, K2);
+    }
+    if (rules?.isCompressed) bytes2 = await decompress(bytes2);
+    const verified = encrypted ? ciphertextOk : template?.fileHash === utils_exports.toHex(Hash_exports.sha256(bytes2));
+    const msg = encrypted ? verified ? "\u{1F513} Decrypted \u2014 ciphertext matches the on-chain commitment \u2713" : "\u26A0 Decrypted, but the ciphertext hash does NOT match the collection!" : verified ? "\u2713 Verified exact replica \u2014 SHA-256 of the content matches the on-chain commitment (timestamped on mint)" : "\u26A0 File loaded, but its hash does NOT match the on-chain commitment!";
+    if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes2), verified, msg });
+    return { mimeType: file.mimeType, fileName: file.fileName, bytes: bytes2, verified, msg };
+  }
+  async function onView(collectionId, collectionName) {
     setStatus("Loading the embedded file from the collection\u2026");
     try {
-      const tx1 = await provider.getSourceTransaction(collectionId);
-      let file = null;
-      let template;
-      for (const o of tx1.outputs) {
-        const f2 = parseFileScript(o.lockingScript);
-        if (f2) file = f2.fields;
-        const t = parseTemplateScript(o.lockingScript);
-        if (t) template = t.fields;
-      }
-      if (!file) {
+      const decoded = await fetchCollectionContent(collectionId);
+      if (decoded == null) {
         setStatus(`"${collectionName}" has no embedded file.`, "info");
         return;
       }
-      const rules = template != null ? decodeTokenRules(template.tokenRules) : null;
-      const encrypted = rules?.isEncrypted ?? false;
-      const ciphertextOk = encrypted && template?.fileHash === utils_exports.toHex(Hash_exports.sha256(file.fileBytes));
-      let bytes2 = file.fileBytes;
-      if (encrypted) {
-        if (template?.wrappedKey == null || template?.keySalt == null) {
-          setStatus("Encrypted collection is missing its wrapped key \u2014 cannot decrypt.", "error");
-          return;
-        }
-        const K2 = unwrapContentKey(template.wrappedKey, template.keySalt);
-        if (K2 == null) {
-          setStatus("Could not unwrap the content key.", "error");
-          return;
-        }
-        try {
-          bytes2 = decryptContent(bytes2, K2);
-        } catch {
-          setStatus("Decryption failed (wrong key or corrupt ciphertext).", "error");
-          return;
-        }
+      if (isManifest(decoded.mimeType, decoded.bytes)) {
+        await viewReferenceManifest(collectionName, decoded);
+        return;
       }
-      if (rules?.isCompressed) {
-        try {
-          bytes2 = await decompress(bytes2);
-        } catch {
-          setStatus("Decompression failed (corrupt data).", "error");
-          return;
-        }
-      }
-      const verified = encrypted ? ciphertextOk : template?.fileHash === utils_exports.toHex(Hash_exports.sha256(bytes2));
-      const msg = encrypted ? verified ? "\u{1F513} Decrypted \u2014 ciphertext matches the on-chain commitment \u2713" : "\u26A0 Decrypted, but the ciphertext hash does NOT match the collection!" : verified ? "\u2713 Verified exact replica \u2014 SHA-256 of the content matches the on-chain commitment (timestamped on mint)" : "\u26A0 File loaded, but its hash does NOT match the on-chain commitment!";
-      showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes2 }, verified, msg);
-      setStatus(msg, verified ? "ok" : "error");
-      if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes2), verified, msg });
+      showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg);
+      setStatus(decoded.msg, decoded.verified ? "ok" : "error");
     } catch (e) {
       setStatus(`View failed: ${e.message}`, "error");
     }
+  }
+  async function viewReferenceManifest(epName, manifest) {
+    const refs = parseManifest(manifest.bytes);
+    if (refs == null) {
+      setStatus("This release references other works, but its manifest is unreadable.", "error");
+      return;
+    }
+    setStatus(`Resolving ${refs.length} referenced ${refs.length === 1 ? "work" : "works"}\u2026`);
+    const tracks = [];
+    let missing = 0;
+    for (const r2 of refs) {
+      let decoded = null;
+      try {
+        decoded = await fetchCollectionContent(r2.id);
+      } catch {
+        decoded = null;
+      }
+      if (decoded == null || utils_exports.toHex(Hash_exports.sha256(decoded.bytes)) !== r2.hash) {
+        missing++;
+        continue;
+      }
+      const inner = isAlbum(decoded.mimeType, decoded.bytes) ? parseAlbum(decoded.bytes) : null;
+      if (inner != null && inner.length > 0) for (const t of inner) tracks.push(t);
+      else tracks.push({ name: r2.name || decoded.fileName, mimeType: decoded.mimeType, bytes: decoded.bytes });
+    }
+    if (tracks.length === 0) {
+      setStatus("None of the referenced works could be resolved on-chain.", "error");
+      return;
+    }
+    const ok = missing === 0 && manifest.verified;
+    const msg = missing === 0 ? `\u2713 ${tracks.length} track${tracks.length === 1 ? "" : "s"} resolved from referenced mints \u2014 each hash-verified against the manifest` : `\u26A0 ${tracks.length} of ${refs.length} referenced works resolved (${missing} unavailable or hash-mismatched)`;
+    showAlbumTracks(epName, tracks, ok, msg, `${tracks.length} track${tracks.length === 1 ? "" : "s"} \xB7 referenced`);
+    setStatus(msg, missing === 0 ? "ok" : "error");
   }
   var albumUrls = [];
   var epTeardown = null;
@@ -26107,6 +26236,24 @@ It's posted to your own address and spends a small network fee. Proceed?`
       a.className = "viewer-dl";
       content.append(a);
     }
+    $("viewer").style.display = "flex";
+  }
+  function showAlbumTracks(title, tracks, verified, note, subtitle) {
+    const content = $("viewerContent");
+    revokeAlbumUrls();
+    if (viewerUrl) {
+      URL.revokeObjectURL(viewerUrl);
+      viewerUrl = null;
+    }
+    $("viewerTitle").textContent = `${title} \u2014 ${subtitle}`;
+    const banner = $("viewerProvenance");
+    if (note) {
+      banner.textContent = note;
+      banner.className = `viewer-banner ${verified ? "ok" : "error"}`;
+      banner.style.display = "block";
+    } else banner.style.display = "none";
+    content.innerHTML = "";
+    renderPlayer(content, tracks);
     $("viewer").style.display = "flex";
   }
   function closeViewer() {
@@ -27258,6 +27405,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       encrypted: rules.isEncrypted,
       replicable: rules.isReplicable,
       hasContentFile,
+      fileHash: template.fileHash ?? null,
       publisherPubKeyHex,
       fees,
       isV2,
@@ -28245,7 +28393,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"3572e50"} \xB7 ${"2026-06-27"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"d67fdd3"} \xB7 ${"2026-06-28"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -28301,6 +28449,15 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     wireScanButtons();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
+    $("edCombine").onchange = () => {
+      const on = $("edCombine").checked;
+      $("edCombineWrap").hidden = !on;
+      $("edFile").disabled = on;
+      const enc = $("edEncrypt");
+      enc.disabled = on;
+      if (on) enc.checked = false;
+      if (on) renderCombinePicker();
+    };
     $("edCover").onchange = () => void onCoverSelected();
     $("edCoverCam").onclick = () => void onTakePhoto();
     $("btnFeeFixed").onclick = () => setFeeMode("fixed");

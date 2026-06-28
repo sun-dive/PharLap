@@ -18,6 +18,7 @@ import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress }
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
+import { packManifest, parseManifest, isManifest, MANIFEST_MIME, type ManifestRef } from './refManifest.ts'
 import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
 import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
 import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
@@ -786,12 +787,18 @@ async function onMintEdition(): Promise<void> {
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
   const description = val('edDescription')
+  const combineMode = ($('edCombine') as HTMLInputElement)?.checked ?? false
   try {
-    const file = await readContent($('edFile') as HTMLInputElement, name)
+    // Combine mode mints an EP whose content is a REFERENCE manifest (pointers to existing mints, no re-upload);
+    // otherwise embed the picked file(s) as usual.
+    const file = combineMode ? await buildCombinedManifest(name) : await readContent($('edFile') as HTMLInputElement, name)
+    if (combineMode && file == null) { setStatus('Combine mode: pick at least 2 of your collections to bundle.', 'error'); return }
     const cover = croppedCover ?? await readFile($('edCover') as HTMLInputElement) // prefer the cropped/resized cover
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
+    const manifestRefs = file != null && isManifest(file.mimeType, file.bytes) ? parseManifest(file.bytes) : null
     const trackCount = file?.mimeType === ALBUM_MIME ? (parseAlbum(file.bytes)?.length ?? 0) : 0
     const fileLabel = file == null ? ''
+      : manifestRefs != null ? ` (an EP referencing ${manifestRefs.length} mint${manifestRefs.length === 1 ? '' : 's'} — no re-upload)`
       : trackCount > 0 ? ` (embedding a ${trackCount}-track album, ${kb(file.bytes.length)})`
       : ` (embedding a ${kb(file.bytes.length)} file)`
     if (file != null && !confirmAudioFidelity(file)) { setStatus('Mint cancelled — compress the file first, or proceed as-is when you’re ready.'); return }
@@ -813,6 +820,51 @@ async function onMintEdition(): Promise<void> {
     if ((e as Error).message === SPEND_CANCELLED) { setStatus('Edition mint cancelled — nothing was spent.'); return }
     setStatus(`Edition mint failed: ${(e as Error).message}`, 'error')
   }
+}
+
+// ── Combine mode: mint an EP whose content is a reference manifest (pointers to existing mints) ──
+/** Read each picked collection's committed fileHash + name — a cheap template-only load via loadCollection,
+ *  NOT a content download — and pack them into a reference manifest to mint as the EP's content. Returns
+ *  undefined if fewer than 2 are picked (an EP needs at least two). Throws if a pick has no embedded content. */
+async function buildCombinedManifest(epName: string): Promise<{ mimeType: string; fileName: string; bytes: number[] } | undefined> {
+  const ids = checkedCombineIds()
+  if (ids.length < 2) return undefined
+  setStatus(`Reading ${ids.length} collections to build the EP…`)
+  const refs: ManifestRef[] = []
+  for (const id of ids) {
+    const info = await loadCollection(id)
+    if (!info.hasContentFile || info.fileHash == null) throw new Error(`"${info.name || short(id)}" has no embedded content to reference`)
+    if (info.encrypted) throw new Error(`"${info.name || short(id)}" is encrypted — EPs can only reference public content for now`)
+    refs.push({ id, hash: info.fileHash, name: info.name || short(id), mimeType: 'application/octet-stream' })
+  }
+  const safe = (epName || 'ep').replace(/[^\w.-]+/g, '_')
+  return { mimeType: MANIFEST_MIME, fileName: `${safe}.pref`, bytes: packManifest(refs) }
+}
+function checkedCombineIds(): string[] {
+  return Array.from(document.querySelectorAll('.combine-pick:checked')).map(c => (c as HTMLInputElement).value)
+}
+function updateCombineHint(): void {
+  const hint = $('edCombineHint'); if (hint == null) return
+  const n = checkedCombineIds().length
+  hint.textContent = n < 2 ? `Select 2 or more (${n} picked).` : `${n} selected — they’ll play as one EP.`
+}
+/** Populate the combine picker from the collections this wallet holds (deduped) — your singles to bundle. */
+function renderCombinePicker(): void {
+  const list = $('edCombineList'); if (list == null) return
+  list.innerHTML = ''
+  const seen = new Set<string>()
+  const cols = store.active().filter(t => { if (seen.has(t.collectionId)) return false; seen.add(t.collectionId); return true })
+  if (cols.length === 0) { list.innerHTML = '<li class="muted" style="font-size:12px">No collections in this wallet yet — mint or hold some singles first.</li>'; updateCombineHint(); return }
+  for (const t of cols) {
+    const li = document.createElement('li'); li.className = 'combine-row'
+    const label = document.createElement('label'); label.className = 'check'
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'combine-pick'; cb.value = t.collectionId
+    cb.onchange = updateCombineHint
+    label.append(cb, document.createTextNode(' ' + (t.collectionName || short(t.collectionId))))
+    const idSpan = document.createElement('span'); idSpan.className = 'muted'; idSpan.style.fontSize = '11px'; idSpan.textContent = short(t.collectionId)
+    li.append(label, idSpan); list.append(li)
+  }
+  updateCombineHint()
 }
 
 /** The note (promo + bonus) to carry when I sell/transfer an edition I hold: my own published note wins,
@@ -1467,62 +1519,84 @@ async function cachedContentPut(key: string, value: CachedContent): Promise<void
   })
 }
 
-async function onView(collectionId: string, collectionName: string): Promise<void> {
-  // Instant path: serve decoded content straight from the local cache — no chain fetch, works offline.
+interface DecodedContent { mimeType: string; fileName: string; bytes: number[]; verified: boolean; msg: string }
+
+/** Fetch + decode + hash-verify ONE collection's embedded content (cache-first; persists a verified replica).
+ *  Returns null if the collection has no embedded file. Throws on decode failure (caller handles) — kept
+ *  status-free so it can be reused per-reference when resolving a manifest. */
+async function fetchCollectionContent(collectionId: string): Promise<DecodedContent | null> {
   const hit = await cachedContentGet(collectionId)
-  if (hit != null) {
-    showFile(collectionName, { mimeType: hit.mimeType, fileName: hit.fileName, fileBytes: Array.from(hit.bytes) }, hit.verified, hit.msg)
-    setStatus(hit.msg, hit.verified ? 'ok' : 'error')
-    return
+  if (hit != null) return { mimeType: hit.mimeType, fileName: hit.fileName, bytes: Array.from(hit.bytes), verified: hit.verified, msg: hit.msg }
+  const tx1 = await provider.getSourceTransaction(collectionId)
+  let file: { mimeType: string; fileName: string; fileBytes: number[] } | null = null
+  let template: TemplateFields | undefined
+  for (const o of tx1.outputs) {
+    const f = parseFileScript(o.lockingScript); if (f) file = f.fields
+    const t = parseTemplateScript(o.lockingScript); if (t) template = t.fields
   }
+  if (!file) return null
+  const rules = template != null ? decodeTokenRules(template.tokenRules) : null
+  const encrypted = rules?.isEncrypted ?? false
+  // fileHash binds the ciphertext for encrypted content (privacy) but the ORIGINAL plaintext for public
+  // content (provenance) — so the encrypted check runs on the raw stored blob, the public check on the plaintext.
+  const ciphertextOk = encrypted && template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
+  // Unwind the stored bytes in reverse of how they were made: decrypt first, then decompress.
+  let bytes = file.fileBytes
+  if (encrypted) {
+    if (template?.wrappedKey == null || template?.keySalt == null) throw new Error('encrypted collection is missing its wrapped key')
+    const K = unwrapContentKey(template.wrappedKey, template.keySalt)
+    if (K == null) throw new Error('could not unwrap the content key')
+    bytes = decryptContent(bytes, K)
+  }
+  if (rules?.isCompressed) bytes = await decompress(bytes)
+  const verified = encrypted ? ciphertextOk : (template?.fileHash === Utils.toHex(Hash.sha256(bytes)))
+  const msg = encrypted
+    ? (verified ? '🔓 Decrypted — ciphertext matches the on-chain commitment ✓' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!')
+    : (verified ? '✓ Verified exact replica — SHA-256 of the content matches the on-chain commitment (timestamped on mint)' : '⚠ File loaded, but its hash does NOT match the on-chain commitment!')
+  // Persist the decoded content so the next open is instant + offline (only cache a verified replica).
+  if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes), verified, msg })
+  return { mimeType: file.mimeType, fileName: file.fileName, bytes, verified, msg }
+}
+
+async function onView(collectionId: string, collectionName: string): Promise<void> {
   setStatus('Loading the embedded file from the collection…')
   try {
-    const tx1 = await provider.getSourceTransaction(collectionId)
-    let file: { mimeType: string; fileName: string; fileBytes: number[] } | null = null
-    let template: TemplateFields | undefined
-    for (const o of tx1.outputs) {
-      const f = parseFileScript(o.lockingScript)
-      if (f) file = f.fields
-      const t = parseTemplateScript(o.lockingScript)
-      if (t) template = t.fields
-    }
-    if (!file) {
-      setStatus(`"${collectionName}" has no embedded file.`, 'info')
-      return
-    }
-    const rules = template != null ? decodeTokenRules(template.tokenRules) : null
-    const encrypted = rules?.isEncrypted ?? false
-    // fileHash binds the ciphertext for encrypted content (privacy) but the ORIGINAL plaintext for public
-    // content (provenance) — so the encrypted check runs on the raw stored blob, while the public check runs
-    // AFTER the unwind below, against the recovered plaintext.
-    const ciphertextOk = encrypted && template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
-
-    // Unwind the stored bytes in the reverse of how they were made: decrypt first, then decompress.
-    let bytes = file.fileBytes
-    if (encrypted) {
-      if (template?.wrappedKey == null || template?.keySalt == null) {
-        setStatus('Encrypted collection is missing its wrapped key — cannot decrypt.', 'error'); return
-      }
-      const K = unwrapContentKey(template.wrappedKey, template.keySalt)
-      if (K == null) { setStatus('Could not unwrap the content key.', 'error'); return }
-      try { bytes = decryptContent(bytes, K) } catch { setStatus('Decryption failed (wrong key or corrupt ciphertext).', 'error'); return }
-    }
-    if (rules?.isCompressed) {
-      try { bytes = await decompress(bytes) } catch { setStatus('Decompression failed (corrupt data).', 'error'); return }
-    }
-    // Public: verify the recovered plaintext against the on-chain commitment — this is the "exact replica"
-    // proof. Decompression is deterministic, so H(recovered) == fileHash holds regardless of the gzip encoding.
-    const verified = encrypted ? ciphertextOk : (template?.fileHash === Utils.toHex(Hash.sha256(bytes)))
-    const msg = encrypted
-      ? (verified ? '🔓 Decrypted — ciphertext matches the on-chain commitment ✓' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!')
-      : (verified ? '✓ Verified exact replica — SHA-256 of the content matches the on-chain commitment (timestamped on mint)' : '⚠ File loaded, but its hash does NOT match the on-chain commitment!')
-    showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes }, verified, msg)
-    setStatus(msg, verified ? 'ok' : 'error')
-    // Persist the decoded content so the next open is instant + offline (only cache a verified replica).
-    if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes), verified, msg })
+    const decoded = await fetchCollectionContent(collectionId)
+    if (decoded == null) { setStatus(`"${collectionName}" has no embedded file.`, 'info'); return }
+    // A reference manifest points at other works instead of embedding bytes — resolve + play them as an album.
+    if (isManifest(decoded.mimeType, decoded.bytes)) { await viewReferenceManifest(collectionName, decoded); return }
+    showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg)
+    setStatus(decoded.msg, decoded.verified ? 'ok' : 'error')
   } catch (e) {
     setStatus(`View failed: ${(e as Error).message}`, 'error')
   }
+}
+
+/** Resolve a reference-manifest collection: fetch each referenced work's content, hash-check it against what
+ *  the manifest committed, and play the lot as one album. A reference that's unavailable or hash-mismatched is
+ *  skipped (shown in the status) rather than failing the whole release. A referenced album is flattened. */
+async function viewReferenceManifest(epName: string, manifest: DecodedContent): Promise<void> {
+  const refs = parseManifest(manifest.bytes)
+  if (refs == null) { setStatus('This release references other works, but its manifest is unreadable.', 'error'); return }
+  setStatus(`Resolving ${refs.length} referenced ${refs.length === 1 ? 'work' : 'works'}…`)
+  const tracks: AlbumTrack[] = []
+  let missing = 0
+  for (const r of refs) {
+    let decoded: DecodedContent | null = null
+    try { decoded = await fetchCollectionContent(r.id) } catch { decoded = null }
+    // Integrity: the resolved content must hash to what the EP author committed in the manifest.
+    if (decoded == null || Utils.toHex(Hash.sha256(decoded.bytes)) !== r.hash) { missing++; continue }
+    const inner = isAlbum(decoded.mimeType, decoded.bytes) ? parseAlbum(decoded.bytes) : null
+    if (inner != null && inner.length > 0) for (const t of inner) tracks.push(t)
+    else tracks.push({ name: r.name || decoded.fileName, mimeType: decoded.mimeType, bytes: decoded.bytes })
+  }
+  if (tracks.length === 0) { setStatus('None of the referenced works could be resolved on-chain.', 'error'); return }
+  const ok = missing === 0 && manifest.verified
+  const msg = missing === 0
+    ? `✓ ${tracks.length} track${tracks.length === 1 ? '' : 's'} resolved from referenced mints — each hash-verified against the manifest`
+    : `⚠ ${tracks.length} of ${refs.length} referenced works resolved (${missing} unavailable or hash-mismatched)`
+  showAlbumTracks(epName, tracks, ok, msg, `${tracks.length} track${tracks.length === 1 ? '' : 's'} · referenced`)
+  setStatus(msg, missing === 0 ? 'ok' : 'error')
 }
 
 // Object URLs for unpacked album tracks + the live player's teardown — released when the viewer
@@ -1919,6 +1993,21 @@ function showFile(title: string, file: { mimeType: string; fileName: string; fil
     a.className = 'viewer-dl'
     content.append(a)
   }
+  $('viewer').style.display = 'flex'
+}
+
+/** Open the viewer on a set of already-resolved tracks (used by reference-manifest playback — the tracks
+ *  come from other collections, so there's no single file blob). Mirrors showFile's album branch. */
+function showAlbumTracks(title: string, tracks: AlbumTrack[], verified: boolean, note: string, subtitle: string): void {
+  const content = $('viewerContent')
+  revokeAlbumUrls()
+  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
+  $('viewerTitle').textContent = `${title} — ${subtitle}`
+  const banner = $('viewerProvenance')
+  if (note) { banner.textContent = note; banner.className = `viewer-banner ${verified ? 'ok' : 'error'}`; banner.style.display = 'block' }
+  else banner.style.display = 'none'
+  content.innerHTML = ''
+  renderPlayer(content, tracks)
   $('viewer').style.display = 'flex'
 }
 
@@ -2914,6 +3003,9 @@ interface CollectionInfo {
   encrypted: boolean
   replicable: boolean
   hasContentFile: boolean
+  /** SHA-256 (hex) of the embedded content, committed in the TX1 template — used to reference this collection
+   *  from a combination/EP manifest (and to integrity-check the resolved content). null if no content file. */
+  fileHash: string | null
   publisherPubKeyHex: string | null
   fees: { publisher: number; holder: number } | null
   /** v2 (percentage pricing): publisher basis points + the genesis/reference price (the seller's live price is
@@ -3017,6 +3109,7 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
     cover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
+    fileHash: template.fileHash ?? null,
     publisherPubKeyHex, fees, isV2, pBps, v2PriceSats, covenantHex: template.covenantScript, bondSats,
   }
 }
@@ -3967,6 +4060,15 @@ function init(): void {
   wireScanButtons() // inject 📷 scan buttons beside [data-scan] inputs
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
+  ;($('edCombine') as HTMLInputElement).onchange = () => {
+    const on = ($('edCombine') as HTMLInputElement).checked
+    $('edCombineWrap').hidden = !on
+    // In combine mode the EP's content IS the reference manifest, so the file/encrypt inputs don't apply.
+    ;($('edFile') as HTMLInputElement).disabled = on
+    const enc = $('edEncrypt') as HTMLInputElement
+    enc.disabled = on; if (on) enc.checked = false // disabling alone leaves .checked true — clear it
+    if (on) renderCombinePicker()
+  }
   ;($('edCover') as HTMLInputElement).onchange = () => void onCoverSelected()
   $('edCoverCam').onclick = () => void onTakePhoto()
   $('btnFeeFixed').onclick = () => setFeeMode('fixed')
