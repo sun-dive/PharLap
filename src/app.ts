@@ -18,6 +18,7 @@ import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress }
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
+import { parseManifest, isManifest } from './refManifest.ts'
 import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
 import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
 import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
@@ -1467,62 +1468,84 @@ async function cachedContentPut(key: string, value: CachedContent): Promise<void
   })
 }
 
-async function onView(collectionId: string, collectionName: string): Promise<void> {
-  // Instant path: serve decoded content straight from the local cache — no chain fetch, works offline.
+interface DecodedContent { mimeType: string; fileName: string; bytes: number[]; verified: boolean; msg: string }
+
+/** Fetch + decode + hash-verify ONE collection's embedded content (cache-first; persists a verified replica).
+ *  Returns null if the collection has no embedded file. Throws on decode failure (caller handles) — kept
+ *  status-free so it can be reused per-reference when resolving a manifest. */
+async function fetchCollectionContent(collectionId: string): Promise<DecodedContent | null> {
   const hit = await cachedContentGet(collectionId)
-  if (hit != null) {
-    showFile(collectionName, { mimeType: hit.mimeType, fileName: hit.fileName, fileBytes: Array.from(hit.bytes) }, hit.verified, hit.msg)
-    setStatus(hit.msg, hit.verified ? 'ok' : 'error')
-    return
+  if (hit != null) return { mimeType: hit.mimeType, fileName: hit.fileName, bytes: Array.from(hit.bytes), verified: hit.verified, msg: hit.msg }
+  const tx1 = await provider.getSourceTransaction(collectionId)
+  let file: { mimeType: string; fileName: string; fileBytes: number[] } | null = null
+  let template: TemplateFields | undefined
+  for (const o of tx1.outputs) {
+    const f = parseFileScript(o.lockingScript); if (f) file = f.fields
+    const t = parseTemplateScript(o.lockingScript); if (t) template = t.fields
   }
+  if (!file) return null
+  const rules = template != null ? decodeTokenRules(template.tokenRules) : null
+  const encrypted = rules?.isEncrypted ?? false
+  // fileHash binds the ciphertext for encrypted content (privacy) but the ORIGINAL plaintext for public
+  // content (provenance) — so the encrypted check runs on the raw stored blob, the public check on the plaintext.
+  const ciphertextOk = encrypted && template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
+  // Unwind the stored bytes in reverse of how they were made: decrypt first, then decompress.
+  let bytes = file.fileBytes
+  if (encrypted) {
+    if (template?.wrappedKey == null || template?.keySalt == null) throw new Error('encrypted collection is missing its wrapped key')
+    const K = unwrapContentKey(template.wrappedKey, template.keySalt)
+    if (K == null) throw new Error('could not unwrap the content key')
+    bytes = decryptContent(bytes, K)
+  }
+  if (rules?.isCompressed) bytes = await decompress(bytes)
+  const verified = encrypted ? ciphertextOk : (template?.fileHash === Utils.toHex(Hash.sha256(bytes)))
+  const msg = encrypted
+    ? (verified ? '🔓 Decrypted — ciphertext matches the on-chain commitment ✓' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!')
+    : (verified ? '✓ Verified exact replica — SHA-256 of the content matches the on-chain commitment (timestamped on mint)' : '⚠ File loaded, but its hash does NOT match the on-chain commitment!')
+  // Persist the decoded content so the next open is instant + offline (only cache a verified replica).
+  if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes), verified, msg })
+  return { mimeType: file.mimeType, fileName: file.fileName, bytes, verified, msg }
+}
+
+async function onView(collectionId: string, collectionName: string): Promise<void> {
   setStatus('Loading the embedded file from the collection…')
   try {
-    const tx1 = await provider.getSourceTransaction(collectionId)
-    let file: { mimeType: string; fileName: string; fileBytes: number[] } | null = null
-    let template: TemplateFields | undefined
-    for (const o of tx1.outputs) {
-      const f = parseFileScript(o.lockingScript)
-      if (f) file = f.fields
-      const t = parseTemplateScript(o.lockingScript)
-      if (t) template = t.fields
-    }
-    if (!file) {
-      setStatus(`"${collectionName}" has no embedded file.`, 'info')
-      return
-    }
-    const rules = template != null ? decodeTokenRules(template.tokenRules) : null
-    const encrypted = rules?.isEncrypted ?? false
-    // fileHash binds the ciphertext for encrypted content (privacy) but the ORIGINAL plaintext for public
-    // content (provenance) — so the encrypted check runs on the raw stored blob, while the public check runs
-    // AFTER the unwind below, against the recovered plaintext.
-    const ciphertextOk = encrypted && template?.fileHash === Utils.toHex(Hash.sha256(file.fileBytes))
-
-    // Unwind the stored bytes in the reverse of how they were made: decrypt first, then decompress.
-    let bytes = file.fileBytes
-    if (encrypted) {
-      if (template?.wrappedKey == null || template?.keySalt == null) {
-        setStatus('Encrypted collection is missing its wrapped key — cannot decrypt.', 'error'); return
-      }
-      const K = unwrapContentKey(template.wrappedKey, template.keySalt)
-      if (K == null) { setStatus('Could not unwrap the content key.', 'error'); return }
-      try { bytes = decryptContent(bytes, K) } catch { setStatus('Decryption failed (wrong key or corrupt ciphertext).', 'error'); return }
-    }
-    if (rules?.isCompressed) {
-      try { bytes = await decompress(bytes) } catch { setStatus('Decompression failed (corrupt data).', 'error'); return }
-    }
-    // Public: verify the recovered plaintext against the on-chain commitment — this is the "exact replica"
-    // proof. Decompression is deterministic, so H(recovered) == fileHash holds regardless of the gzip encoding.
-    const verified = encrypted ? ciphertextOk : (template?.fileHash === Utils.toHex(Hash.sha256(bytes)))
-    const msg = encrypted
-      ? (verified ? '🔓 Decrypted — ciphertext matches the on-chain commitment ✓' : '⚠ Decrypted, but the ciphertext hash does NOT match the collection!')
-      : (verified ? '✓ Verified exact replica — SHA-256 of the content matches the on-chain commitment (timestamped on mint)' : '⚠ File loaded, but its hash does NOT match the on-chain commitment!')
-    showFile(collectionName, { mimeType: file.mimeType, fileName: file.fileName, fileBytes: bytes }, verified, msg)
-    setStatus(msg, verified ? 'ok' : 'error')
-    // Persist the decoded content so the next open is instant + offline (only cache a verified replica).
-    if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes), verified, msg })
+    const decoded = await fetchCollectionContent(collectionId)
+    if (decoded == null) { setStatus(`"${collectionName}" has no embedded file.`, 'info'); return }
+    // A reference manifest points at other works instead of embedding bytes — resolve + play them as an album.
+    if (isManifest(decoded.mimeType, decoded.bytes)) { await viewReferenceManifest(collectionName, decoded); return }
+    showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg)
+    setStatus(decoded.msg, decoded.verified ? 'ok' : 'error')
   } catch (e) {
     setStatus(`View failed: ${(e as Error).message}`, 'error')
   }
+}
+
+/** Resolve a reference-manifest collection: fetch each referenced work's content, hash-check it against what
+ *  the manifest committed, and play the lot as one album. A reference that's unavailable or hash-mismatched is
+ *  skipped (shown in the status) rather than failing the whole release. A referenced album is flattened. */
+async function viewReferenceManifest(epName: string, manifest: DecodedContent): Promise<void> {
+  const refs = parseManifest(manifest.bytes)
+  if (refs == null) { setStatus('This release references other works, but its manifest is unreadable.', 'error'); return }
+  setStatus(`Resolving ${refs.length} referenced ${refs.length === 1 ? 'work' : 'works'}…`)
+  const tracks: AlbumTrack[] = []
+  let missing = 0
+  for (const r of refs) {
+    let decoded: DecodedContent | null = null
+    try { decoded = await fetchCollectionContent(r.id) } catch { decoded = null }
+    // Integrity: the resolved content must hash to what the EP author committed in the manifest.
+    if (decoded == null || Utils.toHex(Hash.sha256(decoded.bytes)) !== r.hash) { missing++; continue }
+    const inner = isAlbum(decoded.mimeType, decoded.bytes) ? parseAlbum(decoded.bytes) : null
+    if (inner != null && inner.length > 0) for (const t of inner) tracks.push(t)
+    else tracks.push({ name: r.name || decoded.fileName, mimeType: decoded.mimeType, bytes: decoded.bytes })
+  }
+  if (tracks.length === 0) { setStatus('None of the referenced works could be resolved on-chain.', 'error'); return }
+  const ok = missing === 0 && manifest.verified
+  const msg = missing === 0
+    ? `✓ ${tracks.length} track${tracks.length === 1 ? '' : 's'} resolved from referenced mints — each hash-verified against the manifest`
+    : `⚠ ${tracks.length} of ${refs.length} referenced works resolved (${missing} unavailable or hash-mismatched)`
+  showAlbumTracks(epName, tracks, ok, msg, `${tracks.length} track${tracks.length === 1 ? '' : 's'} · referenced`)
+  setStatus(msg, missing === 0 ? 'ok' : 'error')
 }
 
 // Object URLs for unpacked album tracks + the live player's teardown — released when the viewer
@@ -1919,6 +1942,21 @@ function showFile(title: string, file: { mimeType: string; fileName: string; fil
     a.className = 'viewer-dl'
     content.append(a)
   }
+  $('viewer').style.display = 'flex'
+}
+
+/** Open the viewer on a set of already-resolved tracks (used by reference-manifest playback — the tracks
+ *  come from other collections, so there's no single file blob). Mirrors showFile's album branch. */
+function showAlbumTracks(title: string, tracks: AlbumTrack[], verified: boolean, note: string, subtitle: string): void {
+  const content = $('viewerContent')
+  revokeAlbumUrls()
+  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
+  $('viewerTitle').textContent = `${title} — ${subtitle}`
+  const banner = $('viewerProvenance')
+  if (note) { banner.textContent = note; banner.className = `viewer-banner ${verified ? 'ok' : 'error'}`; banner.style.display = 'block' }
+  else banner.style.display = 'none'
+  content.innerHTML = ''
+  renderPlayer(content, tracks)
   $('viewer').style.display = 'flex'
 }
 
