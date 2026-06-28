@@ -18,7 +18,7 @@ import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress }
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
-import { parseManifest, isManifest } from './refManifest.ts'
+import { packManifest, parseManifest, isManifest, MANIFEST_MIME, type ManifestRef } from './refManifest.ts'
 import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
 import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
 import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
@@ -787,12 +787,18 @@ async function onMintEdition(): Promise<void> {
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
   const description = val('edDescription')
+  const combineMode = ($('edCombine') as HTMLInputElement)?.checked ?? false
   try {
-    const file = await readContent($('edFile') as HTMLInputElement, name)
+    // Combine mode mints an EP whose content is a REFERENCE manifest (pointers to existing mints, no re-upload);
+    // otherwise embed the picked file(s) as usual.
+    const file = combineMode ? await buildCombinedManifest(name) : await readContent($('edFile') as HTMLInputElement, name)
+    if (combineMode && file == null) { setStatus('Combine mode: pick at least 2 of your collections to bundle.', 'error'); return }
     const cover = croppedCover ?? await readFile($('edCover') as HTMLInputElement) // prefer the cropped/resized cover
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
+    const manifestRefs = file != null && isManifest(file.mimeType, file.bytes) ? parseManifest(file.bytes) : null
     const trackCount = file?.mimeType === ALBUM_MIME ? (parseAlbum(file.bytes)?.length ?? 0) : 0
     const fileLabel = file == null ? ''
+      : manifestRefs != null ? ` (an EP referencing ${manifestRefs.length} mint${manifestRefs.length === 1 ? '' : 's'} — no re-upload)`
       : trackCount > 0 ? ` (embedding a ${trackCount}-track album, ${kb(file.bytes.length)})`
       : ` (embedding a ${kb(file.bytes.length)} file)`
     if (file != null && !confirmAudioFidelity(file)) { setStatus('Mint cancelled — compress the file first, or proceed as-is when you’re ready.'); return }
@@ -814,6 +820,51 @@ async function onMintEdition(): Promise<void> {
     if ((e as Error).message === SPEND_CANCELLED) { setStatus('Edition mint cancelled — nothing was spent.'); return }
     setStatus(`Edition mint failed: ${(e as Error).message}`, 'error')
   }
+}
+
+// ── Combine mode: mint an EP whose content is a reference manifest (pointers to existing mints) ──
+/** Read each picked collection's committed fileHash + name — a cheap template-only load via loadCollection,
+ *  NOT a content download — and pack them into a reference manifest to mint as the EP's content. Returns
+ *  undefined if fewer than 2 are picked (an EP needs at least two). Throws if a pick has no embedded content. */
+async function buildCombinedManifest(epName: string): Promise<{ mimeType: string; fileName: string; bytes: number[] } | undefined> {
+  const ids = checkedCombineIds()
+  if (ids.length < 2) return undefined
+  setStatus(`Reading ${ids.length} collections to build the EP…`)
+  const refs: ManifestRef[] = []
+  for (const id of ids) {
+    const info = await loadCollection(id)
+    if (!info.hasContentFile || info.fileHash == null) throw new Error(`"${info.name || short(id)}" has no embedded content to reference`)
+    if (info.encrypted) throw new Error(`"${info.name || short(id)}" is encrypted — EPs can only reference public content for now`)
+    refs.push({ id, hash: info.fileHash, name: info.name || short(id), mimeType: 'application/octet-stream' })
+  }
+  const safe = (epName || 'ep').replace(/[^\w.-]+/g, '_')
+  return { mimeType: MANIFEST_MIME, fileName: `${safe}.pref`, bytes: packManifest(refs) }
+}
+function checkedCombineIds(): string[] {
+  return Array.from(document.querySelectorAll('.combine-pick:checked')).map(c => (c as HTMLInputElement).value)
+}
+function updateCombineHint(): void {
+  const hint = $('edCombineHint'); if (hint == null) return
+  const n = checkedCombineIds().length
+  hint.textContent = n < 2 ? `Select 2 or more (${n} picked).` : `${n} selected — they’ll play as one EP.`
+}
+/** Populate the combine picker from the collections this wallet holds (deduped) — your singles to bundle. */
+function renderCombinePicker(): void {
+  const list = $('edCombineList'); if (list == null) return
+  list.innerHTML = ''
+  const seen = new Set<string>()
+  const cols = store.active().filter(t => { if (seen.has(t.collectionId)) return false; seen.add(t.collectionId); return true })
+  if (cols.length === 0) { list.innerHTML = '<li class="muted" style="font-size:12px">No collections in this wallet yet — mint or hold some singles first.</li>'; updateCombineHint(); return }
+  for (const t of cols) {
+    const li = document.createElement('li'); li.className = 'combine-row'
+    const label = document.createElement('label'); label.className = 'check'
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'combine-pick'; cb.value = t.collectionId
+    cb.onchange = updateCombineHint
+    label.append(cb, document.createTextNode(' ' + (t.collectionName || short(t.collectionId))))
+    const idSpan = document.createElement('span'); idSpan.className = 'muted'; idSpan.style.fontSize = '11px'; idSpan.textContent = short(t.collectionId)
+    li.append(label, idSpan); list.append(li)
+  }
+  updateCombineHint()
 }
 
 /** The note (promo + bonus) to carry when I sell/transfer an edition I hold: my own published note wins,
@@ -2952,6 +3003,9 @@ interface CollectionInfo {
   encrypted: boolean
   replicable: boolean
   hasContentFile: boolean
+  /** SHA-256 (hex) of the embedded content, committed in the TX1 template — used to reference this collection
+   *  from a combination/EP manifest (and to integrity-check the resolved content). null if no content file. */
+  fileHash: string | null
   publisherPubKeyHex: string | null
   fees: { publisher: number; holder: number } | null
   /** v2 (percentage pricing): publisher basis points + the genesis/reference price (the seller's live price is
@@ -3055,6 +3109,7 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
     cover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
+    fileHash: template.fileHash ?? null,
     publisherPubKeyHex, fees, isV2, pBps, v2PriceSats, covenantHex: template.covenantScript, bondSats,
   }
 }
@@ -4005,6 +4060,15 @@ function init(): void {
   wireScanButtons() // inject 📷 scan buttons beside [data-scan] inputs
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
+  ;($('edCombine') as HTMLInputElement).onchange = () => {
+    const on = ($('edCombine') as HTMLInputElement).checked
+    $('edCombineWrap').hidden = !on
+    // In combine mode the EP's content IS the reference manifest, so the file/encrypt inputs don't apply.
+    ;($('edFile') as HTMLInputElement).disabled = on
+    const enc = $('edEncrypt') as HTMLInputElement
+    enc.disabled = on; if (on) enc.checked = false // disabling alone leaves .checked true — clear it
+    if (on) renderCombinePicker()
+  }
   ;($('edCover') as HTMLInputElement).onchange = () => void onCoverSelected()
   $('edCoverCam').onclick = () => void onTakePhoto()
   $('btnFeeFixed').onclick = () => setFeeMode('fixed')

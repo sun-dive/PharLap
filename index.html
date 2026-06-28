@@ -228,6 +228,13 @@
     .crop-canvas.grabbing { cursor:grabbing; }
     .cover-preview { display:flex; align-items:center; gap:8px; margin-top:6px; }
     .cover-preview:empty { display:none; }
+    /* Combine-into-EP picker (reference mint) */
+    .combine-box { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:10px; }
+    .combine-list { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-direction:column; gap:2px; max-height:200px; overflow:auto; }
+    .combine-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:3px 4px; border-radius:6px; }
+    .combine-row:hover { background:rgba(255,255,255,.04); }
+    .combine-row .check { margin:0; flex:1; min-width:0; }
+    .combine-row .check label, .combine-row label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .cover-preview img { width:56px; height:56px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
     .viewer-img { max-width:100%; max-height:74vh; border-radius:6px; display:block; }
     .viewer-pre { white-space:pre-wrap; word-break:break-word; max-height:74vh; overflow:auto; background:#0d1117; padding:12px; border-radius:6px; font-size:12px; }
@@ -690,6 +697,14 @@
       <input id="edFile" type="file" multiple />
       <small class="muted" style="display:block;margin:3px 0 0;font-size:12px">Pick several files to publish a multi-track <b>album/EP</b> as one NFT — they play inline in the viewer. Number them 01…, 02… to set the track order.</small>
       <label class="check"><input id="edEncrypt" type="checkbox" /> Encrypt the file (Tier 1 — holders decrypt; an inconvenience, not DRM)</label>
+      <div class="combine-box">
+        <label class="check"><input id="edCombine" type="checkbox" /> 📀 Combine existing mints into an EP <span class="muted">(reference — no re-upload)</span></label>
+        <div id="edCombineWrap" hidden>
+          <small class="muted" style="display:block;margin:2px 0 8px;font-size:12px">Pick 2+ of your collections — the EP <b>references</b> their on-chain audio (each stored once) and plays them as one release. Set the EP's own price above; an album usually costs less than the singles combined.</small>
+          <ul id="edCombineList" class="combine-list"></ul>
+          <small id="edCombineHint" class="muted" style="font-size:12px"></small>
+        </div>
+      </div>
       <div class="row" style="margin-top:10px">
         <button id="btnMintEdition">Mint edition collection</button>
       </div>
