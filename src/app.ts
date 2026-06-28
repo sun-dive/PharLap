@@ -1564,7 +1564,7 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
     const decoded = await fetchCollectionContent(collectionId)
     if (decoded == null) { setStatus(`"${collectionName}" has no embedded file.`, 'info'); return }
     // A reference manifest points at other works instead of embedding bytes — resolve + play them as an album.
-    if (isManifest(decoded.mimeType, decoded.bytes)) { await viewReferenceManifest(collectionName, decoded); return }
+    if (isManifest(decoded.mimeType, decoded.bytes)) { await viewReferenceManifest(collectionId, collectionName, decoded); return }
     showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg)
     setStatus(decoded.msg, decoded.verified ? 'ok' : 'error')
   } catch (e) {
@@ -1575,7 +1575,7 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
 /** Resolve a reference-manifest collection: fetch each referenced work's content, hash-check it against what
  *  the manifest committed, and play the lot as one album. A reference that's unavailable or hash-mismatched is
  *  skipped (shown in the status) rather than failing the whole release. A referenced album is flattened. */
-async function viewReferenceManifest(epName: string, manifest: DecodedContent): Promise<void> {
+async function viewReferenceManifest(collectionId: string, epName: string, manifest: DecodedContent): Promise<void> {
   const refs = parseManifest(manifest.bytes)
   if (refs == null) { setStatus('This release references other works, but its manifest is unreadable.', 'error'); return }
   setStatus(`Resolving ${refs.length} referenced ${refs.length === 1 ? 'work' : 'works'}…`)
@@ -1591,11 +1591,14 @@ async function viewReferenceManifest(epName: string, manifest: DecodedContent): 
     else tracks.push({ name: r.name || decoded.fileName, mimeType: decoded.mimeType, bytes: decoded.bytes })
   }
   if (tracks.length === 0) { setStatus('None of the referenced works could be resolved on-chain.', 'error'); return }
+  // The EP's own cover (lightweight template+storefront load) → disc fallback for any track lacking embedded art.
+  let epCover: { mimeType: string; bytes: number[] } | null = null
+  try { epCover = (await loadCollection(collectionId)).cover } catch { /* no cover — tracks fall back to no art */ }
   const ok = missing === 0 && manifest.verified
   const msg = missing === 0
     ? `✓ ${tracks.length} track${tracks.length === 1 ? '' : 's'} resolved from referenced mints — each hash-verified against the manifest`
     : `⚠ ${tracks.length} of ${refs.length} referenced works resolved (${missing} unavailable or hash-mismatched)`
-  showAlbumTracks(epName, tracks, ok, msg, `${tracks.length} track${tracks.length === 1 ? '' : 's'} · referenced`)
+  showAlbumTracks(epName, tracks, ok, msg, `${tracks.length} track${tracks.length === 1 ? '' : 's'} · referenced`, epCover)
   setStatus(msg, missing === 0 ? 'ok' : 'error')
 }
 
@@ -1617,8 +1620,14 @@ interface PlayerTrack { name: string; mimeType: string; url: string; artUrls: st
  *  volume. Plays the in-memory tracks; non-audio files are offered as downloads below. A packed .cue/.lrc
  *  file ([mm:ss.xx]scene.webp lines) drives a scene-timeline "music video" synced to playback. Ported
  *  (scoped ep-) from the MusicPlayer-test player. */
-function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
+function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?: { mimeType: string; bytes: number[] } | null): void {
   if (srcTracks.length === 0) { host.textContent = 'This release has no playable content.'; return }
+  // A release-level cover (e.g. an EP's own art) shown on the disc for any track that carries no embedded art.
+  let fallbackArtUrl: string | null = null
+  if (fallbackCover != null && fallbackCover.bytes.length > 0) {
+    fallbackArtUrl = URL.createObjectURL(new Blob([new Uint8Array(fallbackCover.bytes)], { type: fallbackCover.mimeType || 'image/jpeg' }))
+    albumUrls.push(fallbackArtUrl)
+  }
   const stripExt = (n: string): string => n.replace(/\.[^./\\]+$/, '')
   const baseName = (n: string): string => stripExt(n).replace(/^.*[/\\]/, '').toLowerCase()
 
@@ -1657,6 +1666,8 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[]): void {
       const u = URL.createObjectURL(new Blob([new Uint8Array(p.data)], { type: p.mimeType || 'image/jpeg' }))
       albumUrls.push(u); return u
     })
+    // No embedded art on this track → fall back to the release cover (e.g. the EP's own art), if any.
+    if (artUrls.length === 0 && fallbackArtUrl != null) artUrls.push(fallbackArtUrl)
     // Embedded lyrics (USLT for MP3, LYRICS/UNSYNCEDLYRICS for FLAC — added in Kid3). Plain text or LRC (timed).
     const lyrics = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null)
     return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics, timeline: null }
@@ -1998,7 +2009,7 @@ function showFile(title: string, file: { mimeType: string; fileName: string; fil
 
 /** Open the viewer on a set of already-resolved tracks (used by reference-manifest playback — the tracks
  *  come from other collections, so there's no single file blob). Mirrors showFile's album branch. */
-function showAlbumTracks(title: string, tracks: AlbumTrack[], verified: boolean, note: string, subtitle: string): void {
+function showAlbumTracks(title: string, tracks: AlbumTrack[], verified: boolean, note: string, subtitle: string, fallbackCover?: { mimeType: string; bytes: number[] } | null): void {
   const content = $('viewerContent')
   revokeAlbumUrls()
   if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
@@ -2007,7 +2018,7 @@ function showAlbumTracks(title: string, tracks: AlbumTrack[], verified: boolean,
   if (note) { banner.textContent = note; banner.className = `viewer-banner ${verified ? 'ok' : 'error'}`; banner.style.display = 'block' }
   else banner.style.display = 'none'
   content.innerHTML = ''
-  renderPlayer(content, tracks)
+  renderPlayer(content, tracks, fallbackCover)
   $('viewer').style.display = 'flex'
 }
 

@@ -25776,7 +25776,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
         return;
       }
       if (isManifest(decoded.mimeType, decoded.bytes)) {
-        await viewReferenceManifest(collectionName, decoded);
+        await viewReferenceManifest(collectionId, collectionName, decoded);
         return;
       }
       showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg);
@@ -25785,7 +25785,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       setStatus(`View failed: ${e.message}`, "error");
     }
   }
-  async function viewReferenceManifest(epName, manifest) {
+  async function viewReferenceManifest(collectionId, epName, manifest) {
     const refs = parseManifest(manifest.bytes);
     if (refs == null) {
       setStatus("This release references other works, but its manifest is unreadable.", "error");
@@ -25813,9 +25813,14 @@ It's posted to your own address and spends a small network fee. Proceed?`
       setStatus("None of the referenced works could be resolved on-chain.", "error");
       return;
     }
+    let epCover = null;
+    try {
+      epCover = (await loadCollection(collectionId)).cover;
+    } catch {
+    }
     const ok = missing === 0 && manifest.verified;
     const msg = missing === 0 ? `\u2713 ${tracks.length} track${tracks.length === 1 ? "" : "s"} resolved from referenced mints \u2014 each hash-verified against the manifest` : `\u26A0 ${tracks.length} of ${refs.length} referenced works resolved (${missing} unavailable or hash-mismatched)`;
-    showAlbumTracks(epName, tracks, ok, msg, `${tracks.length} track${tracks.length === 1 ? "" : "s"} \xB7 referenced`);
+    showAlbumTracks(epName, tracks, ok, msg, `${tracks.length} track${tracks.length === 1 ? "" : "s"} \xB7 referenced`, epCover);
     setStatus(msg, missing === 0 ? "ok" : "error");
   }
   var albumUrls = [];
@@ -25831,10 +25836,15 @@ It's posted to your own address and spends a small network fee. Proceed?`
     for (const u of albumUrls) URL.revokeObjectURL(u);
     albumUrls = [];
   }
-  function renderPlayer(host, srcTracks) {
+  function renderPlayer(host, srcTracks, fallbackCover) {
     if (srcTracks.length === 0) {
       host.textContent = "This release has no playable content.";
       return;
+    }
+    let fallbackArtUrl = null;
+    if (fallbackCover != null && fallbackCover.bytes.length > 0) {
+      fallbackArtUrl = URL.createObjectURL(new Blob([new Uint8Array(fallbackCover.bytes)], { type: fallbackCover.mimeType || "image/jpeg" }));
+      albumUrls.push(fallbackArtUrl);
     }
     const stripExt = (n) => n.replace(/\.[^./\\]+$/, "");
     const baseName = (n) => stripExt(n).replace(/^.*[/\\]/, "").toLowerCase();
@@ -25870,6 +25880,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
         albumUrls.push(u);
         return u;
       });
+      if (artUrls.length === 0 && fallbackArtUrl != null) artUrls.push(fallbackArtUrl);
       const lyrics2 = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null);
       return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics: lyrics2, timeline: null };
     });
@@ -26238,7 +26249,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     }
     $("viewer").style.display = "flex";
   }
-  function showAlbumTracks(title, tracks, verified, note, subtitle) {
+  function showAlbumTracks(title, tracks, verified, note, subtitle, fallbackCover) {
     const content = $("viewerContent");
     revokeAlbumUrls();
     if (viewerUrl) {
@@ -26253,7 +26264,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       banner.style.display = "block";
     } else banner.style.display = "none";
     content.innerHTML = "";
-    renderPlayer(content, tracks);
+    renderPlayer(content, tracks, fallbackCover);
     $("viewer").style.display = "flex";
   }
   function closeViewer() {
@@ -28393,7 +28404,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"d67fdd3"} \xB7 ${"2026-06-28"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"08d1395"} \xB7 ${"2026-06-28"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
