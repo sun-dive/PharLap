@@ -25875,14 +25875,20 @@ It's posted to your own address and spends a small network fee. Proceed?`
       const isFlac = t.mimeType.includes("flac") || /\.flac$/i.test(t.name);
       const isMp3 = t.mimeType.includes("mpeg") || t.mimeType.includes("mp3") || /\.mp3$/i.test(t.name);
       const pics = isFlac ? parseFlacPictures(t.bytes) : isMp3 ? parseId3Pictures(t.bytes) : [];
-      const artUrls = pics.map((p) => {
+      const picUrls = pics.map((p) => {
         const u = URL.createObjectURL(new Blob([new Uint8Array(p.data)], { type: p.mimeType || "image/jpeg" }));
         albumUrls.push(u);
-        return u;
+        return { type: p.pictureType, url: u };
       });
-      if (artUrls.length === 0 && fallbackArtUrl != null) artUrls.push(fallbackArtUrl);
+      const pick = (types) => picUrls.filter((p) => types.includes(p.type)).map((p) => p.url);
+      const allArt = picUrls.map((p) => p.url);
+      const media = pick([6]), front = pick([3]), sleeve = pick([3, 4]);
+      let discUrls = media.length > 0 ? media : front.length > 0 ? front : allArt;
+      let coverUrls = sleeve.length > 0 ? sleeve : allArt;
+      if (discUrls.length === 0 && fallbackArtUrl != null) discUrls = [fallbackArtUrl];
+      if (coverUrls.length === 0 && fallbackArtUrl != null) coverUrls = [fallbackArtUrl];
       const lyrics2 = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null);
-      return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics: lyrics2, timeline: null };
+      return { name: t.name, mimeType: t.mimeType, url, discUrls, coverUrls, lyrics: lyrics2, timeline: null };
     });
     const probe = document.createElement("audio");
     const GOOD_EXT = /\.(mp3|m4a|aac|mp4|opus|ogg|oga|wav|wave|aif|aiff|flac|weba)$/i;
@@ -25922,13 +25928,12 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const player = q(".ep-player");
     const artToggle = q(".ep-art-toggle");
     let artTimer = 0;
-    function showArt(urls) {
+    let curDisc = [], curCover = [];
+    function runArtSlideshow(urls) {
       window.clearInterval(artTimer);
-      player.classList.toggle("has-art", urls.length > 0);
       if (urls.length === 0) {
         art.style.display = "none";
         art.style.opacity = "0";
-        player.classList.remove("art-view");
         return;
       }
       let i = 0;
@@ -25946,8 +25951,23 @@ It's posted to your own address and spends a small network fee. Proceed?`
         }, 6e3);
       }
     }
+    function showArt(disc2, cover) {
+      curDisc = disc2;
+      curCover = cover;
+      const hasAny = disc2.length > 0 || cover.length > 0;
+      player.classList.toggle("has-art", hasAny);
+      if (!hasAny) {
+        player.classList.remove("art-view");
+        runArtSlideshow([]);
+        return;
+      }
+      const inCover = player.classList.contains("art-view");
+      runArtSlideshow(inCover ? cover.length > 0 ? cover : disc2 : disc2.length > 0 ? disc2 : cover);
+    }
     artToggle.onclick = () => {
-      artToggle.textContent = player.classList.toggle("art-view") ? "\u{1F4BF}" : "\u{1F5BC}\uFE0F";
+      const inCover = player.classList.toggle("art-view");
+      artToggle.textContent = inCover ? "\u{1F4BF}" : "\u{1F5BC}\uFE0F";
+      runArtSlideshow(inCover ? curCover.length > 0 ? curCover : curDisc : curDisc.length > 0 ? curDisc : curCover);
     };
     const lyricsToggle = q(".ep-lyrics-toggle");
     const lyricsScroll = q(".ep-lyrics-scroll");
@@ -26082,7 +26102,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       initAudioContext();
       void audioCtx?.resume();
       audio.src = audioTracks[current].url;
-      showArt(audioTracks[current].artUrls);
+      showArt(audioTracks[current].discUrls, audioTracks[current].coverUrls);
       loadLyrics(audioTracks[current].lyrics);
       loadTimeline(audioTracks[current].timeline);
       nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`;
@@ -26184,7 +26204,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     if (audioTracks.length > 0) {
       songList.children[0].classList.add("active");
       nowPlaying.textContent = "Tap a track to play";
-      showArt(audioTracks[0].artUrls);
+      showArt(audioTracks[0].discUrls, audioTracks[0].coverUrls);
       loadLyrics(audioTracks[0].lyrics);
       loadTimeline(audioTracks[0].timeline);
     } else {
@@ -28404,7 +28424,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"08d1395"} \xB7 ${"2026-06-28"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"268bd48"} \xB7 ${"2026-06-29"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

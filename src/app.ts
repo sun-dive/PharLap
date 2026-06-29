@@ -1613,7 +1613,7 @@ function revokeAlbumUrls(): void {
 }
 
 interface SceneTimeline { scenes: { t: number; url: string }[] }
-interface PlayerTrack { name: string; mimeType: string; url: string; artUrls: string[]; lyrics: ParsedLyrics | null; timeline: SceneTimeline | null }
+interface PlayerTrack { name: string; mimeType: string; url: string; discUrls: string[]; coverUrls: string[]; lyrics: ParsedLyrics | null; timeline: SceneTimeline | null }
 
 /** Render one or more tracks (a packed album, or a single audio file) as the "Ethereal" EP player —
  *  spinning disc, circular audio visualizer, reactive background orbs, playlist, seek, prev/play/next,
@@ -1661,16 +1661,26 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
     // → object URLs for a slideshow on the disc.
     const isFlac = t.mimeType.includes('flac') || /\.flac$/i.test(t.name)
     const isMp3 = t.mimeType.includes('mpeg') || t.mimeType.includes('mp3') || /\.mp3$/i.test(t.name)
-    const pics: { mimeType: string; data: number[] }[] = isFlac ? parseFlacPictures(t.bytes) : isMp3 ? parseId3Pictures(t.bytes) : []
-    const artUrls = pics.map(p => {
+    // Embedded pictures by type (APIC/PICTURE picture-type byte): 3 = Front, 4 = Back, 6 = Media (the CD's
+    // label side). The spinning DISC shows the "Media" art when present (a moving record label), else the front;
+    // the 🖼️ cover view shows the Front+Back sleeve. So you can embed a static front cover AND an animated Media
+    // image without the disc cross-fading between them.
+    const pics: { pictureType: number; mimeType: string; data: number[] }[] = isFlac ? parseFlacPictures(t.bytes) : isMp3 ? parseId3Pictures(t.bytes) : []
+    const picUrls = pics.map(p => {
       const u = URL.createObjectURL(new Blob([new Uint8Array(p.data)], { type: p.mimeType || 'image/jpeg' }))
-      albumUrls.push(u); return u
+      albumUrls.push(u); return { type: p.pictureType, url: u }
     })
+    const pick = (types: number[]): string[] => picUrls.filter(p => types.includes(p.type)).map(p => p.url)
+    const allArt = picUrls.map(p => p.url)
+    const media = pick([6]), front = pick([3]), sleeve = pick([3, 4])
+    let discUrls = media.length > 0 ? media : front.length > 0 ? front : allArt
+    let coverUrls = sleeve.length > 0 ? sleeve : allArt
     // No embedded art on this track → fall back to the release cover (e.g. the EP's own art), if any.
-    if (artUrls.length === 0 && fallbackArtUrl != null) artUrls.push(fallbackArtUrl)
+    if (discUrls.length === 0 && fallbackArtUrl != null) discUrls = [fallbackArtUrl]
+    if (coverUrls.length === 0 && fallbackArtUrl != null) coverUrls = [fallbackArtUrl]
     // Embedded lyrics (USLT for MP3, LYRICS/UNSYNCEDLYRICS for FLAC — added in Kid3). Plain text or LRC (timed).
     const lyrics = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null)
-    return { name: t.name, mimeType: t.mimeType, url, artUrls, lyrics, timeline: null }
+    return { name: t.name, mimeType: t.mimeType, url, discUrls, coverUrls, lyrics, timeline: null }
   })
   // Route only browser-PLAYABLE audio into the player; formats it can't decode (WMA/APE/DSD…) and non-audio
   // files become downloads instead of a silent dead player. canPlayType is the source of truth; when the MIME
@@ -1743,10 +1753,10 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   const player = q<HTMLElement>('.ep-player')
   const artToggle = q<HTMLElement>('.ep-art-toggle')
   let artTimer = 0
-  function showArt(urls: string[]): void {
+  let curDisc: string[] = [], curCover: string[] = [] // the current track's two art sets (disc = Media, cover = Front+Back)
+  function runArtSlideshow(urls: string[]): void {
     window.clearInterval(artTimer)
-    player.classList.toggle('has-art', urls.length > 0)
-    if (urls.length === 0) { art.style.display = 'none'; art.style.opacity = '0'; player.classList.remove('art-view'); return }
+    if (urls.length === 0) { art.style.display = 'none'; art.style.opacity = '0'; return }
     let i = 0
     art.style.display = 'block'; art.src = urls[0]; art.style.opacity = '1'
     if (urls.length > 1) {
@@ -1757,7 +1767,20 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
       }, 6000)
     }
   }
-  artToggle.onclick = () => { artToggle.textContent = player.classList.toggle('art-view') ? '💿' : '🖼️' }
+  /** Load the current track's two art sets and show the one for the active view (💿 disc = Media, 🖼️ = Front+Back). */
+  function showArt(disc: string[], cover: string[]): void {
+    curDisc = disc; curCover = cover
+    const hasAny = disc.length > 0 || cover.length > 0
+    player.classList.toggle('has-art', hasAny)
+    if (!hasAny) { player.classList.remove('art-view'); runArtSlideshow([]); return }
+    const inCover = player.classList.contains('art-view')
+    runArtSlideshow(inCover ? (cover.length > 0 ? cover : disc) : (disc.length > 0 ? disc : cover))
+  }
+  artToggle.onclick = () => {
+    const inCover = player.classList.toggle('art-view')
+    artToggle.textContent = inCover ? '💿' : '🖼️'
+    runArtSlideshow(inCover ? (curCover.length > 0 ? curCover : curDisc) : (curDisc.length > 0 ? curDisc : curCover))
+  }
 
   // Lyrics overlay — a scrim-backed text layer over the disc/cover (shows through to the art behind). The 📝
   // toggle appears only when the current track carries lyrics. Synced (LRC) lyrics highlight + auto-scroll the
@@ -1868,7 +1891,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
     Array.from(songList.children).forEach((li, k) => li.classList.toggle('active', k === current))
     initAudioContext(); void audioCtx?.resume()
     audio.src = audioTracks[current].url
-    showArt(audioTracks[current].artUrls)
+    showArt(audioTracks[current].discUrls, audioTracks[current].coverUrls)
     loadLyrics(audioTracks[current].lyrics)
     loadTimeline(audioTracks[current].timeline)
     nowPlaying.innerHTML = `Now playing: <span>${escapeHtml(stripExt(audioTracks[current].name))}</span>`
@@ -1944,7 +1967,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   if (audioTracks.length > 0) {
     (songList.children[0] as HTMLElement).classList.add('active')
     nowPlaying.textContent = 'Tap a track to play'
-    showArt(audioTracks[0].artUrls) // show the first track's cover up front, before playback
+    showArt(audioTracks[0].discUrls, audioTracks[0].coverUrls) // show the first track's cover up front, before playback
     loadLyrics(audioTracks[0].lyrics) // surface the 📝 toggle before playback if the first track has lyrics
     loadTimeline(audioTracks[0].timeline) // surface the 🎬 toggle if the first track has a scene timeline
   } else {
