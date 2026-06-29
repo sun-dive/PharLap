@@ -19925,7 +19925,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return { publisherPubKeyHex: d.pubKeyHex, fields };
   }
   function encodeStorefrontFields(data) {
-    return [
+    const out = [
       P_PREFIX,
       [P_VERSION],
       [RECORD_STOREFRONT],
@@ -19934,6 +19934,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       utf8ToBytes2(data.coverFileName ?? ""),
       data.coverBytes ?? []
     ];
+    if (data.backCoverBytes != null && data.backCoverBytes.length > 0) {
+      out.push(utf8ToBytes2(data.backCoverMimeType ?? ""), utf8ToBytes2(data.backCoverFileName ?? ""), data.backCoverBytes);
+    }
+    return out;
   }
   function decodeStorefrontFields(fields) {
     if (fields.length < 7) return null;
@@ -19941,11 +19945,15 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null;
     if (fields[2].length !== 1 || fields[2][0] !== RECORD_STOREFRONT) return null;
     const hasCover = !isEmptyOrZero(fields[6]);
+    const hasBack = fields.length >= 10 && !isEmptyOrZero(fields[9]);
     return {
       description: isEmptyOrZero(fields[3]) ? "" : bytesToUtf8(fields[3]),
       coverMimeType: hasCover ? bytesToUtf8(fields[4]) : void 0,
       coverFileName: hasCover ? bytesToUtf8(fields[5]) : void 0,
-      coverBytes: hasCover ? fields[6] : void 0
+      coverBytes: hasCover ? fields[6] : void 0,
+      backCoverMimeType: hasBack ? bytesToUtf8(fields[7]) : void 0,
+      backCoverFileName: hasBack ? bytesToUtf8(fields[8]) : void 0,
+      backCoverBytes: hasBack ? fields[9] : void 0
     };
   }
   function buildStorefrontScript(publisherPubKeyHex, data) {
@@ -21222,7 +21230,11 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       description: params.description ?? "",
       coverMimeType: params.cover?.mimeType,
       coverFileName: params.cover?.fileName,
-      coverBytes: params.cover?.bytes
+      coverBytes: params.cover?.bytes,
+      // A back cover only makes sense alongside a front cover (the codec keys "has back" off the bytes).
+      backCoverMimeType: params.cover != null ? params.backCover?.mimeType : void 0,
+      backCoverFileName: params.cover != null ? params.backCover?.fileName : void 0,
+      backCoverBytes: params.cover != null ? params.backCover?.bytes : void 0
     } : void 0;
     const editionBytes = 800;
     const tx1Bytes = 500 + templateLock.toBinary().length + (file ? file.fileBytes.length : 0) + (params.cover ? params.cover.bytes.length : 0);
@@ -24925,6 +24937,7 @@ Proceed?`
         return;
       }
       const cover = croppedCover ?? await readFile($("edCover"));
+      const backCover = await readFile($("edBackCover"));
       if (encrypt && !file) {
         setStatus("Encryption needs a file \u2014 attach one or uncheck encrypt.", "error");
         return;
@@ -24946,6 +24959,7 @@ Proceed?`
         encrypt,
         description,
         cover,
+        backCover,
         confirmSpend: (total) => confirm(
           `Mint ${count} edition${count > 1 ? "s" : ""} of \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${fileLabel}?
 
@@ -27382,6 +27396,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     toast(`Saved @${name}`);
   }
   var cvObjectUrl = null;
+  var cvBackObjectUrl = null;
   var currentCollection = null;
   var cvNote = null;
   var cvGiftWif = null;
@@ -27417,7 +27432,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     for (let i = 0; i < 6; i++) {
       let hex;
       try {
-        hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 1024 * 1024);
+        hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 2 * 1024 * 1024);
       } catch {
         hex = null;
       }
@@ -27467,11 +27482,13 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       }
     }
     const cover = storefront?.coverBytes ? { mimeType: storefront.coverMimeType ?? "application/octet-stream", bytes: storefront.coverBytes } : null;
+    const backCover = storefront?.backCoverBytes ? { mimeType: storefront.backCoverMimeType ?? "application/octet-stream", bytes: storefront.backCoverBytes } : null;
     return {
       tx1Ref,
       name: template.tokenName,
       description: storefront?.description ?? "",
       cover,
+      backCover,
       encrypted: rules.isEncrypted,
       replicable: rules.isReplicable,
       hasContentFile,
@@ -27493,12 +27510,31 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       URL.revokeObjectURL(cvObjectUrl);
       cvObjectUrl = null;
     }
+    if (cvBackObjectUrl) {
+      URL.revokeObjectURL(cvBackObjectUrl);
+      cvBackObjectUrl = null;
+    }
     if (info.cover) {
       cvObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(info.cover.bytes)], { type: info.cover.mimeType }));
       const img = document.createElement("img");
       img.src = cvObjectUrl;
       img.className = "cv-cover-img";
       coverHost.append(img);
+      if (info.backCover) {
+        cvBackObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(info.backCover.bytes)], { type: info.backCover.mimeType }));
+        let showingBack = false;
+        const flip = document.createElement("button");
+        flip.type = "button";
+        flip.className = "cv-flip";
+        flip.textContent = "\u21C4 Back";
+        flip.title = "Flip the cover";
+        flip.onclick = () => {
+          showingBack = !showingBack;
+          img.src = showingBack ? cvBackObjectUrl : cvObjectUrl;
+          flip.textContent = showingBack ? "\u21C4 Front" : "\u21C4 Back";
+        };
+        coverHost.append(flip);
+      }
     } else {
       coverHost.innerHTML = '<div class="cv-cover-ph">\u{1F3B4}</div>';
     }
@@ -27578,6 +27614,10 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     if (cvObjectUrl) {
       URL.revokeObjectURL(cvObjectUrl);
       cvObjectUrl = null;
+    }
+    if (cvBackObjectUrl) {
+      URL.revokeObjectURL(cvBackObjectUrl);
+      cvBackObjectUrl = null;
     }
     if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   }
@@ -28463,7 +28503,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"397be4a"} \xB7 ${"2026-06-29"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"4d34543"} \xB7 ${"2026-06-29"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

@@ -495,6 +495,8 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   description?: string
   /** Optional public (unencrypted) cover image — the storefront's face, shown even when content is encrypted. */
   cover?: { mimeType: string; fileName: string; bytes: number[] }
+  /** Optional public BACK cover image (flippable on the sales page). Requires a front `cover`. */
+  backCover?: { mimeType: string; fileName: string; bytes: number[] }
   feePerKb?: number
   /** Spend gate: called with the EXACT total sats to spend, after build and before broadcast. False aborts. */
   confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
@@ -555,6 +557,10 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
         coverMimeType: params.cover?.mimeType,
         coverFileName: params.cover?.fileName,
         coverBytes: params.cover?.bytes,
+        // A back cover only makes sense alongside a front cover (the codec keys "has back" off the bytes).
+        backCoverMimeType: params.cover != null ? params.backCover?.mimeType : undefined,
+        backCoverFileName: params.cover != null ? params.backCover?.fileName : undefined,
+        backCoverBytes: params.cover != null ? params.backCover?.bytes : undefined,
       }
     : undefined
 

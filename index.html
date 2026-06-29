@@ -403,6 +403,9 @@
     .cv-cover { position:relative; border-radius:18px; overflow:hidden; background:linear-gradient(160deg,#1b222c,#10151c);
       border:1px solid var(--line); box-shadow:0 24px 60px -24px rgba(0,0,0,.8), 0 2px 0 0 rgba(255,255,255,.03) inset; aspect-ratio:1/1; }
     .cv-cover-img { width:100%; height:100%; object-fit:contain; display:block; }
+    .cv-flip { position:absolute; bottom:10px; right:10px; z-index:2; border:1px solid rgba(255,255,255,.2);
+      background:rgba(0,0,0,.55); color:#fff; font-size:13px; border-radius:999px; padding:6px 12px; cursor:pointer; backdrop-filter:blur(6px); }
+    .cv-flip:hover { background:rgba(0,0,0,.75); }
     .cv-cover-ph { height:100%; display:flex; align-items:center; justify-content:center; font-size:96px;
       background:radial-gradient(420px 420px at 50% 35%, rgba(56,139,253,.18), transparent 70%); filter:saturate(.9); }
 
@@ -679,6 +682,9 @@
       <input id="edCover" type="file" accept="image/*" />
       <button id="edCoverCam" type="button" class="secondary" style="margin-top:6px">📷 Take photo</button>
       <div id="edCoverPreview" class="cover-preview"></div>
+      <label>Back cover image (optional — buyers can flip to it on the sales page)</label>
+      <input id="edBackCover" type="file" accept="image/*" />
+      <small class="muted" style="display:block;margin:3px 0 0;font-size:12px">A second storefront image (front + back). Separate from the audio's embedded art — this is the art that sells the NFT.</small>
       <label>Bond per edition (sats) — refundable, reclaimed by burning a copy</label>
       <input id="edBond" type="number" min="1" value="2100" />
       <p class="muted" style="font-size:12px;margin:2px 0 0">Each edition rides on this many sats; the owner reclaims them by burning. Higher = stronger price floor (and pricier gifts); set low (e.g. 1) for free-content drops.</p>

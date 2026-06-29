@@ -336,10 +336,15 @@ export interface StorefrontFields {
   coverMimeType?: string
   coverFileName?: string
   coverBytes?: number[]
+  /** Optional public BACK cover image (flippable on the sales page). Appended after the front cover, so older
+   *  storefronts (7 fields) decode unchanged and older wallets ignore the extra fields. Present together or absent. */
+  backCoverMimeType?: string
+  backCoverFileName?: string
+  backCoverBytes?: number[]
 }
 
 export function encodeStorefrontFields(data: StorefrontFields): number[][] {
-  return [
+  const out = [
     P_PREFIX,
     [P_VERSION],
     [RECORD_STOREFRONT],
@@ -348,6 +353,11 @@ export function encodeStorefrontFields(data: StorefrontFields): number[][] {
     utf8ToBytes(data.coverFileName ?? ''),
     data.coverBytes ?? [],
   ]
+  // Only append the back-cover fields when there's a back cover — no-back-cover storefronts stay byte-identical.
+  if (data.backCoverBytes != null && data.backCoverBytes.length > 0) {
+    out.push(utf8ToBytes(data.backCoverMimeType ?? ''), utf8ToBytes(data.backCoverFileName ?? ''), data.backCoverBytes)
+  }
+  return out
 }
 
 export function decodeStorefrontFields(fields: number[][]): StorefrontFields | null {
@@ -357,11 +367,15 @@ export function decodeStorefrontFields(fields: number[][]): StorefrontFields | n
   if (fields[2].length !== 1 || fields[2][0] !== RECORD_STOREFRONT) return null
   // Empty fields round-trip to "00" via OP_0 (see isEmptyOrZero); normalize those back to empty.
   const hasCover = !isEmptyOrZero(fields[6])
+  const hasBack = fields.length >= 10 && !isEmptyOrZero(fields[9])
   return {
     description: isEmptyOrZero(fields[3]) ? '' : bytesToUtf8(fields[3]),
     coverMimeType: hasCover ? bytesToUtf8(fields[4]) : undefined,
     coverFileName: hasCover ? bytesToUtf8(fields[5]) : undefined,
     coverBytes: hasCover ? fields[6] : undefined,
+    backCoverMimeType: hasBack ? bytesToUtf8(fields[7]) : undefined,
+    backCoverFileName: hasBack ? bytesToUtf8(fields[8]) : undefined,
+    backCoverBytes: hasBack ? fields[9] : undefined,
   }
 }
 

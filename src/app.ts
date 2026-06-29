@@ -30,7 +30,7 @@ import { qrSvg, bsvPaymentUri } from './qr.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage, verifyEditionCovenant } from './verify.ts'
-import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields } from './tokenCodec.ts'
+import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields, type StorefrontFields } from './tokenCodec.ts'
 import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime, downscaleToAvatar } from './thumbs.ts'
 import { publishProfile, resolveProfile } from './profile.ts'
 import { readCorridor, postToNodeFeed, type CorridorNode, type DiscPost } from './discussion.ts'
@@ -794,6 +794,7 @@ async function onMintEdition(): Promise<void> {
     const file = combineMode ? await buildCombinedManifest(name) : await readContent($('edFile') as HTMLInputElement, name)
     if (combineMode && file == null) { setStatus('Combine mode: pick at least 2 of your collections to bundle.', 'error'); return }
     const cover = croppedCover ?? await readFile($('edCover') as HTMLInputElement) // prefer the cropped/resized cover
+    const backCover = await readFile($('edBackCover') as HTMLInputElement) // optional flippable back cover (sales page)
     if (encrypt && !file) { setStatus('Encryption needs a file — attach one or uncheck encrypt.', 'error'); return }
     const manifestRefs = file != null && isManifest(file.mimeType, file.bytes) ? parseManifest(file.bytes) : null
     const trackCount = file?.mimeType === ALBUM_MIME ? (parseAlbum(file.bytes)?.length ?? 0) : 0
@@ -807,7 +808,7 @@ async function onMintEdition(): Promise<void> {
     const terms = ownTerms()
     setStatus('Preparing the edition mint…')
     const result = await createEdition(provider, k, {
-      tokenName: name, terms, mintCount: count, file, encrypt, description, cover,
+      tokenName: name, terms, mintCount: count, file, encrypt, description, cover, backCover,
       confirmSpend: total => confirm(
         `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${fileLabel}?\n\n` +
         `This spends ${total.toLocaleString()} sats from your wallet — including a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.\n\n` +
@@ -3068,6 +3069,8 @@ interface CollectionInfo {
   name: string
   description: string
   cover: { mimeType: string; bytes: number[] } | null
+  /** Optional flippable back cover (sales page). */
+  backCover: { mimeType: string; bytes: number[] } | null
   encrypted: boolean
   replicable: boolean
   hasContentFile: boolean
@@ -3088,6 +3091,7 @@ interface CollectionInfo {
 }
 
 let cvObjectUrl: string | null = null
+let cvBackObjectUrl: string | null = null // back-cover object URL for the sales-page flip
 let currentCollection: { info: CollectionInfo; holderPubKey: string | null } | null = null
 /** The seller's current note (promo + optional bonus) for the open collection, captured onto a purchase. */
 let cvNote: SellerNote | null = null
@@ -3128,14 +3132,14 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   // output too big to fetch IS the content file (→ hasContentFile), skipped without downloading its body.
   let template: TemplateFields | undefined
   let publisherPubKeyHex: string | null = null
-  let storefront: { description: string; coverMimeType?: string; coverBytes?: number[] } | null = null
+  let storefront: StorefrontFields | null = null
   let hasContentFile = false
   // template is [0]; storefront comes after the (possibly huge) file, so once we have both we can stop — that
   // also avoids WoC's 502-on-out-of-range past the last output. Any fetch error on an index is treated as a
   // skip (not a hard failure) so a transient/late hiccup can't break a load that already has what it needs.
   for (let i = 0; i < 6; i++) {
     let hex: string | 'oversized' | null
-    try { hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 1024 * 1024) }
+    try { hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 2 * 1024 * 1024) } // headroom for a front+back storefront
     catch { hex = null }
     if (hex == null) { if (template != null) break; continue }
     if (hex === 'oversized') { hasContentFile = true; continue } // the embedded content file — skipped, not downloaded
@@ -3174,9 +3178,12 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   const cover = storefront?.coverBytes
     ? { mimeType: storefront.coverMimeType ?? 'application/octet-stream', bytes: storefront.coverBytes }
     : null
+  const backCover = storefront?.backCoverBytes
+    ? { mimeType: storefront.backCoverMimeType ?? 'application/octet-stream', bytes: storefront.backCoverBytes }
+    : null
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
-    cover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
+    cover, backCover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
     fileHash: template.fileHash ?? null,
     publisherPubKeyHex, fees, isV2, pBps, v2PriceSats, covenantHex: template.covenantScript, bondSats,
   }
@@ -3187,10 +3194,24 @@ function renderCollectionView(info: CollectionInfo): void {
   const coverHost = $('cvCover')
   coverHost.innerHTML = ''
   if (cvObjectUrl) { URL.revokeObjectURL(cvObjectUrl); cvObjectUrl = null }
+  if (cvBackObjectUrl) { URL.revokeObjectURL(cvBackObjectUrl); cvBackObjectUrl = null }
   if (info.cover) {
     cvObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(info.cover.bytes)], { type: info.cover.mimeType }))
     const img = document.createElement('img'); img.src = cvObjectUrl; img.className = 'cv-cover-img'
     coverHost.append(img)
+    // Optional flippable back cover: a small "⇄" button over the cover toggles front ⇄ back.
+    if (info.backCover) {
+      cvBackObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(info.backCover.bytes)], { type: info.backCover.mimeType }))
+      let showingBack = false
+      const flip = document.createElement('button'); flip.type = 'button'; flip.className = 'cv-flip'
+      flip.textContent = '⇄ Back'; flip.title = 'Flip the cover'
+      flip.onclick = () => {
+        showingBack = !showingBack
+        img.src = showingBack ? cvBackObjectUrl! : cvObjectUrl!
+        flip.textContent = showingBack ? '⇄ Front' : '⇄ Back'
+      }
+      coverHost.append(flip)
+    }
   } else {
     coverHost.innerHTML = '<div class="cv-cover-ph">🎴</div>'
   }
@@ -3277,6 +3298,7 @@ function onOpenSalesPage(t: StoredToken): void {
 function closeCollectionView(): void {
   $('collectionView').style.display = 'none'
   if (cvObjectUrl) { URL.revokeObjectURL(cvObjectUrl); cvObjectUrl = null }
+  if (cvBackObjectUrl) { URL.revokeObjectURL(cvBackObjectUrl); cvBackObjectUrl = null }
   // Drop the hash so a reload returns to the wallet rather than re-opening the storefront.
   if (location.hash) history.replaceState(null, '', location.pathname + location.search)
 }
