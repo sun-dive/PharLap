@@ -25882,9 +25882,9 @@ It's posted to your own address and spends a small network fee. Proceed?`
       });
       const pick = (types) => picUrls.filter((p) => types.includes(p.type)).map((p) => p.url);
       const allArt = picUrls.map((p) => p.url);
-      const media = pick([6]), front = pick([3]), sleeve = pick([3, 4]);
+      const media = pick([6]), front = pick([3]);
       let discUrls = media.length > 0 ? media : front.length > 0 ? front : allArt;
-      let coverUrls = sleeve.length > 0 ? sleeve : allArt;
+      let coverUrls = allArt;
       if (discUrls.length === 0 && fallbackArtUrl != null) discUrls = [fallbackArtUrl];
       if (coverUrls.length === 0 && fallbackArtUrl != null) coverUrls = [fallbackArtUrl];
       const lyrics2 = parseLyrics(isFlac ? parseFlacLyrics(t.bytes) : isMp3 ? parseId3Lyrics(t.bytes) : null);
@@ -26123,11 +26123,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
     audio.addEventListener("play", () => {
       isPlaying = true;
       disc.classList.add("playing");
+      player.classList.add("playing");
       updatePlayIcon();
     });
     audio.addEventListener("pause", () => {
       isPlaying = false;
       disc.classList.remove("playing");
+      player.classList.remove("playing");
       updatePlayIcon();
     });
     audio.addEventListener("ended", () => play(current + 1));
@@ -28424,7 +28426,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"268bd48"} \xB7 ${"2026-06-29"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"da97d2d"} \xB7 ${"2026-06-29"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

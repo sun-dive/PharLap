@@ -1672,9 +1672,11 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
     })
     const pick = (types: number[]): string[] => picUrls.filter(p => types.includes(p.type)).map(p => p.url)
     const allArt = picUrls.map(p => p.url)
-    const media = pick([6]), front = pick([3]), sleeve = pick([3, 4])
+    const media = pick([6]), front = pick([3])
     let discUrls = media.length > 0 ? media : front.length > 0 ? front : allArt
-    let coverUrls = sleeve.length > 0 ? sleeve : allArt
+    // 🖼️ cover view = a full-size slideshow of ALL the art (the animated Media plays large here too — a pseudo
+    // music video), cross-fading through front/back/media. Falls back to the release cover below if empty.
+    let coverUrls = allArt
     // No embedded art on this track → fall back to the release cover (e.g. the EP's own art), if any.
     if (discUrls.length === 0 && fallbackArtUrl != null) discUrls = [fallbackArtUrl]
     if (coverUrls.length === 0 && fallbackArtUrl != null) coverUrls = [fallbackArtUrl]
@@ -1905,8 +1907,8 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   })
   audio.addEventListener('timeupdate', updateProgress)
   audio.addEventListener('loadedmetadata', () => { durEl.textContent = fmt(audio.duration) })
-  audio.addEventListener('play', () => { isPlaying = true; disc.classList.add('playing'); updatePlayIcon() })
-  audio.addEventListener('pause', () => { isPlaying = false; disc.classList.remove('playing'); updatePlayIcon() })
+  audio.addEventListener('play', () => { isPlaying = true; disc.classList.add('playing'); player.classList.add('playing'); updatePlayIcon() })
+  audio.addEventListener('pause', () => { isPlaying = false; disc.classList.remove('playing'); player.classList.remove('playing'); updatePlayIcon() })
   audio.addEventListener('ended', () => play(current + 1))
   audio.addEventListener('error', () => {
     if (tornDown || !audio.src) return // ignore the error fired when src is cleared on teardown
