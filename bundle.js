@@ -25825,6 +25825,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
   }
   var albumUrls = [];
   var epTeardown = null;
+  var epVizSpeaker = (() => {
+    try {
+      return localStorage.getItem("pharlap:viz") === "speaker";
+    } catch {
+      return false;
+    }
+  })();
   function revokeAlbumUrls() {
     if (epTeardown) {
       try {
@@ -25903,11 +25910,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const otherTracks = tracks.filter((t) => !(isAudioFile(t) && canPlayInBrowser(t)) && !isCueOrScene(t));
     const stage = document.createElement("div");
     stage.className = "ep-stage";
-    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>\u{1F5BC}\uFE0F</button><button class="ep-lyrics-toggle" type="button" aria-label="Toggle lyrics" title="Lyrics" hidden>\u{1F4DD}</button><button class="ep-video-toggle" type="button" aria-label="Toggle music video" title="Music video" hidden>\u{1F3AC}</button><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div><img class="ep-scene" alt="" /><div class="ep-lyrics"><div class="ep-lyrics-scroll"></div></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
+    stage.innerHTML = '<div class="ep-orbs"><div class="ep-orb"></div><div class="ep-orb"></div><div class="ep-orb"></div></div><div class="ep-player"><button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>\u{1F5BC}\uFE0F</button><button class="ep-lyrics-toggle" type="button" aria-label="Toggle lyrics" title="Lyrics" hidden>\u{1F4DD}</button><button class="ep-video-toggle" type="button" aria-label="Toggle music video" title="Music video" hidden>\u{1F3AC}</button><button class="ep-viz-toggle" type="button" aria-label="Visualization mode" title="Visualization: spinning disc \u2014 tap for speaker (no spin)">\u{1F4BF}</button><div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" /><div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div><img class="ep-scene" alt="" /><div class="ep-lyrics"><div class="ep-lyrics-scroll"></div></div></div><ul class="ep-song-list"></ul><div class="ep-now-playing"></div><div class="ep-progress-container"><div class="ep-progress-bar"></div></div><div class="ep-time-display"><span class="ep-cur">0:00</span><span class="ep-dur">0:00</span></div><div class="ep-controls"><button class="ep-control-btn ep-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button><button class="ep-control-btn ep-play-btn" aria-label="Play / pause"><svg viewBox="0 0 24 24" class="ep-play-icon"><path d="M8 5v14l11-7z"/></svg></button><button class="ep-control-btn ep-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button></div><div class="ep-volume-container"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg><input type="range" class="ep-volume-slider" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"></div></div>';
     host.append(stage);
     const q = (sel) => stage.querySelector(sel);
     const songList = q(".ep-song-list");
     const disc = q(".ep-disc");
+    const discContainer = q(".ep-disc-container");
+    const vizToggle = q(".ep-viz-toggle");
     const nowPlaying = q(".ep-now-playing");
     const progressBar = q(".ep-progress-bar");
     const progressContainer = q(".ep-progress-container");
@@ -25924,6 +25933,25 @@ It's posted to your own address and spends a small network fee. Proceed?`
     let analyser = null;
     let dataArray = null;
     let rafId = 0, isPlaying = false, current = 0, tornDown = false;
+    let speakerScale = 1;
+    const applyViz = () => {
+      player.classList.toggle("viz-speaker", epVizSpeaker);
+      vizToggle.textContent = epVizSpeaker ? "\u{1F50A}" : "\u{1F4BF}";
+      vizToggle.title = epVizSpeaker ? "Visualization: speaker \u2014 tap for spinning disc" : "Visualization: spinning disc \u2014 tap for speaker (no spin)";
+      if (!epVizSpeaker) {
+        discContainer.style.transform = "";
+        speakerScale = 1;
+      }
+    };
+    vizToggle.onclick = () => {
+      epVizSpeaker = !epVizSpeaker;
+      try {
+        localStorage.setItem("pharlap:viz", epVizSpeaker ? "speaker" : "disc");
+      } catch {
+      }
+      applyViz();
+    };
+    applyViz();
     const art = q(".ep-art");
     const player = q(".ep-player");
     const artToggle = q(".ep-art-toggle");
@@ -26163,6 +26191,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     };
     function frame() {
       rafId = requestAnimationFrame(frame);
+      let bassNow = 0;
       if (analyser != null && isPlaying && dataArray != null) {
         analyser.getByteFrequencyData(dataArray);
         let bass = 0, mids = 0, highs = 0;
@@ -26172,6 +26201,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
         bass /= 10 * 255;
         mids /= 30 * 255;
         highs /= 40 * 255;
+        bassNow = bass;
         const t = Date.now();
         orbs[0].style.transform = `translate(${Math.sin(t / 1e3) * 30 * bass}px, ${Math.cos(t / 1200) * 30 * bass}px) scale(${1 + bass * 0.5})`;
         orbs[0].style.opacity = `${0.4 + bass * 0.4}`;
@@ -26179,6 +26209,13 @@ It's posted to your own address and spends a small network fee. Proceed?`
         orbs[1].style.opacity = `${0.4 + mids * 0.4}`;
         orbs[2].style.transform = `translate(calc(-50% + ${Math.sin(t / 800) * 50 * highs}px), calc(-50% + ${Math.cos(t / 1e3) * 50 * highs}px)) scale(${1 + highs * 0.3})`;
         orbs[2].style.opacity = `${0.4 + highs * 0.5}`;
+      }
+      if (player.classList.contains("viz-speaker") && !player.classList.contains("art-view") && !player.classList.contains("video-view")) {
+        speakerScale += (1 + bassNow * 0.3 - speakerScale) * 0.35;
+        discContainer.style.transform = `scale(${speakerScale.toFixed(3)})`;
+      } else if (speakerScale !== 1) {
+        speakerScale = 1;
+        discContainer.style.transform = "";
       }
       cctx.clearRect(0, 0, canvas.width, canvas.height);
       if (analyser != null && isPlaying && dataArray != null) {
@@ -28426,7 +28463,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"da97d2d"} \xB7 ${"2026-06-29"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"b4203d4"} \xB7 ${"2026-06-29"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

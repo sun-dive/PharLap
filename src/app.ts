@@ -1606,6 +1606,9 @@ async function viewReferenceManifest(collectionId: string, epName: string, manif
 // re-renders or closes (stops the animation loop, audio, and AudioContext; revokes the blob URLs).
 let albumUrls: string[] = []
 let epTeardown: (() => void) | null = null
+// Visualization preference (persists across tracks/sessions): the disc either SPINS (default) or, in "speaker"
+// mode, stays still and pushes in/out with the bass — a no-rotation option for anyone the spinning makes dizzy.
+let epVizSpeaker: boolean = (() => { try { return localStorage.getItem('pharlap:viz') === 'speaker' } catch { return false } })()
 function revokeAlbumUrls(): void {
   if (epTeardown) { try { epTeardown() } catch { /* ignore */ } epTeardown = null }
   for (const u of albumUrls) URL.revokeObjectURL(u)
@@ -1710,6 +1713,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
       '<button class="ep-art-toggle" type="button" aria-label="Toggle cover view" title="Cover / player view" hidden>🖼️</button>' +
       '<button class="ep-lyrics-toggle" type="button" aria-label="Toggle lyrics" title="Lyrics" hidden>📝</button>' +
       '<button class="ep-video-toggle" type="button" aria-label="Toggle music video" title="Music video" hidden>🎬</button>' +
+      '<button class="ep-viz-toggle" type="button" aria-label="Visualization mode" title="Visualization: spinning disc — tap for speaker (no spin)">💿</button>' +
       '<div class="ep-disc-container"><div class="ep-disc"></div><img class="ep-art" alt="cover art" />' +
         '<div class="ep-visualizer-container"><canvas class="ep-visualizer" width="280" height="280"></canvas></div>' +
         '<img class="ep-scene" alt="" />' +
@@ -1731,6 +1735,8 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   const q = <T extends Element>(sel: string): T => stage.querySelector(sel) as T
   const songList = q<HTMLUListElement>('.ep-song-list')
   const disc = q<HTMLElement>('.ep-disc')
+  const discContainer = q<HTMLElement>('.ep-disc-container')
+  const vizToggle = q<HTMLElement>('.ep-viz-toggle')
   const nowPlaying = q<HTMLElement>('.ep-now-playing')
   const progressBar = q<HTMLElement>('.ep-progress-bar')
   const progressContainer = q<HTMLElement>('.ep-progress-container')
@@ -1748,6 +1754,20 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   let analyser: AnalyserNode | null = null
   let dataArray: Uint8Array<ArrayBuffer> | null = null
   let rafId = 0, isPlaying = false, current = 0, tornDown = false
+  // Visualization mode: spinning disc (default) vs "speaker" (no spin; the disc pushes in/out with the bass).
+  let speakerScale = 1
+  const applyViz = (): void => {
+    player.classList.toggle('viz-speaker', epVizSpeaker)
+    vizToggle.textContent = epVizSpeaker ? '🔊' : '💿'
+    vizToggle.title = epVizSpeaker ? 'Visualization: speaker — tap for spinning disc' : 'Visualization: spinning disc — tap for speaker (no spin)'
+    if (!epVizSpeaker) { discContainer.style.transform = ''; speakerScale = 1 } // back to disc mode → drop the pulse transform
+  }
+  vizToggle.onclick = () => {
+    epVizSpeaker = !epVizSpeaker
+    try { localStorage.setItem('pharlap:viz', epVizSpeaker ? 'speaker' : 'disc') } catch { /* private mode — session only */ }
+    applyViz()
+  }
+  applyViz()
 
   // Embedded cover art on the disc — slideshow (cross-fade) if a track carries more than one picture.
   // The 🖼️/💿 toggle (shown only when art exists) flips between the player view and a full, uncropped cover view.
@@ -1934,6 +1954,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   // Reactive orbs + circular bars — one rAF loop, both best-effort (no analyser ⇒ static).
   function frame(): void {
     rafId = requestAnimationFrame(frame)
+    let bassNow = 0
     if (analyser != null && isPlaying && dataArray != null) {
       analyser.getByteFrequencyData(dataArray)
       let bass = 0, mids = 0, highs = 0
@@ -1941,6 +1962,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
       for (let i = 10; i < 40; i++) mids += dataArray[i]
       for (let i = 40; i < 80; i++) highs += dataArray[i]
       bass /= 10 * 255; mids /= 30 * 255; highs /= 40 * 255
+      bassNow = bass
       const t = Date.now()
       orbs[0].style.transform = `translate(${Math.sin(t / 1000) * 30 * bass}px, ${Math.cos(t / 1200) * 30 * bass}px) scale(${1 + bass * 0.5})`
       orbs[0].style.opacity = `${0.4 + bass * 0.4}`
@@ -1948,6 +1970,14 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
       orbs[1].style.opacity = `${0.4 + mids * 0.4}`
       orbs[2].style.transform = `translate(calc(-50% + ${Math.sin(t / 800) * 50 * highs}px), calc(-50% + ${Math.cos(t / 1000) * 50 * highs}px)) scale(${1 + highs * 0.3})`
       orbs[2].style.opacity = `${0.4 + highs * 0.5}`
+    }
+    // Speaker mode: the disc pushes in/out with the bass (eased so it pumps rather than jitters; rests at scale 1).
+    // Only in the normal disc view — not the full cover or video views (which resize the container themselves).
+    if (player.classList.contains('viz-speaker') && !player.classList.contains('art-view') && !player.classList.contains('video-view')) {
+      speakerScale += ((1 + bassNow * 0.3) - speakerScale) * 0.35
+      discContainer.style.transform = `scale(${speakerScale.toFixed(3)})`
+    } else if (speakerScale !== 1) {
+      speakerScale = 1; discContainer.style.transform = ''
     }
     cctx.clearRect(0, 0, canvas.width, canvas.height)
     if (analyser != null && isPlaying && dataArray != null) {

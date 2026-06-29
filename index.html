@@ -269,7 +269,13 @@
       opacity:0; transition:opacity .4s ease; display:none; pointer-events:none; z-index:1; }
     /* The disc label rotates with the record while playing (preserves the centring translate). Not in cover view. */
     @keyframes ep-art-spin { from{transform:translate(-50%,-50%) rotate(0)} to{transform:translate(-50%,-50%) rotate(360deg)} }
-    .ep-player.playing:not(.art-view) .ep-art { animation:ep-art-spin 3s linear infinite; }
+    .ep-player.playing:not(.art-view):not(.viz-speaker) .ep-art { animation:ep-art-spin 3s linear infinite; }
+    /* Speaker visualization: no spin; the disc pushes in/out with the bass (scale set per-frame in JS). */
+    .ep-player.viz-speaker .ep-disc { animation:none; }
+    .ep-viz-toggle { position:absolute; top:52px; right:10px; z-index:3; width:34px; height:34px; border-radius:50%;
+      border:1px solid rgba(255,255,255,.15); background:rgba(0,0,0,.35); color:#fff; font-size:15px; cursor:pointer;
+      display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px); line-height:1; }
+    .ep-viz-toggle:hover { background:rgba(0,0,0,.55); }
     /* 🖼️/💿 toggle: flip between the player view and a full uncropped cover view (only shown when art exists) */
     .ep-art-toggle { position:absolute; top:10px; right:10px; z-index:3; width:34px; height:34px; border-radius:50%;
       border:1px solid rgba(255,255,255,.15); background:rgba(0,0,0,.35); color:#fff; font-size:15px; cursor:pointer;
