@@ -50,6 +50,27 @@ test('storefront with empty description (cover only) decodes to empty string, no
   assert.deepEqual(parsed!.fields.coverBytes, coverBytes)
 })
 
+test('storefront with a BACK cover: both covers round-trip', () => {
+  const backBytes = Array.from({ length: 300 }, (_, i) => (i * 5 + 11) & 0xff)
+  const sf: StorefrontFields = {
+    description: 'Front + back sleeve.',
+    coverMimeType: 'image/webp', coverFileName: 'front.webp', coverBytes,
+    backCoverMimeType: 'image/webp', backCoverFileName: 'back.webp', backCoverBytes: backBytes,
+  }
+  const parsed = parseStorefrontScript(buildStorefrontScript(publisherPub, sf))
+  assert.ok(parsed)
+  assert.deepEqual(parsed!.fields.coverBytes, coverBytes)
+  assert.equal(parsed!.fields.backCoverMimeType, 'image/webp')
+  assert.equal(parsed!.fields.backCoverFileName, 'back.webp')
+  assert.deepEqual(parsed!.fields.backCoverBytes, backBytes)
+})
+
+test('back cover is optional: a front-only storefront stays 7 fields and has no back cover', () => {
+  const encoded = encodeStorefrontFields({ description: 'x', coverMimeType: 'image/png', coverFileName: 'c.png', coverBytes })
+  assert.equal(encoded.length, 7) // byte-identical to pre-back-cover storefronts → backward compatible
+  assert.equal(decodeStorefrontFields(encoded)!.backCoverBytes, undefined)
+})
+
 test('a storefront output classifies as RECORD_STOREFRONT (0x06)', () => {
   const script = buildStorefrontScript(publisherPub, { description: 'hi' })
   assert.equal(classifyRecord(script), RECORD_STOREFRONT)
