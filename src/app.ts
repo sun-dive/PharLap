@@ -1754,20 +1754,7 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   let analyser: AnalyserNode | null = null
   let dataArray: Uint8Array<ArrayBuffer> | null = null
   let rafId = 0, isPlaying = false, current = 0, tornDown = false
-  // Visualization mode: spinning disc (default) vs "speaker" (no spin; the disc pushes in/out with the bass).
-  let speakerScale = 1
-  const applyViz = (): void => {
-    player.classList.toggle('viz-speaker', epVizSpeaker)
-    vizToggle.textContent = epVizSpeaker ? '🔊' : '💿'
-    vizToggle.title = epVizSpeaker ? 'Visualization: speaker — tap for spinning disc' : 'Visualization: spinning disc — tap for speaker (no spin)'
-    if (!epVizSpeaker) { discContainer.style.transform = ''; speakerScale = 1 } // back to disc mode → drop the pulse transform
-  }
-  vizToggle.onclick = () => {
-    epVizSpeaker = !epVizSpeaker
-    try { localStorage.setItem('pharlap:viz', epVizSpeaker ? 'speaker' : 'disc') } catch { /* private mode — session only */ }
-    applyViz()
-  }
-  applyViz()
+  let speakerScale = 1 // visualization: disc pulse amount in "speaker" mode (set per-frame); 1 = at rest
 
   // Embedded cover art on the disc — slideshow (cross-fade) if a track carries more than one picture.
   // The 🖼️/💿 toggle (shown only when art exists) flips between the player view and a full, uncropped cover view.
@@ -1803,6 +1790,21 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
     artToggle.textContent = inCover ? '💿' : '🖼️'
     runArtSlideshow(inCover ? (curCover.length > 0 ? curCover : curDisc) : (curDisc.length > 0 ? curDisc : curCover))
   }
+
+  // Visualization mode: spinning disc (default) vs "speaker" (no spin; the disc pushes in/out with the bass).
+  // Defined here — after `player`/`vizToggle`/`discContainer` exist — and called once to apply the saved pref.
+  const applyViz = (): void => {
+    player.classList.toggle('viz-speaker', epVizSpeaker)
+    vizToggle.textContent = epVizSpeaker ? '🔊' : '💿'
+    vizToggle.title = epVizSpeaker ? 'Visualization: speaker — tap for spinning disc' : 'Visualization: spinning disc — tap for speaker (no spin)'
+    if (!epVizSpeaker) { discContainer.style.transform = ''; speakerScale = 1 } // back to disc mode → drop the pulse transform
+  }
+  vizToggle.onclick = () => {
+    epVizSpeaker = !epVizSpeaker
+    try { localStorage.setItem('pharlap:viz', epVizSpeaker ? 'speaker' : 'disc') } catch { /* private mode — session only */ }
+    applyViz()
+  }
+  applyViz()
 
   // Lyrics overlay — a scrim-backed text layer over the disc/cover (shows through to the art behind). The 📝
   // toggle appears only when the current track carries lyrics. Synced (LRC) lyrics highlight + auto-scroll the
