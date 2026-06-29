@@ -25934,24 +25934,6 @@ It's posted to your own address and spends a small network fee. Proceed?`
     let dataArray = null;
     let rafId = 0, isPlaying = false, current = 0, tornDown = false;
     let speakerScale = 1;
-    const applyViz = () => {
-      player.classList.toggle("viz-speaker", epVizSpeaker);
-      vizToggle.textContent = epVizSpeaker ? "\u{1F50A}" : "\u{1F4BF}";
-      vizToggle.title = epVizSpeaker ? "Visualization: speaker \u2014 tap for spinning disc" : "Visualization: spinning disc \u2014 tap for speaker (no spin)";
-      if (!epVizSpeaker) {
-        discContainer.style.transform = "";
-        speakerScale = 1;
-      }
-    };
-    vizToggle.onclick = () => {
-      epVizSpeaker = !epVizSpeaker;
-      try {
-        localStorage.setItem("pharlap:viz", epVizSpeaker ? "speaker" : "disc");
-      } catch {
-      }
-      applyViz();
-    };
-    applyViz();
     const art = q(".ep-art");
     const player = q(".ep-player");
     const artToggle = q(".ep-art-toggle");
@@ -25997,6 +25979,24 @@ It's posted to your own address and spends a small network fee. Proceed?`
       artToggle.textContent = inCover ? "\u{1F4BF}" : "\u{1F5BC}\uFE0F";
       runArtSlideshow(inCover ? curCover.length > 0 ? curCover : curDisc : curDisc.length > 0 ? curDisc : curCover);
     };
+    const applyViz = () => {
+      player.classList.toggle("viz-speaker", epVizSpeaker);
+      vizToggle.textContent = epVizSpeaker ? "\u{1F50A}" : "\u{1F4BF}";
+      vizToggle.title = epVizSpeaker ? "Visualization: speaker \u2014 tap for spinning disc" : "Visualization: spinning disc \u2014 tap for speaker (no spin)";
+      if (!epVizSpeaker) {
+        discContainer.style.transform = "";
+        speakerScale = 1;
+      }
+    };
+    vizToggle.onclick = () => {
+      epVizSpeaker = !epVizSpeaker;
+      try {
+        localStorage.setItem("pharlap:viz", epVizSpeaker ? "speaker" : "disc");
+      } catch {
+      }
+      applyViz();
+    };
+    applyViz();
     const lyricsToggle = q(".ep-lyrics-toggle");
     const lyricsScroll = q(".ep-lyrics-scroll");
     let lyrics = null;
@@ -28463,7 +28463,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"b4203d4"} \xB7 ${"2026-06-29"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"054c326"} \xB7 ${"2026-06-29"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
