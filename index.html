@@ -267,6 +267,9 @@
     .ep-art { position:absolute; top:50%; left:50%; width:118px; height:118px; transform:translate(-50%,-50%);
       border-radius:50%; object-fit:cover; box-shadow:0 0 0 4px #111, 0 6px 22px rgba(0,0,0,.55);
       opacity:0; transition:opacity .4s ease; display:none; pointer-events:none; z-index:1; }
+    /* The disc label rotates with the record while playing (preserves the centring translate). Not in cover view. */
+    @keyframes ep-art-spin { from{transform:translate(-50%,-50%) rotate(0)} to{transform:translate(-50%,-50%) rotate(360deg)} }
+    .ep-player.playing:not(.art-view) .ep-art { animation:ep-art-spin 3s linear infinite; }
     /* 🖼️/💿 toggle: flip between the player view and a full uncropped cover view (only shown when art exists) */
     .ep-art-toggle { position:absolute; top:10px; right:10px; z-index:3; width:34px; height:34px; border-radius:50%;
       border:1px solid rgba(255,255,255,.15); background:rgba(0,0,0,.35); color:#fff; font-size:15px; cursor:pointer;
