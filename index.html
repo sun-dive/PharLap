@@ -276,6 +276,8 @@
       border:1px solid rgba(255,255,255,.15); background:rgba(0,0,0,.35); color:#fff; font-size:15px; cursor:pointer;
       display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px); line-height:1; }
     .ep-viz-toggle:hover { background:rgba(0,0,0,.55); }
+    /* Spin/speaker only affects the disc — hide it in the cover + video views where the disc isn't shown. */
+    .ep-player.art-view .ep-viz-toggle, .ep-player.video-view .ep-viz-toggle { display:none; }
     /* 🖼️/💿 toggle: flip between the player view and a full uncropped cover view (only shown when art exists) */
     .ep-art-toggle { position:absolute; top:10px; right:10px; z-index:3; width:34px; height:34px; border-radius:50%;
       border:1px solid rgba(255,255,255,.15); background:rgba(0,0,0,.35); color:#fff; font-size:15px; cursor:pointer;
