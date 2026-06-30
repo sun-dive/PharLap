@@ -449,6 +449,11 @@
     .cv-cta:hover { transform:translateY(-1px); box-shadow:0 12px 30px -8px rgba(63,185,80,.75); }
     .cv-cta:active { transform:translateY(0); }
     .cv-cta:disabled { filter:grayscale(.4) brightness(.8); transform:none; box-shadow:none; cursor:default; }
+    /* "Owned" buy button — a calm success state (not the greyed disabled look) once you hold a copy. */
+    .cv-cta.owned:disabled { filter:none; background:linear-gradient(180deg,#1f6f33,#1a5a2a); color:#bdf0c6; box-shadow:none; cursor:default; }
+    .cv-another { color:var(--muted); font-size:13px; text-decoration:underline; cursor:pointer; align-self:center;
+      background:none; border:none; padding:6px 4px; }
+    .cv-another:hover { color:var(--fg); }
     .cv-status { margin-top:12px; color:var(--muted); font-size:13px; min-height:18px; }
     .cv-status.ok { color:var(--accent); }
     .cv-status.error { color:#ffb4ae; }
@@ -1034,6 +1039,7 @@
           <button id="cvView" class="secondary" style="display:none">View content</button>
           <button id="cvShare" class="secondary">Share</button>
           <button id="cvQr" class="secondary">QR</button>
+          <a id="cvBuyAnother" class="cv-another" role="button" tabindex="0" style="display:none">Buy another copy</a>
         </div>
         <div id="cvStatus" class="cv-status"></div>
       </section>
