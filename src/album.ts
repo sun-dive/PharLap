@@ -12,7 +12,10 @@
 // sliced by their lengths (no offsets needed). Everything is plain bytes — no external zip dependency.
 
 export const ALBUM_MIME = 'application/x-pharlap-album'
-export const MAX_ALBUM_TRACKS = 12
+// A "release" can be more than an album's worth of tracks: a scene-timeline music video packs the audio + the
+// cue sheet + many scene clips into one container, so the cap covers that (the real limit is total byte size,
+// which the mint fee + fidelity warnings already surface). Header stays tiny even at this count.
+export const MAX_ALBUM_TRACKS = 64
 
 export interface AlbumTrack { name: string; mimeType: string; bytes: number[] }
 
