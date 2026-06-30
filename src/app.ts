@@ -74,6 +74,21 @@ function setStatus(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
   el.textContent = msg
   el.className = `status ${kind}`
 }
+/** Like setStatus, but renders trusted HTML (only ever called with built-in markup + idChip — never raw input). */
+function setStatusHtml(html: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
+  const el = $('status')
+  el.innerHTML = html
+  el.className = `status ${kind}`
+}
+/** A click-to-copy chip: shows a shortened id, copies the FULL value on click (delegated handler below). */
+function idChip(full: string): string {
+  return `<span class="copyid" data-full="${escapeHtml(full)}" title="Click to copy the full id">${escapeHtml(short(full))}</span>`
+}
+// Delegated click-to-copy: clicking any shortened .copyid chip copies its full value to the clipboard.
+document.addEventListener('click', e => {
+  const chip = (e.target as HTMLElement)?.closest?.('.copyid') as HTMLElement | null
+  if (chip?.dataset.full) { void navigator.clipboard?.writeText(chip.dataset.full); toast('Copied ✓') }
+})
 
 // ─── wallet ─────────────────────────────────────────────────────────
 const MNEMONIC_KEY = 'p:wallet:mnemonic'
@@ -557,7 +572,7 @@ async function onMint(): Promise<void> {
       store.add({ txId: op.txId, outputIndex: op.outputIndex, collectionId: result.collectionId, stateData: '', collectionName: name })
     }
     renderTokens()
-    setStatus(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, 'ok')
+    setStatusHtml(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${idChip(result.collectionId)} (TX1 ${idChip(result.tx1Id)}, TX2 ${idChip(result.tx2Id)}).`, 'ok')
   } catch (e) {
     if ((e as Error).message === SPEND_CANCELLED) { setStatus('Mint cancelled — nothing was spent.'); return }
     setStatus(`Mint failed: ${(e as Error).message}`, 'error')
@@ -816,7 +831,7 @@ async function onMintEdition(): Promise<void> {
     })
     for (const e of result.editions) storeEdition(e, result.collectionId, name, terms)
     renderTokens()
-    setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, 'ok')
+    setStatusHtml(`Minted ${result.editions.length} edition(s). Collection ${idChip(result.collectionId)} (TX2 ${idChip(result.tx2Id)}).`, 'ok')
   } catch (e) {
     if ((e as Error).message === SPEND_CANCELLED) { setStatus('Edition mint cancelled — nothing was spent.'); return }
     setStatus(`Edition mint failed: ${(e as Error).message}`, 'error')

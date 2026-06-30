@@ -24172,6 +24172,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     el.textContent = msg;
     el.className = `status ${kind}`;
   }
+  function setStatusHtml(html, kind = "info") {
+    const el = $("status");
+    el.innerHTML = html;
+    el.className = `status ${kind}`;
+  }
+  function idChip(full) {
+    return `<span class="copyid" data-full="${escapeHtml(full)}" title="Click to copy the full id">${escapeHtml(short(full))}</span>`;
+  }
+  document.addEventListener("click", (e) => {
+    const chip = e.target?.closest?.(".copyid");
+    if (chip?.dataset.full) {
+      void navigator.clipboard?.writeText(chip.dataset.full);
+      toast("Copied \u2713");
+    }
+  });
   var MNEMONIC_KEY = "p:wallet:mnemonic";
   var BACKED_UP_KEY = "p:wallet:backedUp";
   var DERIVATION_PATH = "m/44'/236'/0'/0/0";
@@ -24657,7 +24672,7 @@ Proceed?`
         store2.add({ txId: op3.txId, outputIndex: op3.outputIndex, collectionId: result.collectionId, stateData: "", collectionName: name });
       }
       renderTokens();
-      setStatus(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${short(result.collectionId)} (TX1 ${short(result.tx1Id)}, TX2 ${short(result.tx2Id)}).`, "ok");
+      setStatusHtml(`Minted ${result.tokenOutpoints.length} NFT(s). Collection ${idChip(result.collectionId)} (TX1 ${idChip(result.tx1Id)}, TX2 ${idChip(result.tx2Id)}).`, "ok");
     } catch (e) {
       if (e.message === SPEND_CANCELLED) {
         setStatus("Mint cancelled \u2014 nothing was spent.");
@@ -24972,7 +24987,7 @@ Proceed?`
       });
       for (const e of result.editions) storeEdition(e, result.collectionId, name, terms);
       renderTokens();
-      setStatus(`Minted ${result.editions.length} edition(s). Collection ${short(result.collectionId)} (TX2 ${short(result.tx2Id)}).`, "ok");
+      setStatusHtml(`Minted ${result.editions.length} edition(s). Collection ${idChip(result.collectionId)} (TX2 ${idChip(result.tx2Id)}).`, "ok");
     } catch (e) {
       if (e.message === SPEND_CANCELLED) {
         setStatus("Edition mint cancelled \u2014 nothing was spent.");
@@ -28503,7 +28518,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"fafa560"} \xB7 ${"2026-06-30"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"dccfd4e"} \xB7 ${"2026-06-30"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

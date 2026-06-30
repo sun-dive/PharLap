@@ -48,6 +48,9 @@
     .status { position:sticky; top:0; background:#0d1117; border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:13px; min-height:20px; }
     .status.ok { border-color:var(--accent); }
     .status.error { border-color:var(--err); color:#ffb4ae; }
+    /* Click-to-copy id chip — shows a shortened id, copies the full value on click */
+    .copyid { cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; border-bottom:1px dotted currentColor; white-space:nowrap; }
+    .copyid:hover { background:rgba(88,166,255,.15); border-radius:3px; }
     .grid2 { display:grid; grid-template-columns:1fr 120px; gap:8px; }
     /* Wallet section tabs */
     .tabs { display:flex; gap:2px; flex-wrap:wrap; margin:0 0 16px; border-bottom:1px solid var(--line); }
