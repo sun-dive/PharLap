@@ -23,6 +23,9 @@ It is built around three ideas that make it different from a typical token walle
 3. **Provable, timestamped content.** A public embedded file is committed by the SHA-256 of its
    *original* bytes, so anyone can later prove the on-chain copy is a byte-exact, block-timestamped
    replica of an off-chain file — a built-in notary. (This is the "proof token" in PHAR LAP's origins.)
+4. **A release, not just a file.** A mint can be a multi-track **album/EP**, play in a built-in **music
+   player**, carry **embedded cover art and time-synced lyrics**, and even drive a **scene-timeline music
+   video** — a whole rich release packed into one hash-bound, optionally-encrypted object (see *Rich media*).
 
 ---
 
@@ -186,6 +189,8 @@ and keep working unchanged — each collection embeds its own covenant, so the t
 |---|---|
 | **Mint collection** | Create a fixed-supply collection (+ optional file). |
 | **Mint edition collection** | Create an unlimited-mints collection with fixed publisher/holder fees (+ optional file, which can be **encrypted** for holders). |
+| **Multi-file release** | Pack several files — album/EP tracks, or a music video's scenes + cue sheet — into one NFT; it plays inline in the built-in player. |
+| **Combine into an EP** | Bundle existing mints by *reference* (no re-upload) into a new release with its own price. |
 | **Replicate** | Permissionlessly mint your own copy of an edition (pays the fees + posts a fresh bond). |
 | **Burn** | Destroy a copy you hold and reclaim its bonded sats to your wallet (owner-signed, irreversible). |
 | **Gift links** | Pre-fund claimable copies of your edition as shareable links; recoverable from your key alone. |
@@ -203,6 +208,7 @@ and keep working unchanged — each collection embeds its own covenant, so the t
 | **Back up config** | Post an **encrypted** copy of your address book + alias + prefs to your own address; restores on any device. |
 | **Check incoming / recover** | Discover tokens / editions / messages sent to you, and rebuild your holdings from chain. |
 | **Restore from WIF** | Recover your wallet **and** purchases on any browser/device from your private key. |
+| **Air-gapped / watch-only** | Generate keys offline, load a wallet **watch-only** by public key, and sign transfers / burns / BSV payments on an offline device (file-based; see `AIR_GAPPED.md`). |
 | **Verify** | Confirm a token/edition is structurally valid and which collection it belongs to. |
 | **View** | Open the embedded file — decompressing and **decrypting** it as needed — and verify it against the collection commitment (public files show a **✓ verified exact replica** proof). |
 
@@ -264,6 +270,43 @@ earns the built-in replication royalties, leaking undercuts a market they themse
 Stronger tiers — a live per-recipient key sender, or a server that watermarks each buyer's copy — are
 designed but not built.
 
+## Rich media — a release, not just a file
+
+A mint's embedded content can be far more than a single document. The wallet packs a whole release into
+**one hash-bound object** — to the chain it's still "a file," so identity, the covenant, and the provenance
+proof are unchanged — and plays it back in a built-in experience:
+
+- **Multi-track albums / EPs.** Select several files at mint and they're packed into one container
+  (a lightweight `magic + header + concatenated bytes` blob, no external zip). One NFT, one provenance hash,
+  the whole release inside; the viewer unpacks it into a track list.
+- **An in-wallet player.** Audio opens in a built-in player — a spinning "disc," a circular **audio
+  visualizer**, reactive background, and a playlist. For anyone the rotation makes dizzy, a **speaker mode**
+  stops the spin and instead **pushes the disc in and out with the bass**; the choice is remembered.
+- **Embedded cover art, by role.** Art carried in the audio's own tags (FLAC `PICTURE` / MP3 `APIC`, e.g.
+  added in a tag editor) is shown by its picture type: **Front + Back** in a flip-through cover view, and a
+  **Media** image — animated or still — as the spinning disc label. A track with no art falls back to the
+  release cover.
+- **Time-synced lyrics.** Lyrics embedded as **LRC** (timestamped lines) drive a **karaoke overlay** — the
+  current line highlights and auto-scrolls in time with the song; plain (un-timed) lyrics simply scroll.
+- **On-chain music videos.** A tiny **cue sheet** (`[mm:ss.cc]scene.webp` lines, packed alongside the audio)
+  times scene images to playback, so a release plays a **seekable, audio-synced music video** — entirely
+  on-chain, and a *fraction* of a baked video's size: each scene is stored once and reused by reference, and
+  a held still costs almost nothing to linger on. Lyrics can overlay the video for a karaoke clip.
+
+All of it works with **public or holder-only encrypted** content alike, and a verified copy is **cached
+locally** (IndexedDB) so the next open is instant and works offline.
+
+## Reference & combination mints
+
+A mint's content doesn't have to be re-embedded bytes — it can be a **manifest of pointers** to content
+already on-chain. That lets you **bundle existing mints into an EP or compilation without re-uploading** a
+single byte: the new release references each work by its genesis + content hash, and the player **resolves
+and hash-verifies** each one and plays them as a single release. Because the bundle is just pointers it's
+tiny, and it's priced **independently** — an album can cost less than the sum of its singles, while the
+singles stay separate products. It's covenant-safe: to the chain a reference manifest is just another
+content file. (Publisher *re-mints* — re-pricing or re-packaging your own catalogue by reference, without
+re-uploading — build on the same primitive; full version-supersession is a designed follow-up.)
+
 ## Shareable sales pages
 
 Every collection — and every individual holder — has a **postable link** that opens a public storefront,
@@ -273,7 +316,8 @@ served entirely from the same client-side page (no backend):
 …/#c=<Collection-ID>&h=<holder-pubkey>
 ```
 
-The storefront shows a **cover image**, title, description, the lock state (e.g. "🔒 holders only"), and
+The storefront shows a **cover image** (a front cover, with an optional **back cover** a viewer can flip to —
+separate from the audio's own embedded art), title, description, the lock state (e.g. "🔒 holders only"), and
 the price (publisher + holder fee). A stranger can press **"Get a copy"** and own one in a single click:
 
 1. the page **resolves the holder's current edition** deterministically (by script hash — no indexer);
@@ -437,9 +481,23 @@ Validated on **BSV mainnet**:
 - ✅ **Seller notes & bonuses** (on-chain, ride to the buyer, propagate down the resale chain)
 - ✅ **Self-custody recovery** — restore the WIF on any device and rebuild holdings (with notes/bonuses)
   from chain
+- ✅ **Rich-media releases** — multi-track albums/EPs in one NFT; a built-in player (spinning-disc /
+  bass-reactive **speaker** visualization + audio visualizer + track list); **embedded cover art** by role
+  (front / back / **media** disc label, animated or still); **time-synced LRC lyrics** (karaoke overlay);
+  and **on-chain scene-timeline music videos** (seekable; scenes stored once, reused by reference)
+- ✅ **Reference / combination mints** — bundle existing mints by reference into an EP/compilation (no
+  re-upload), independently priced; each referenced work resolved + hash-verified on play
+- ✅ **Front + back storefront covers** — a flippable sales-page cover, separate from embedded art
+- ✅ **Encrypted music-video release** — a full multi-file, holder-only release (lossless audio + scene
+  video + synced lyrics) minted and decrypt-verified **end-to-end on mainnet**
+- ✅ **Air-gapped & watch-only** — offline cold key-gen, file-based offline signing for transfers / burns /
+  BSV payments, and a keyless watch-only mode
+- ✅ **Instant / offline replay** — verified content cached locally (IndexedDB)
 
 Still experimental — treat it as a working prototype, and use small amounts. Stronger encrypted-content
 tiers (live per-recipient key delivery; a server with per-buyer watermarking), on-chain / time-locked
 bonuses, edition deep-verify (full lineage proof), Threads replies/threading + deeper downstream-holder
-verification, a sales **spent/net P&L** + trend chart, and config-backup **delete-sync** (tombstones) are
+verification, a sales **spent/net P&L** + trend chart, config-backup **delete-sync** (tombstones), reference-mint
+**version supersession**, an eBook **"library" view** for non-audio bundles, **lazy/prefetch resolution**
+for very large reference releases, and a **native-WebCrypto** speed-up for encrypting large content are
 designed but not yet built.
