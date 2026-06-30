@@ -22093,7 +22093,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
 
   // src/album.ts
   var ALBUM_MIME = "application/x-pharlap-album";
-  var MAX_ALBUM_TRACKS = 12;
+  var MAX_ALBUM_TRACKS = 64;
   var MAGIC = [80, 76, 69, 80];
   var VERSION = 1;
   function packAlbum(tracks) {
@@ -28503,7 +28503,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"4d34543"} \xB7 ${"2026-06-29"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"fafa560"} \xB7 ${"2026-06-30"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
