@@ -27429,6 +27429,31 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
   function setCvGetDisabled(disabled) {
     for (const b of cvGetButtons()) b.disabled = disabled;
   }
+  function reflectCvOwnership(info) {
+    const buyable = info.fees != null || info.isV2;
+    const another = document.getElementById("cvBuyAnother");
+    if (cvGiftWif) {
+      setCvGetDisabled(!buyable);
+      if (another) another.style.display = "none";
+      return;
+    }
+    const owns = store2.active().some((t) => t.collectionId === info.tx1Ref);
+    if (owns && buyable) {
+      for (const b of cvGetButtons()) {
+        b.disabled = true;
+        b.textContent = "\u2713 You own a copy";
+        b.classList.add("owned");
+      }
+      if (another) another.style.display = "";
+    } else {
+      for (const b of cvGetButtons()) {
+        b.disabled = !buyable;
+        b.textContent = "Get a copy";
+        b.classList.remove("owned");
+      }
+      if (another) another.style.display = "none";
+    }
+  }
   function parseHashRoute() {
     const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
     if (!raw) return null;
@@ -27578,7 +27603,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     } else {
       $("cvPrice").innerHTML = '<span class="muted">This collection is not a replicable edition.</span>';
     }
-    setCvGetDisabled(info.fees == null && !info.isV2);
+    reflectCvOwnership(info);
     const holdsIt = store2.active().some((t) => t.collectionId === info.tx1Ref);
     showViewButton(info, holdsIt);
     $("collectionView").style.display = "flex";
@@ -27943,7 +27968,7 @@ Instant, on-chain purchase.`
       setCvStatus(`Could not complete the purchase: ${msg}`, "error");
     } finally {
       buying = false;
-      setCvGetDisabled(false);
+      reflectCvOwnership(info);
     }
   }
   async function onBroadcast(t) {
@@ -28518,7 +28543,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"daae7d0"} \xB7 ${"2026-06-30"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"65b6017"} \xB7 ${"2026-06-30"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -28705,6 +28730,12 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     })();
     $("cvGet").onclick = () => void onGetCopy();
     $("cvGetTop").onclick = () => void onGetCopy();
+    $("cvBuyAnother").onclick = () => {
+      if (!currentCollection) return;
+      if (confirm(`You already own a copy of \u201C${currentCollection.info.name}\u201D.
+
+Buy ANOTHER copy?`)) void onGetCopy();
+    };
     $("cvView").onclick = () => {
       if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name);
     };

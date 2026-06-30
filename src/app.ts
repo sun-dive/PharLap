@@ -3127,6 +3127,24 @@ function cvGetButtons(): HTMLButtonElement[] {
 function setCvGetLabel(text: string): void { for (const b of cvGetButtons()) b.textContent = text }
 function setCvGetDisabled(disabled: boolean): void { for (const b of cvGetButtons()) b.disabled = disabled }
 
+/** Reflect ownership on the storefront's buy buttons: once this wallet holds a copy, GHOST them to
+ *  "✓ You own a copy" (disabled) so a stray second click can't accidentally buy again — and reveal a
+ *  low-key "Buy another copy" link for the rare deliberate re-purchase (editions are uncapped). Otherwise
+ *  the normal "Get a copy" button. Skipped entirely during a gift claim (its label/flow is special). */
+function reflectCvOwnership(info: CollectionInfo): void {
+  const buyable = info.fees != null || info.isV2
+  const another = document.getElementById('cvBuyAnother') as HTMLElement | null
+  if (cvGiftWif) { setCvGetDisabled(!buyable); if (another) another.style.display = 'none'; return }
+  const owns = store.active().some(t => t.collectionId === info.tx1Ref)
+  if (owns && buyable) {
+    for (const b of cvGetButtons()) { b.disabled = true; b.textContent = '✓ You own a copy'; b.classList.add('owned') }
+    if (another) another.style.display = ''
+  } else {
+    for (const b of cvGetButtons()) { b.disabled = !buyable; b.textContent = 'Get a copy'; b.classList.remove('owned') }
+    if (another) another.style.display = 'none'
+  }
+}
+
 /** Read a `#c=…&h=…` hash route, or null if absent. Also captures a referral `aff` ref-code for this session. */
 function parseHashRoute(): { c: string; h: string | null; g: string | null } | null {
   const raw = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
@@ -3255,7 +3273,9 @@ function renderCollectionView(info: CollectionInfo): void {
   } else {
     $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
   }
-  setCvGetDisabled(info.fees == null && !info.isV2)
+  // Buy buttons reflect ownership: ghosted to "✓ You own a copy" if this wallet already holds one (prevents an
+  // accidental re-buy on revisit), else the normal "Get a copy". (A gift claim overrides the label afterwards.)
+  reflectCvOwnership(info)
   // Show a "View content" button if this wallet already holds an edition of this collection.
   const holdsIt = store.active().some(t => t.collectionId === info.tx1Ref)
   showViewButton(info, holdsIt)
@@ -3605,7 +3625,9 @@ async function onGetCopy(): Promise<void> {
     setCvStatus(`Could not complete the purchase: ${msg}`, 'error')
   } finally {
     buying = false
-    setCvGetDisabled(false)
+    // Reflect ownership rather than blindly re-enabling: after a successful buy the wallet now holds a copy, so
+    // the buttons ghost to "✓ You own a copy" (no accidental second purchase); on cancel/failure they re-enable.
+    reflectCvOwnership(info)
   }
 }
 
@@ -4270,6 +4292,11 @@ function init(): void {
   $('cvQr').onclick = () => void (async () => { const l = await currentShareLink(); if (l) showQrModal('Scan to open this sales page', l) })()
   $('cvGet').onclick = () => void onGetCopy()
   $('cvGetTop').onclick = () => void onGetCopy()
+  // Deliberate re-purchase escape hatch (shown only once you own a copy): a confirm, then the normal buy flow.
+  $('cvBuyAnother').onclick = () => {
+    if (!currentCollection) return
+    if (confirm(`You already own a copy of “${currentCollection.info.name}”.\n\nBuy ANOTHER copy?`)) void onGetCopy()
+  }
   $('cvView').onclick = () => { if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name) }
   $('cvNoteSave').onclick = () => void onSaveSellerNote()
   $('cvFundCopy').onclick = () => void navigator.clipboard?.writeText(address)
