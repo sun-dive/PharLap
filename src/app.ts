@@ -12,7 +12,7 @@ import { PrivateKey, PublicKey, Utils, Hash, LockingScript, Mnemonic, HD } from 
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, selectFunding, PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type SalesGroup, type UnifiedSale } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, scanVoucherHashes, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type UnifiedSale } from './editionBuilder.ts'
 import { buildAirgapRequest, buildAirgapPaymentRequest, signAirgapRequest, encodeAirgapRequest, decodeAirgapRequest, type AirgapAction, type AirgapRequest } from './airgap.ts'
 import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress } from './payment.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
@@ -3870,6 +3870,20 @@ const salesNames = new Map<string, string>()
 const BLOCKS_PER_DAY = 144
 
 const fmtBsv = (sats: number): string => (sats / 1e8).toFixed(8).replace(/\.?0+$/, '') || '0'
+// Scans whose exact gift check has finished — until a scan is in here the Gifts tile shows "…" (not a bogus 0).
+const giftsDone = new WeakSet<MySales>()
+
+/** The pubkey-hash (hex, lc) that a P2PKH input's scriptSig unlocks with — its trailing push is the pubkey.
+ *  Lets us read a funding key straight from the signature, no source-output lookup. null if not a P2PKH spend. */
+function p2pkhInputPubKeyHash(input: { unlockingScript?: { chunks: Array<{ data?: number[] }> } }): string | null {
+  try {
+    const chunks = input.unlockingScript?.chunks
+    if (chunks == null || chunks.length < 2) return null
+    const pub = chunks[chunks.length - 1].data
+    if (pub == null || (pub.length !== 33 && pub.length !== 65)) return null
+    return Utils.toHex(Hash.hash160(pub)).toLowerCase()
+  } catch { return null }
+}
 
 /** Render the Sales tab. Reuses the last scan unless `force` (or first visit) — the scan is the expensive bit. */
 async function renderSalesTab(force = false): Promise<void> {
@@ -3885,7 +3899,7 @@ async function renderSalesTab(force = false): Promise<void> {
     const cids = [...new Set(res.sales.map(s => s.collectionId))]
     await Promise.all(cids.map(async c => { if (!salesNames.has(c)) { try { salesNames.set(c, await resolveCollectionName(c)) } catch { salesNames.set(c, short(c)) } } }))
     paintSales(res, height)
-    void fillGiftStats(res) // background: count claimed gift links (per published collection) into the stats
+    void fillGiftStats(res, height) // background: exactly tag which sales were gift claims, then repaint
     const keys = res.sales.map(s => s.buyerPubKeyHex)
     if (keys.length) resolveAvatarsThen(keys, () => { if (salesCache === res) paintSales(res, height) })
   } catch (e) { statusEl.textContent = `Scan failed: ${(e as Error).message}` } finally { refreshBtn.disabled = false }
@@ -3910,11 +3924,13 @@ function paintSales(res: MySales, height: number): void {
   const noHeight = height === 0
   const monthLbl = noHeight ? 'period n/a' : 'this month'
 
+  // Gifts: exact count of sales funded by your gift vouchers — "…" until the check finishes, "—" if watch-only.
+  const giftVal = !giftsDone.has(res) ? '<span class="muted">…</span>' : key == null ? '—' : String(S.filter(s => s.isGift).length)
   statsEl.innerHTML = '<div class="stat-grid">' +
     statTile('Sales', String(S.length), `${salesMonth} ${monthLbl}`) +
     statTile('Earned', `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV · ${earnedMonth.toLocaleString()} sat ${monthLbl}`) +
     statTile('Unique buyers', String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : 'across your sales') +
-    statTile('Gifts', '<span id="salesGiftVal" class="muted">…</span>', 'gift links claimed') +
+    statTile('Gifts', giftVal, 'claimed via gift links') +
     '</div>'
   statusEl.textContent = `${S.length} sale${S.length === 1 ? '' : 's'}${res.capped ? ` · most recent ${res.scanned} txs` : ''}${noHeight ? ' · block height unavailable, periods approximate' : ''}`
   bodyEl.innerHTML = ''
@@ -3941,9 +3957,10 @@ function salesUnified(sales: UnifiedSale[], names: Map<string, string>): HTMLEle
     for (const s of list) if (!buyerKeys.has(s.buyerPubKeyHex.toLowerCase())) buyerKeys.set(s.buyerPubKeyHex.toLowerCase(), s.buyerPubKeyHex)
     const uniq = [...buyerKeys.values()]
     const card = document.createElement('div'); card.className = 'sales-group'
+    const giftN = list.filter(s => s.isGift).length
     const gh = document.createElement('button'); gh.type = 'button'; gh.className = 'sales-group-head'
     gh.innerHTML = `<span class="chev">▸</span> <span class="sales-group-name">${escapeHtml(name)}</span>` +
-      `<span class="sales-group-meta">${list.length} sale${list.length === 1 ? '' : 's'} · ${uniq.length} buyer${uniq.length === 1 ? '' : 's'} · ${groupEarned.toLocaleString()} sat<span class="gift-badge" data-cid="${escapeHtml(cid)}"></span></span>`
+      `<span class="sales-group-meta">${list.length} sale${list.length === 1 ? '' : 's'} · ${uniq.length} buyer${uniq.length === 1 ? '' : 's'} · ${groupEarned.toLocaleString()} sat${giftN > 0 ? ` · <span class="gift-badge">🎁 ${giftN} gifted</span>` : ''}</span>`
     const body = document.createElement('div'); body.className = 'buyers-list'; body.hidden = true
     const msgAll = document.createElement('button'); msgAll.className = 'secondary'; msgAll.style.margin = '6px 0'
     msgAll.textContent = `✉ Message all ${uniq.length}`
@@ -3955,7 +3972,7 @@ function salesUnified(sales: UnifiedSale[], names: Map<string, string>): HTMLEle
       const date = s.time ? new Date(s.time * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : (s.height ? '' : 'pending')
       const amt = s.publisherFeeSats + s.holderFeeSats
       const kind = s.publisherFeeSats > 0 && s.holderFeeSats > 0 ? 'both fees' : s.publisherFeeSats > 0 ? 'publisher fee' : 'holder fee'
-      who.innerHTML = `${nameChip(s.buyerPubKeyHex)} <span class="sale-tag muted">${date ? escapeHtml(date) + ' · ' : ''}${kind} · +${amt.toLocaleString()} sat</span>`
+      who.innerHTML = `${nameChip(s.buyerPubKeyHex)} <span class="sale-tag muted">${date ? escapeHtml(date) + ' · ' : ''}${kind} · +${amt.toLocaleString()} sat</span>${s.isGift ? ' <span class="gift-badge">🎁 gift</span>' : ''}`
       const msg = document.createElement('button'); msg.className = 'secondary'; msg.textContent = '✉ Message'
       msg.onclick = () => composeTo(s.buyerPubKeyHex, 'this buyer', { product: name, recipientRole: 'buyer' })
       row.append(who, msg); body.append(row)
@@ -3966,22 +3983,32 @@ function salesUnified(sales: UnifiedSale[], names: Map<string, string>): HTMLEle
   return sec
 }
 
-/** Background: count claimed gift links per published collection into the "Gifts" tile + per-collection badges.
- *  Best-effort — the voucher keys derive from the private key, so it's silently skipped when watch-only.
- *  (Counts a funded-then-spent voucher: a recipient claim — or, rarely, a publisher reclaim/sweep.) */
-async function fillGiftStats(res: MySales): Promise<void> {
-  const val0 = document.getElementById('salesGiftVal')
-  if (key == null) { if (val0) { val0.textContent = '—'; val0.title = 'Watch-only wallet — gift links can’t be derived here' } return }
-  const cids = [...new Set(res.sales.filter(s => s.publisherFeeSats > 0).map(s => s.collectionId))]
-  let total = 0
-  const perCol = new Map<string, number>()
-  for (const cid of cids) {
-    try { const g = await scanGiftVouchers(provider, key, cid); if (g.claimedCount > 0) { total += g.claimedCount; perCol.set(cid, g.claimedCount) } } catch { /* best-effort */ }
+/** Background: tag EXACTLY which sales were gift claims, then repaint. A claim is funded by one of the
+ *  collection's gift vouchers, so we derive that collection's funded voucher hashes (bounded by how many links
+ *  you ever made) and check each sale's funding input against them — a sweep/reclaim never funds a sale, so it's
+ *  correctly excluded. Only your published collections have your vouchers. Best-effort; skipped when watch-only. */
+async function fillGiftStats(res: MySales, height: number): Promise<void> {
+  if (key != null) {
+    const byCid = new Map<string, UnifiedSale[]>()
+    for (const s of res.sales) if (s.publisherFeeSats > 0) { const a = byCid.get(s.collectionId) ?? []; a.push(s); byCid.set(s.collectionId, a) }
+    for (const [cid, list] of byCid) {
+      let hashes: Set<string>
+      try { hashes = await scanVoucherHashes(provider, key, cid) } catch { continue }
+      if (hashes.size === 0) continue // no gift links for this collection → none of its sales are gifts
+      await Promise.all(list.map(async s => {
+        try {
+          const tx = await provider.getSourceTransaction(s.txId) // the small replicate tx (never content)
+          for (let i = 1; i < tx.inputs.length; i++) { // input[0] = the edition being cloned; funding follows
+            const pkh = p2pkhInputPubKeyHash(tx.inputs[i])
+            if (pkh != null && hashes.has(pkh)) { s.isGift = true; break }
+          }
+        } catch { /* best-effort — leave untagged */ }
+      }))
+    }
   }
-  if (salesCache !== res) return // a newer scan has superseded this paint
-  const val = document.getElementById('salesGiftVal')
-  if (val) { val.textContent = String(total); val.classList.remove('muted') }
-  for (const [cid, n] of perCol) { const b = document.querySelector(`.gift-badge[data-cid="${cid}"]`); if (b) b.textContent = ` · 🎁 ${n} gifted` }
+  if (salesCache !== res) return // a newer scan superseded this one
+  giftsDone.add(res)
+  paintSales(res, height) // repaint with exact 🎁 labels + the true gift count
 }
 
 // ─── discussions (lineage corridors) ────────────────────────────────

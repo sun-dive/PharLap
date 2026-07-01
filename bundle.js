@@ -21432,6 +21432,40 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     return { nextIndex, live, claimedCount };
   }
+  async function scanVoucherHashes(provider2, publisherKey, tx1RefHex, opts) {
+    const gapLimit = opts?.gapLimit ?? 5;
+    const max = opts?.max ?? 1e3;
+    const hashes = /* @__PURE__ */ new Set();
+    let consecutiveEmpty = 0;
+    for (let i = 0; i < max && consecutiveEmpty < gapLimit; i++) {
+      const k = deriveVoucherKey(publisherKey, tx1RefHex, i);
+      const pkh = Hash_exports.hash160(k.toPublicKey().encode(true));
+      let funded = false;
+      try {
+        funded = (await provider2.getUnspentByScriptHash(wocScriptHash(p2pkhScript(pkh)))).length > 0;
+      } catch {
+      }
+      if (!funded) {
+        try {
+          funded = (await provider2.getAddressHistory(k.toAddress())).length > 0;
+        } catch {
+        }
+        if (!funded) {
+          try {
+            funded = (await provider2.getRecentTxIdsForAddress(k.toAddress())).length > 0;
+          } catch {
+          }
+        }
+      }
+      if (!funded) {
+        consecutiveEmpty++;
+        continue;
+      }
+      consecutiveEmpty = 0;
+      hashes.add(utils_exports.toHex(pkh).toLowerCase());
+    }
+    return hashes;
+  }
   async function sweepGiftVouchers(provider2, publisherKey, live, opts) {
     const tx = new Transaction();
     let inputs = 0, swept = 0;
@@ -28252,6 +28286,18 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   var salesNames = /* @__PURE__ */ new Map();
   var BLOCKS_PER_DAY = 144;
   var fmtBsv = (sats) => (sats / 1e8).toFixed(8).replace(/\.?0+$/, "") || "0";
+  var giftsDone = /* @__PURE__ */ new WeakSet();
+  function p2pkhInputPubKeyHash(input) {
+    try {
+      const chunks = input.unlockingScript?.chunks;
+      if (chunks == null || chunks.length < 2) return null;
+      const pub = chunks[chunks.length - 1].data;
+      if (pub == null || pub.length !== 33 && pub.length !== 65) return null;
+      return utils_exports.toHex(Hash_exports.hash160(pub)).toLowerCase();
+    } catch {
+      return null;
+    }
+  }
   async function renderSalesTab(force = false) {
     const statsEl = $("salesStats");
     const statusEl = $("salesStatus");
@@ -28287,7 +28333,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
         }
       }));
       paintSales(res, height);
-      void fillGiftStats(res);
+      void fillGiftStats(res, height);
       const keys = res.sales.map((s2) => s2.buyerPubKeyHex);
       if (keys.length) resolveAvatarsThen(keys, () => {
         if (salesCache === res) paintSales(res, height);
@@ -28316,7 +28362,8 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     const top = res.asCreator[0] ?? res.asReseller[0];
     const noHeight = height === 0;
     const monthLbl = noHeight ? "period n/a" : "this month";
-    statsEl.innerHTML = '<div class="stat-grid">' + statTile("Sales", String(S.length), `${salesMonth} ${monthLbl}`) + statTile("Earned", `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV \xB7 ${earnedMonth.toLocaleString()} sat ${monthLbl}`) + statTile("Unique buyers", String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : "across your sales") + statTile("Gifts", '<span id="salesGiftVal" class="muted">\u2026</span>', "gift links claimed") + "</div>";
+    const giftVal = !giftsDone.has(res) ? '<span class="muted">\u2026</span>' : key == null ? "\u2014" : String(S.filter((s2) => s2.isGift).length);
+    statsEl.innerHTML = '<div class="stat-grid">' + statTile("Sales", String(S.length), `${salesMonth} ${monthLbl}`) + statTile("Earned", `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV \xB7 ${earnedMonth.toLocaleString()} sat ${monthLbl}`) + statTile("Unique buyers", String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : "across your sales") + statTile("Gifts", giftVal, "claimed via gift links") + "</div>";
     statusEl.textContent = `${S.length} sale${S.length === 1 ? "" : "s"}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}${noHeight ? " \xB7 block height unavailable, periods approximate" : ""}`;
     bodyEl.innerHTML = "";
     bodyEl.append(salesUnified(S, salesNames));
@@ -28352,10 +28399,11 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       const uniq = [...buyerKeys.values()];
       const card2 = document.createElement("div");
       card2.className = "sales-group";
+      const giftN = list.filter((s2) => s2.isGift).length;
       const gh = document.createElement("button");
       gh.type = "button";
       gh.className = "sales-group-head";
-      gh.innerHTML = `<span class="chev">\u25B8</span> <span class="sales-group-name">${escapeHtml(name)}</span><span class="sales-group-meta">${list.length} sale${list.length === 1 ? "" : "s"} \xB7 ${uniq.length} buyer${uniq.length === 1 ? "" : "s"} \xB7 ${groupEarned.toLocaleString()} sat<span class="gift-badge" data-cid="${escapeHtml(cid)}"></span></span>`;
+      gh.innerHTML = `<span class="chev">\u25B8</span> <span class="sales-group-name">${escapeHtml(name)}</span><span class="sales-group-meta">${list.length} sale${list.length === 1 ? "" : "s"} \xB7 ${uniq.length} buyer${uniq.length === 1 ? "" : "s"} \xB7 ${groupEarned.toLocaleString()} sat${giftN > 0 ? ` \xB7 <span class="gift-badge">\u{1F381} ${giftN} gifted</span>` : ""}</span>`;
       const body = document.createElement("div");
       body.className = "buyers-list";
       body.hidden = true;
@@ -28373,7 +28421,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
         const date = s2.time ? new Date(s2.time * 1e3).toLocaleDateString(void 0, { month: "short", day: "numeric" }) : s2.height ? "" : "pending";
         const amt = s2.publisherFeeSats + s2.holderFeeSats;
         const kind = s2.publisherFeeSats > 0 && s2.holderFeeSats > 0 ? "both fees" : s2.publisherFeeSats > 0 ? "publisher fee" : "holder fee";
-        who.innerHTML = `${nameChip(s2.buyerPubKeyHex)} <span class="sale-tag muted">${date ? escapeHtml(date) + " \xB7 " : ""}${kind} \xB7 +${amt.toLocaleString()} sat</span>`;
+        who.innerHTML = `${nameChip(s2.buyerPubKeyHex)} <span class="sale-tag muted">${date ? escapeHtml(date) + " \xB7 " : ""}${kind} \xB7 +${amt.toLocaleString()} sat</span>${s2.isGift ? ' <span class="gift-badge">\u{1F381} gift</span>' : ""}`;
         const msg = document.createElement("button");
         msg.className = "secondary";
         msg.textContent = "\u2709 Message";
@@ -28390,38 +28438,40 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     }
     return sec;
   }
-  async function fillGiftStats(res) {
-    const val0 = document.getElementById("salesGiftVal");
-    if (key == null) {
-      if (val0) {
-        val0.textContent = "\u2014";
-        val0.title = "Watch-only wallet \u2014 gift links can\u2019t be derived here";
+  async function fillGiftStats(res, height) {
+    if (key != null) {
+      const byCid = /* @__PURE__ */ new Map();
+      for (const s2 of res.sales) if (s2.publisherFeeSats > 0) {
+        const a = byCid.get(s2.collectionId) ?? [];
+        a.push(s2);
+        byCid.set(s2.collectionId, a);
       }
-      return;
-    }
-    const cids = [...new Set(res.sales.filter((s2) => s2.publisherFeeSats > 0).map((s2) => s2.collectionId))];
-    let total = 0;
-    const perCol = /* @__PURE__ */ new Map();
-    for (const cid of cids) {
-      try {
-        const g = await scanGiftVouchers(provider, key, cid);
-        if (g.claimedCount > 0) {
-          total += g.claimedCount;
-          perCol.set(cid, g.claimedCount);
+      for (const [cid, list] of byCid) {
+        let hashes;
+        try {
+          hashes = await scanVoucherHashes(provider, key, cid);
+        } catch {
+          continue;
         }
-      } catch {
+        if (hashes.size === 0) continue;
+        await Promise.all(list.map(async (s2) => {
+          try {
+            const tx = await provider.getSourceTransaction(s2.txId);
+            for (let i = 1; i < tx.inputs.length; i++) {
+              const pkh = p2pkhInputPubKeyHash(tx.inputs[i]);
+              if (pkh != null && hashes.has(pkh)) {
+                s2.isGift = true;
+                break;
+              }
+            }
+          } catch {
+          }
+        }));
       }
     }
     if (salesCache !== res) return;
-    const val2 = document.getElementById("salesGiftVal");
-    if (val2) {
-      val2.textContent = String(total);
-      val2.classList.remove("muted");
-    }
-    for (const [cid, n] of perCol) {
-      const b = document.querySelector(`.gift-badge[data-cid="${cid}"]`);
-      if (b) b.textContent = ` \xB7 \u{1F381} ${n} gifted`;
-    }
+    giftsDone.add(res);
+    paintSales(res, height);
   }
   var discAnchor = null;
   function discRooms() {
@@ -28624,7 +28674,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"acafaa0"} \xB7 ${"2026-07-01"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6d00a9f"} \xB7 ${"2026-07-01"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
