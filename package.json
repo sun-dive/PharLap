@@ -1,6 +1,8 @@
 {
   "name": "pharlap",
   "version": "0.1.0",
+  "author": "sun-dive",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "description": "PHAR LAP — Peer-to-peer Hashing Algorithm Replication Ledger Authentication Protocol. A PushDrop-based BSV token wallet (derived from MPT v05.24).",
   "scripts": {

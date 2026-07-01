@@ -179,5 +179,5 @@ test/                  node --test suites
 
 ## License
 
-Licensed under the **Open BSV License Version 5** — see [LICENSE](./LICENSE). Derived from MPT v05.24.
-© BSV Association. Use only on the BSV Blockchains.
+Licensed under the **Open BSV License Version 6** — see [LICENSE](./LICENSE). © 2026 sun-dive;
+© BSV Association. Derived from MPT v05.24. **Use only on the BSV Blockchains.**
