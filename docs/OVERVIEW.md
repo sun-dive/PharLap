@@ -328,6 +328,10 @@ the price (publisher + holder fee). A stranger can press **"Get a copy"** and ow
 Because the holder named in the link earns the holder-fee, everyone has a reason to share *their own*
 link — and a sale never spends the holder's only copy (it comes straight back to them), so links stay live.
 
+If the visitor already **holds a copy** of the collection, the buy button **ghosts to "✓ You own a copy"**
+to head off an accidental second purchase — with a deliberate **"Buy another copy"** escape hatch for anyone
+who genuinely wants another (e.g. to gift or resell).
+
 ## Seller notes & bonuses
 
 A seller can attach a short **note** to a collection — a thank-you, redemption instructions, a promo. It
@@ -350,22 +354,31 @@ bonuses are designed for later.
 Because every replication pays the **publisher fee** to the publisher's address *and* the **holder fee** to
 the seller (the cloning source), **a single scan of your own transaction history reconstructs your whole
 sales picture** — and the buyer's public key is the owner of the replica each sale minted. From that one
-scan, the **📊 Sales** tab shows, in two roles:
+scan, the **📊 Sales** tab shows a **de-duplicated, per-sale view**: **one row per real sale**, no
+double-counting even when you earned *both* fees on the same replication (as publisher *and* as the cloning
+source). Each sale row shows:
 
-- **As creator** — every collection you publish: total **sales**, **earnings**, and the full **buyer list**
-  per collection.
-- **As reseller** — every item you resold: your **direct buyers** and your earnings on each.
+- **The date** of the sale.
+- **Which fees you earned** on it — **both**, **publisher-only**, or **holder-only** — so a sale where you
+  wore two hats is counted once, with both fees credited.
+- **The buyer**, with the same alias / identicon identity layer as everywhere else.
+- A **🎁 gift** tag when — and *only* when — that specific sale's funding came from one of **your own gift
+  vouchers**. Detection is **per-sale and exact**: it traces the sale's actual funding input back to a
+  voucher you issued, so ordinary buys, sweeps, and reclaims are never mis-tagged as gifts.
 
 On top sits a lean **statistics** header — sales of your mints, total **earned** (in sats + BSV), your
 resales, unique buyers and your top collection — each with a **this-month** figure (bucketed cheaply by
 block height, so no extra lookups). Every buyer list has **DM / Message-all** (the personalized mail-merge),
 and the per-collection **👥 Buyers** button still gives a single collection's list in place.
 
-The scan is **mempool-aware**, so a brand-new sale shows up before it even confirms. Honest limits: figures
-are **at point of purchase** — onward *transfers* are owner-signed, free, and notify only the new owner, so
-they're invisible to you (it's "who bought," not a current-owner roster); periods are **approximate** (block
-height); and the scan is capped to recent transactions. (There's also no separate "you made a sale" ping —
-the fee landing in your wallet *is* the notification, which is why a 1-sat minimum fee matters.)
+The scan is **content-free**: it reads only the small **replicate outputs** via **capped fetches** and never
+pulls a mint's large embedded content, so it stays fast and safe even on collections with big (multi-MB)
+files. It's also **mempool-aware**, so a brand-new sale shows up before it even confirms. Honest limits:
+figures are **at point of purchase** — onward *transfers* are owner-signed, free, and notify only the new
+owner, so they're invisible to you (it's "who bought," not a current-owner roster); periods are
+**approximate** (block height); and the scan is capped to recent transactions. (There's also no separate
+"you made a sale" ping — the fee landing in your wallet *is* the notification, which is why a 1-sat minimum
+fee matters.)
 
 ## Encrypted config backup
 
