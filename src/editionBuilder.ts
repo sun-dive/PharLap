@@ -885,6 +885,33 @@ export async function scanGiftVouchers(
   return { nextIndex, live, claimedCount }
 }
 
+/** Derive the FUNDED gift-voucher pubkey-hashes (hex, lowercase) for a collection — the same gap-scan as
+ *  scanGiftVouchers, but returns the address hashes (any spend state) so a sale can be matched back to a gift
+ *  claim: a claim is funded by its voucher UTXO, so a sale whose funding key hashes into this set was gifted.
+ *  This is what makes gift counting EXACT (a swept/reclaimed voucher never funds a sale, so it isn't counted). */
+export async function scanVoucherHashes(
+  provider: WalletProvider, publisherKey: PrivateKey, tx1RefHex: string, opts?: { gapLimit?: number; max?: number },
+): Promise<Set<string>> {
+  const gapLimit = opts?.gapLimit ?? 5
+  const max = opts?.max ?? 1000
+  const hashes = new Set<string>()
+  let consecutiveEmpty = 0
+  for (let i = 0; i < max && consecutiveEmpty < gapLimit; i++) {
+    const k = deriveVoucherKey(publisherKey, tx1RefHex, i)
+    const pkh = Hash.hash160(k.toPublicKey().encode(true) as number[])
+    let funded = false
+    try { funded = (await provider.getUnspentByScriptHash(wocScriptHash(p2pkhScript(pkh)))).length > 0 } catch { /* try history */ }
+    if (!funded) {
+      try { funded = (await provider.getAddressHistory(k.toAddress())).length > 0 } catch { /* try recent */ }
+      if (!funded) { try { funded = (await provider.getRecentTxIdsForAddress(k.toAddress())).length > 0 } catch { /* unknown → treat as empty */ } }
+    }
+    if (!funded) { consecutiveEmpty++; continue }
+    consecutiveEmpty = 0
+    hashes.add(Utils.toHex(pkh).toLowerCase())
+  }
+  return hashes
+}
+
 /**
  * Publisher: reclaim UNCLAIMED gift vouchers — sweep each live voucher's funding back to your wallet in one
  * tx (invalidating those links). Pass the `live` list from scanGiftVouchers (each carries its voucher WIF).
@@ -1269,6 +1296,8 @@ export interface UnifiedSale {
   publisherFeeSats: number
   /** Holder fee you earned on this sale (>0 only if you were the cloning source). */
   holderFeeSats: number
+  /** True once verified this sale was funded by one of your gift vouchers (a claimed gift, not a paid buy). */
+  isGift?: boolean
 }
 
 export interface MySales {
