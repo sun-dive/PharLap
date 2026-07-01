@@ -12,7 +12,7 @@ import { PrivateKey, PublicKey, Utils, Hash, LockingScript, Mnemonic, HD } from 
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, selectFunding, PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, SPEND_CANCELLED } from './collectionBuilder.ts'
-import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type SalesGroup } from './editionBuilder.ts'
+import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type SalesGroup, type UnifiedSale } from './editionBuilder.ts'
 import { buildAirgapRequest, buildAirgapPaymentRequest, signAirgapRequest, encodeAirgapRequest, decodeAirgapRequest, type AirgapAction, type AirgapRequest } from './airgap.ts'
 import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress } from './payment.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
@@ -3882,10 +3882,11 @@ async function renderSalesTab(force = false): Promise<void> {
     const res = await scanMySales(provider, { myPubKeyHex: pubKeyHex, myHash: myPubKeyHash(),
       onProgress: (d, t) => { statusEl.textContent = `Scanning your sales… ${d}/${t}` } })
     salesCache = res; salesHeight = height
-    const cids = [...new Set(res.events.map(e => e.collectionId))]
+    const cids = [...new Set(res.sales.map(s => s.collectionId))]
     await Promise.all(cids.map(async c => { if (!salesNames.has(c)) { try { salesNames.set(c, await resolveCollectionName(c)) } catch { salesNames.set(c, short(c)) } } }))
     paintSales(res, height)
-    const keys = res.events.map(e => e.buyerPubKeyHex)
+    void fillGiftStats(res) // background: count claimed gift links (per published collection) into the stats
+    const keys = res.sales.map(s => s.buyerPubKeyHex)
     if (keys.length) resolveAvatarsThen(keys, () => { if (salesCache === res) paintSales(res, height) })
   } catch (e) { statusEl.textContent = `Scan failed: ${(e as Error).message}` } finally { refreshBtn.disabled = false }
 }
@@ -3899,61 +3900,88 @@ function paintSales(res: MySales, height: number): void {
   // Approximate "this month" by block-height delta (unconfirmed counts as recent).
   const monthFloor = height > 0 ? height - 30 * BLOCKS_PER_DAY : 0
   const inMonth = (h: number): boolean => height === 0 || h === 0 || h >= monthFloor
-  const creatorEv = res.events.filter(e => e.role === 'creator')
-  const resellerEv = res.events.filter(e => e.role === 'reseller')
-  const earned = res.events.reduce((s, e) => s + e.feeSats, 0)
-  const earnedMonth = res.events.filter(e => inMonth(e.height)).reduce((s, e) => s + e.feeSats, 0)
-  const salesMonth = creatorEv.filter(e => inMonth(e.height)).length
-  const resalesMonth = resellerEv.filter(e => inMonth(e.height)).length
-  const uniqueBuyers = new Set(res.events.map(e => e.buyerPubKeyHex.toLowerCase())).size
-  const top = res.asCreator[0]
+  const S = res.sales // de-duplicated: one row per real sale, so no double-count across creator/reseller roles
+  const earnOf = (x: UnifiedSale): number => x.publisherFeeSats + x.holderFeeSats
+  const earned = S.reduce((s, x) => s + earnOf(x), 0)
+  const earnedMonth = S.filter(x => inMonth(x.height)).reduce((s, x) => s + earnOf(x), 0)
+  const salesMonth = S.filter(x => inMonth(x.height)).length
+  const uniqueBuyers = new Set(S.map(x => x.buyerPubKeyHex.toLowerCase())).size
+  const top = res.asCreator[0] ?? res.asReseller[0]
   const noHeight = height === 0
   const monthLbl = noHeight ? 'period n/a' : 'this month'
 
   statsEl.innerHTML = '<div class="stat-grid">' +
-    statTile('Sales (your mints)', String(creatorEv.length), `${salesMonth} ${monthLbl}`) +
+    statTile('Sales', String(S.length), `${salesMonth} ${monthLbl}`) +
     statTile('Earned', `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV · ${earnedMonth.toLocaleString()} sat ${monthLbl}`) +
-    statTile('Your resales', String(resellerEv.length), `${resalesMonth} ${monthLbl}`) +
-    statTile('Unique buyers', String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : 'across your mints') +
+    statTile('Unique buyers', String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : 'across your sales') +
+    statTile('Gifts', '<span id="salesGiftVal" class="muted">…</span>', 'gift links claimed') +
     '</div>'
-  statusEl.textContent = `${res.events.length} sale event${res.events.length === 1 ? '' : 's'}${res.capped ? ` · most recent ${res.scanned} txs` : ''}${noHeight ? ' · couldn’t fetch block height, periods unavailable' : ''}`
+  statusEl.textContent = `${S.length} sale${S.length === 1 ? '' : 's'}${res.capped ? ` · most recent ${res.scanned} txs` : ''}${noHeight ? ' · block height unavailable, periods approximate' : ''}`
   bodyEl.innerHTML = ''
-  bodyEl.append(salesSection('📤 As creator — sales of collections you publish', res.asCreator, salesNames, 'No sales of your mints yet.'))
-  bodyEl.append(salesSection('🔁 As reseller — your direct resales', res.asReseller, salesNames, 'You haven’t resold a copy yet.'))
+  bodyEl.append(salesUnified(S, salesNames))
 }
 
-/** A collapsible section of sales groups (collections), each expanding to its buyer list. */
-function salesSection(title: string, groups: SalesGroup[], names: Map<string, string>, empty: string): HTMLElement {
+/** One de-duplicated list of sales, grouped by collection — each purchase shown ONCE, with its date and which
+ *  fees you earned (both / publisher-only / holder-only). Replaces the old overlapping creator+reseller sections. */
+function salesUnified(sales: UnifiedSale[], names: Map<string, string>): HTMLElement {
   const sec = document.createElement('div'); sec.className = 'token-section'
   const head = document.createElement('div'); head.className = 'token-section-head'; head.style.cursor = 'default'
-  head.innerHTML = `<span class="token-section-label">${title}</span> <span class="count">${groups.length}</span>`
+  head.innerHTML = '<span class="token-section-label">🧾 Your sales — each purchase once, with what you earned</span>' + ` <span class="count">${sales.length}</span>`
   sec.append(head)
-  if (groups.length === 0) {
-    const p = document.createElement('p'); p.className = 'muted'; p.style.fontSize = '12px'; p.textContent = empty; sec.append(p); return sec
+  if (sales.length === 0) {
+    const p = document.createElement('p'); p.className = 'muted'; p.style.fontSize = '12px'; p.textContent = 'No sales yet.'; sec.append(p); return sec
   }
-  for (const g of groups) {
-    const name = names.get(g.collectionId) ?? short(g.collectionId)
+  const byCol = new Map<string, UnifiedSale[]>()
+  for (const s of sales) { const a = byCol.get(s.collectionId) ?? []; a.push(s); byCol.set(s.collectionId, a) }
+  const groups = [...byCol.entries()].sort((a, b) => b[1].length - a[1].length)
+  for (const [cid, list] of groups) {
+    const name = names.get(cid) ?? short(cid)
+    const groupEarned = list.reduce((s, x) => s + x.publisherFeeSats + x.holderFeeSats, 0)
+    const buyerKeys = new Map<string, string>() // lc -> original key, to de-dupe buyers for "message all"
+    for (const s of list) if (!buyerKeys.has(s.buyerPubKeyHex.toLowerCase())) buyerKeys.set(s.buyerPubKeyHex.toLowerCase(), s.buyerPubKeyHex)
+    const uniq = [...buyerKeys.values()]
     const card = document.createElement('div'); card.className = 'sales-group'
     const gh = document.createElement('button'); gh.type = 'button'; gh.className = 'sales-group-head'
     gh.innerHTML = `<span class="chev">▸</span> <span class="sales-group-name">${escapeHtml(name)}</span>` +
-      `<span class="sales-group-meta">${g.sales} sale${g.sales === 1 ? '' : 's'} · ${g.buyers.length} buyer${g.buyers.length === 1 ? '' : 's'} · ${g.earnings.toLocaleString()} sat</span>`
-    const list = document.createElement('div'); list.className = 'buyers-list'; list.hidden = true
+      `<span class="sales-group-meta">${list.length} sale${list.length === 1 ? '' : 's'} · ${uniq.length} buyer${uniq.length === 1 ? '' : 's'} · ${groupEarned.toLocaleString()} sat<span class="gift-badge" data-cid="${escapeHtml(cid)}"></span></span>`
+    const body = document.createElement('div'); body.className = 'buyers-list'; body.hidden = true
     const msgAll = document.createElement('button'); msgAll.className = 'secondary'; msgAll.style.margin = '6px 0'
-    msgAll.textContent = `✉ Message all ${g.buyers.length}`
-    msgAll.onclick = () => openCompose(g.buyers.map(b => b.pubKeyHex), { who: `${g.buyers.length} buyers`, product: name, recipientRole: 'buyer' })
-    list.append(msgAll)
-    for (const b of g.buyers) {
+    msgAll.textContent = `✉ Message all ${uniq.length}`
+    msgAll.onclick = () => openCompose(uniq, { who: `${uniq.length} buyer${uniq.length === 1 ? '' : 's'}`, product: name, recipientRole: 'buyer' })
+    body.append(msgAll)
+    for (const s of [...list].sort((a, b) => (b.time || b.height || 0) - (a.time || a.height || 0))) {
       const row = document.createElement('div'); row.className = 'buyer-row'
       const who = document.createElement('div'); who.className = 'buyer-who'
-      who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">×${b.count}</span>` : ''}`
+      const date = s.time ? new Date(s.time * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : (s.height ? '' : 'pending')
+      const amt = s.publisherFeeSats + s.holderFeeSats
+      const kind = s.publisherFeeSats > 0 && s.holderFeeSats > 0 ? 'both fees' : s.publisherFeeSats > 0 ? 'publisher fee' : 'holder fee'
+      who.innerHTML = `${nameChip(s.buyerPubKeyHex)} <span class="sale-tag muted">${date ? escapeHtml(date) + ' · ' : ''}${kind} · +${amt.toLocaleString()} sat</span>`
       const msg = document.createElement('button'); msg.className = 'secondary'; msg.textContent = '✉ Message'
-      msg.onclick = () => composeTo(b.pubKeyHex, 'this buyer', { product: name, recipientRole: 'buyer' })
-      row.append(who, msg); list.append(row)
+      msg.onclick = () => composeTo(s.buyerPubKeyHex, 'this buyer', { product: name, recipientRole: 'buyer' })
+      row.append(who, msg); body.append(row)
     }
-    gh.onclick = () => { list.hidden = !list.hidden; gh.querySelector('.chev')!.textContent = list.hidden ? '▸' : '▾' }
-    card.append(gh, list); sec.append(card)
+    gh.onclick = () => { body.hidden = !body.hidden; gh.querySelector('.chev')!.textContent = body.hidden ? '▸' : '▾' }
+    card.append(gh, body); sec.append(card)
   }
   return sec
+}
+
+/** Background: count claimed gift links per published collection into the "Gifts" tile + per-collection badges.
+ *  Best-effort — the voucher keys derive from the private key, so it's silently skipped when watch-only.
+ *  (Counts a funded-then-spent voucher: a recipient claim — or, rarely, a publisher reclaim/sweep.) */
+async function fillGiftStats(res: MySales): Promise<void> {
+  const val0 = document.getElementById('salesGiftVal')
+  if (key == null) { if (val0) { val0.textContent = '—'; val0.title = 'Watch-only wallet — gift links can’t be derived here' } return }
+  const cids = [...new Set(res.sales.filter(s => s.publisherFeeSats > 0).map(s => s.collectionId))]
+  let total = 0
+  const perCol = new Map<string, number>()
+  for (const cid of cids) {
+    try { const g = await scanGiftVouchers(provider, key, cid); if (g.claimedCount > 0) { total += g.claimedCount; perCol.set(cid, g.claimedCount) } } catch { /* best-effort */ }
+  }
+  if (salesCache !== res) return // a newer scan has superseded this paint
+  const val = document.getElementById('salesGiftVal')
+  if (val) { val.textContent = String(total); val.classList.remove('muted') }
+  for (const [cid, n] of perCol) { const b = document.querySelector(`.gift-badge[data-cid="${cid}"]`); if (b) b.textContent = ` · 🎁 ${n} gifted` }
 }
 
 // ─── discussions (lineage corridors) ────────────────────────────────
