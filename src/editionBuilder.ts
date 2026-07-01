@@ -24,7 +24,7 @@ import {
 import {
   buildEditionLock, swapEditionOwner, editionOwnerPubKey, p2pkhScript, serializeOutput,
   editionReplicateUnlockChunks, editionTransferUnlockChunks, editionBurnUnlockChunks, EDITION_SCOPE, parseEditionScript,
-  buildHolderEditionScript, parseEditionScriptV2, parseEditionAny, buildEditionLockV2, u64le,
+  buildHolderEditionScript, parseEditionScriptV2, parseEditionAny, buildEditionLockV2, u64le, type ParsedEditionAny,
 } from './covenant.ts'
 import {
   PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding, buildTemplateTx, sha256Hex,
@@ -1256,7 +1256,24 @@ export interface SaleEvent {
   buyerPubKeyHex: string
 }
 
+/** One row per actual sale transaction (de-duplicated across roles) — the honest per-sale view. */
+export interface UnifiedSale {
+  txId: string
+  collectionId: string
+  /** The buyer's public key (owner of the replica minted to them). */
+  buyerPubKeyHex: string
+  height: number
+  /** Block time (unix seconds); 0 if unconfirmed or unknown. */
+  time: number
+  /** Publisher fee you earned on this sale (>0 only if you publish this collection). */
+  publisherFeeSats: number
+  /** Holder fee you earned on this sale (>0 only if you were the cloning source). */
+  holderFeeSats: number
+}
+
 export interface MySales {
+  /** One row per real sale (each transaction once), with the fees you earned — the de-duplicated truth. */
+  sales: UnifiedSale[]
   /** Collections you PUBLISH — every sale across the whole tree (you earn the publisher fee on each). */
   asCreator: SalesGroup[]
   /** Items where YOU were the cloning source — your direct buyers (you earned the holder fee). */
@@ -1293,7 +1310,43 @@ export async function scanMySales(
   try { for (const u of await provider.getUtxos()) if (!candidates.has(u.txId)) candidates.set(u.txId, 0) } catch { /* best-effort */ }
   const entries = [...candidates.entries()]
 
-  // collectionId -> (buyerPubLc -> BuyerRecord), plus per-collection earnings + flat events.
+  // ── Pass 1: find sales cheaply. A sale = a replicate tx; the replica is out[1], the source edition is out[0].
+  // We only ever fetch those two SMALL outputs (capped) — NEVER the content output [2], which can be tens of MB
+  // (a mint's TX1 sits in the publisher's own history). Fees come from the edition's covenant-committed terms,
+  // which the miners enforce to equal the paid out[2]/out[3] amounts — so no need to read output satoshis.
+  const OUT_CAP = 256 * 1024
+  const sales: UnifiedSale[] = []
+  let done = 0
+  for (const [txId, blockHeight] of entries) {
+    params.onProgress?.(done, entries.length); done++
+    let hex1: string | 'oversized' | null
+    try { hex1 = await provider.getOutputScriptHexCapped(txId, 1, OUT_CAP) } catch { continue }
+    if (hex1 == null || hex1 === 'oversized') continue // no replica at out[1] (or it's too big to be one) → not a sale
+    let ed: ParsedEditionAny | null
+    try { ed = parseEditionAny(LockingScript.fromHex(hex1)) } catch { continue }
+    if (ed == null) continue
+    const buyerHex = ed.ownerPubKeyHex
+    const cid = ed.tx1RefHex
+    const publisherHash = Utils.toHex(ed.terms.publisherPubKeyHash).toLowerCase()
+    if (Utils.toHex(Hash.hash160(Utils.toArray(buyerHex, 'hex'))).toLowerCase() === publisherHash) continue // genesis/self
+    const iPublish = publisherHash === myHash
+    let iSourced = false
+    try {
+      const hex0 = await provider.getOutputScriptHexCapped(txId, 0, OUT_CAP)
+      if (hex0 != null && hex0 !== 'oversized') { const src = parseEditionAny(LockingScript.fromHex(hex0)); if (src != null && src.ownerPubKeyHex.toLowerCase() === me) iSourced = true }
+    } catch { /* out[0] unreadable — treat as not-my-source */ }
+    if (!iPublish && !iSourced) continue // a sale, but none of the fees came to me
+    const pubCut = ed.isV2 ? Math.floor((ed.priceSats * ed.terms.pBps) / 10000) : ed.terms.publisherFeeSats
+    const holdCut = ed.isV2 ? ed.priceSats - Math.floor((ed.priceSats * ed.terms.pBps) / 10000) : ed.terms.holderFeeSats
+    sales.push({ txId, collectionId: cid, buyerPubKeyHex: buyerHex, height: blockHeight || 0, time: 0,
+      publisherFeeSats: iPublish ? pubCut : 0, holderFeeSats: iSourced ? holdCut : 0 })
+  }
+  params.onProgress?.(entries.length, entries.length)
+
+  // ── Pass 2: date each sale (block time). Only the sale txs — a handful — not every candidate.
+  await Promise.all(sales.map(async s => { try { const c = await provider.getTxConfirmation(s.txId); if (c?.time) s.time = c.time } catch { /* date best-effort */ } }))
+
+  // ── Derive the role groups (backward-compat: the curator + stats read these) from the de-duplicated sales.
   const creator = new Map<string, Map<string, BuyerRecord>>()
   const reseller = new Map<string, Map<string, BuyerRecord>>()
   const creatorEarn = new Map<string, number>()
@@ -1306,35 +1359,14 @@ export async function scanMySales(
     else m.set(k, { pubKeyHex: buyerHex, count: 1, firstHeight: h, lastHeight: h })
   }
   const addEarn = (m: Map<string, number>, cid: string, v: number): void => { m.set(cid, (m.get(cid) ?? 0) + v) }
-  let done = 0
-  for (const [txId, blockHeight] of entries) {
-    params.onProgress?.(done, entries.length); done++
-    let tx: Transaction
-    try { tx = await provider.getSourceTransaction(txId) } catch { continue }
-    const ed = tx.outputs[1] != null ? parseEditionAny(tx.outputs[1].lockingScript) : null
-    if (ed == null) continue // a replication mints the replica at out[1]; transfers don't
-    const buyerHex = ed.ownerPubKeyHex
-    const cid = ed.tx1RefHex
-    const publisherHash = Utils.toHex(ed.terms.publisherPubKeyHash).toLowerCase()
-    if (Utils.toHex(Hash.hash160(Utils.toArray(buyerHex, 'hex'))).toLowerCase() === publisherHash) continue // genesis/self
-    const h = blockHeight || 0
-    if (publisherHash === myHash) { // I publish this collection — I got the publisher fee (out[2])
-      const fee = tx.outputs[2]?.satoshis ?? 0
-      bump(creator, cid, buyerHex, h); addEarn(creatorEarn, cid, fee)
-      events.push({ collectionId: cid, role: 'creator', feeSats: fee, height: h, buyerPubKeyHex: buyerHex })
-    }
-    const source = tx.outputs[0] != null ? parseEditionAny(tx.outputs[0].lockingScript) : null
-    if (source != null && source.ownerPubKeyHex.toLowerCase() === me) { // I was the source — I got the holder fee (out[3])
-      const fee = tx.outputs[3]?.satoshis ?? 0
-      bump(reseller, cid, buyerHex, h); addEarn(resellerEarn, cid, fee)
-      events.push({ collectionId: cid, role: 'reseller', feeSats: fee, height: h, buyerPubKeyHex: buyerHex })
-    }
+  for (const s of sales) {
+    if (s.publisherFeeSats > 0) { bump(creator, s.collectionId, s.buyerPubKeyHex, s.height); addEarn(creatorEarn, s.collectionId, s.publisherFeeSats); events.push({ collectionId: s.collectionId, role: 'creator', feeSats: s.publisherFeeSats, height: s.height, buyerPubKeyHex: s.buyerPubKeyHex }) }
+    if (s.holderFeeSats > 0) { bump(reseller, s.collectionId, s.buyerPubKeyHex, s.height); addEarn(resellerEarn, s.collectionId, s.holderFeeSats); events.push({ collectionId: s.collectionId, role: 'reseller', feeSats: s.holderFeeSats, height: s.height, buyerPubKeyHex: s.buyerPubKeyHex }) }
   }
-  params.onProgress?.(entries.length, entries.length)
   const toGroups = (g: Map<string, Map<string, BuyerRecord>>, earn: Map<string, number>): SalesGroup[] =>
     [...g.entries()].map(([collectionId, m]) => {
       const buyers = [...m.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity))
       return { collectionId, sales: buyers.reduce((s, b) => s + b.count, 0), earnings: earn.get(collectionId) ?? 0, buyers }
     }).sort((a, b) => b.sales - a.sales)
-  return { asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped }
+  return { sales, asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped }
 }

@@ -21733,6 +21733,61 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     } catch {
     }
     const entries = [...candidates.entries()];
+    const OUT_CAP = 256 * 1024;
+    const sales = [];
+    let done = 0;
+    for (const [txId, blockHeight] of entries) {
+      params.onProgress?.(done, entries.length);
+      done++;
+      let hex1;
+      try {
+        hex1 = await provider2.getOutputScriptHexCapped(txId, 1, OUT_CAP);
+      } catch {
+        continue;
+      }
+      if (hex1 == null || hex1 === "oversized") continue;
+      let ed;
+      try {
+        ed = parseEditionAny(LockingScript.fromHex(hex1));
+      } catch {
+        continue;
+      }
+      if (ed == null) continue;
+      const buyerHex = ed.ownerPubKeyHex;
+      const cid = ed.tx1RefHex;
+      const publisherHash = utils_exports.toHex(ed.terms.publisherPubKeyHash).toLowerCase();
+      if (utils_exports.toHex(Hash_exports.hash160(utils_exports.toArray(buyerHex, "hex"))).toLowerCase() === publisherHash) continue;
+      const iPublish = publisherHash === myHash;
+      let iSourced = false;
+      try {
+        const hex0 = await provider2.getOutputScriptHexCapped(txId, 0, OUT_CAP);
+        if (hex0 != null && hex0 !== "oversized") {
+          const src = parseEditionAny(LockingScript.fromHex(hex0));
+          if (src != null && src.ownerPubKeyHex.toLowerCase() === me) iSourced = true;
+        }
+      } catch {
+      }
+      if (!iPublish && !iSourced) continue;
+      const pubCut = ed.isV2 ? Math.floor(ed.priceSats * ed.terms.pBps / 1e4) : ed.terms.publisherFeeSats;
+      const holdCut = ed.isV2 ? ed.priceSats - Math.floor(ed.priceSats * ed.terms.pBps / 1e4) : ed.terms.holderFeeSats;
+      sales.push({
+        txId,
+        collectionId: cid,
+        buyerPubKeyHex: buyerHex,
+        height: blockHeight || 0,
+        time: 0,
+        publisherFeeSats: iPublish ? pubCut : 0,
+        holderFeeSats: iSourced ? holdCut : 0
+      });
+    }
+    params.onProgress?.(entries.length, entries.length);
+    await Promise.all(sales.map(async (s2) => {
+      try {
+        const c = await provider2.getTxConfirmation(s2.txId);
+        if (c?.time) s2.time = c.time;
+      } catch {
+      }
+    }));
     const creator = /* @__PURE__ */ new Map();
     const reseller = /* @__PURE__ */ new Map();
     const creatorEarn = /* @__PURE__ */ new Map();
@@ -21757,43 +21812,23 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const addEarn = (m, cid, v) => {
       m.set(cid, (m.get(cid) ?? 0) + v);
     };
-    let done = 0;
-    for (const [txId, blockHeight] of entries) {
-      params.onProgress?.(done, entries.length);
-      done++;
-      let tx;
-      try {
-        tx = await provider2.getSourceTransaction(txId);
-      } catch {
-        continue;
+    for (const s2 of sales) {
+      if (s2.publisherFeeSats > 0) {
+        bump(creator, s2.collectionId, s2.buyerPubKeyHex, s2.height);
+        addEarn(creatorEarn, s2.collectionId, s2.publisherFeeSats);
+        events.push({ collectionId: s2.collectionId, role: "creator", feeSats: s2.publisherFeeSats, height: s2.height, buyerPubKeyHex: s2.buyerPubKeyHex });
       }
-      const ed = tx.outputs[1] != null ? parseEditionAny(tx.outputs[1].lockingScript) : null;
-      if (ed == null) continue;
-      const buyerHex = ed.ownerPubKeyHex;
-      const cid = ed.tx1RefHex;
-      const publisherHash = utils_exports.toHex(ed.terms.publisherPubKeyHash).toLowerCase();
-      if (utils_exports.toHex(Hash_exports.hash160(utils_exports.toArray(buyerHex, "hex"))).toLowerCase() === publisherHash) continue;
-      const h = blockHeight || 0;
-      if (publisherHash === myHash) {
-        const fee = tx.outputs[2]?.satoshis ?? 0;
-        bump(creator, cid, buyerHex, h);
-        addEarn(creatorEarn, cid, fee);
-        events.push({ collectionId: cid, role: "creator", feeSats: fee, height: h, buyerPubKeyHex: buyerHex });
-      }
-      const source = tx.outputs[0] != null ? parseEditionAny(tx.outputs[0].lockingScript) : null;
-      if (source != null && source.ownerPubKeyHex.toLowerCase() === me) {
-        const fee = tx.outputs[3]?.satoshis ?? 0;
-        bump(reseller, cid, buyerHex, h);
-        addEarn(resellerEarn, cid, fee);
-        events.push({ collectionId: cid, role: "reseller", feeSats: fee, height: h, buyerPubKeyHex: buyerHex });
+      if (s2.holderFeeSats > 0) {
+        bump(reseller, s2.collectionId, s2.buyerPubKeyHex, s2.height);
+        addEarn(resellerEarn, s2.collectionId, s2.holderFeeSats);
+        events.push({ collectionId: s2.collectionId, role: "reseller", feeSats: s2.holderFeeSats, height: s2.height, buyerPubKeyHex: s2.buyerPubKeyHex });
       }
     }
-    params.onProgress?.(entries.length, entries.length);
     const toGroups = (g, earn) => [...g.entries()].map(([collectionId, m]) => {
       const buyers = [...m.values()].sort((a, b) => (b.lastHeight || Infinity) - (a.lastHeight || Infinity));
       return { collectionId, sales: buyers.reduce((s2, b) => s2 + b.count, 0), earnings: earn.get(collectionId) ?? 0, buyers };
     }).sort((a, b) => b.sales - a.sales);
-    return { asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped };
+    return { sales, asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped };
   }
 
   // src/payment.ts
@@ -28241,7 +28276,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       });
       salesCache = res;
       salesHeight = height;
-      const cids = [...new Set(res.events.map((e) => e.collectionId))];
+      const cids = [...new Set(res.sales.map((s2) => s2.collectionId))];
       await Promise.all(cids.map(async (c) => {
         if (!salesNames.has(c)) {
           try {
@@ -28252,7 +28287,8 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
         }
       }));
       paintSales(res, height);
-      const keys = res.events.map((e) => e.buyerPubKeyHex);
+      void fillGiftStats(res);
+      const keys = res.sales.map((s2) => s2.buyerPubKeyHex);
       if (keys.length) resolveAvatarsThen(keys, () => {
         if (salesCache === res) paintSales(res, height);
       });
@@ -28271,76 +28307,121 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     const bodyEl = $("salesBody");
     const monthFloor = height > 0 ? height - 30 * BLOCKS_PER_DAY : 0;
     const inMonth = (h) => height === 0 || h === 0 || h >= monthFloor;
-    const creatorEv = res.events.filter((e) => e.role === "creator");
-    const resellerEv = res.events.filter((e) => e.role === "reseller");
-    const earned = res.events.reduce((s2, e) => s2 + e.feeSats, 0);
-    const earnedMonth = res.events.filter((e) => inMonth(e.height)).reduce((s2, e) => s2 + e.feeSats, 0);
-    const salesMonth = creatorEv.filter((e) => inMonth(e.height)).length;
-    const resalesMonth = resellerEv.filter((e) => inMonth(e.height)).length;
-    const uniqueBuyers = new Set(res.events.map((e) => e.buyerPubKeyHex.toLowerCase())).size;
-    const top = res.asCreator[0];
+    const S = res.sales;
+    const earnOf = (x) => x.publisherFeeSats + x.holderFeeSats;
+    const earned = S.reduce((s2, x) => s2 + earnOf(x), 0);
+    const earnedMonth = S.filter((x) => inMonth(x.height)).reduce((s2, x) => s2 + earnOf(x), 0);
+    const salesMonth = S.filter((x) => inMonth(x.height)).length;
+    const uniqueBuyers = new Set(S.map((x) => x.buyerPubKeyHex.toLowerCase())).size;
+    const top = res.asCreator[0] ?? res.asReseller[0];
     const noHeight = height === 0;
     const monthLbl = noHeight ? "period n/a" : "this month";
-    statsEl.innerHTML = '<div class="stat-grid">' + statTile("Sales (your mints)", String(creatorEv.length), `${salesMonth} ${monthLbl}`) + statTile("Earned", `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV \xB7 ${earnedMonth.toLocaleString()} sat ${monthLbl}`) + statTile("Your resales", String(resellerEv.length), `${resalesMonth} ${monthLbl}`) + statTile("Unique buyers", String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : "across your mints") + "</div>";
-    statusEl.textContent = `${res.events.length} sale event${res.events.length === 1 ? "" : "s"}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}${noHeight ? " \xB7 couldn\u2019t fetch block height, periods unavailable" : ""}`;
+    statsEl.innerHTML = '<div class="stat-grid">' + statTile("Sales", String(S.length), `${salesMonth} ${monthLbl}`) + statTile("Earned", `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV \xB7 ${earnedMonth.toLocaleString()} sat ${monthLbl}`) + statTile("Unique buyers", String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : "across your sales") + statTile("Gifts", '<span id="salesGiftVal" class="muted">\u2026</span>', "gift links claimed") + "</div>";
+    statusEl.textContent = `${S.length} sale${S.length === 1 ? "" : "s"}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}${noHeight ? " \xB7 block height unavailable, periods approximate" : ""}`;
     bodyEl.innerHTML = "";
-    bodyEl.append(salesSection("\u{1F4E4} As creator \u2014 sales of collections you publish", res.asCreator, salesNames, "No sales of your mints yet."));
-    bodyEl.append(salesSection("\u{1F501} As reseller \u2014 your direct resales", res.asReseller, salesNames, "You haven\u2019t resold a copy yet."));
+    bodyEl.append(salesUnified(S, salesNames));
   }
-  function salesSection(title, groups, names, empty) {
+  function salesUnified(sales, names) {
     const sec = document.createElement("div");
     sec.className = "token-section";
     const head = document.createElement("div");
     head.className = "token-section-head";
     head.style.cursor = "default";
-    head.innerHTML = `<span class="token-section-label">${title}</span> <span class="count">${groups.length}</span>`;
+    head.innerHTML = `<span class="token-section-label">\u{1F9FE} Your sales \u2014 each purchase once, with what you earned</span> <span class="count">${sales.length}</span>`;
     sec.append(head);
-    if (groups.length === 0) {
+    if (sales.length === 0) {
       const p = document.createElement("p");
       p.className = "muted";
       p.style.fontSize = "12px";
-      p.textContent = empty;
+      p.textContent = "No sales yet.";
       sec.append(p);
       return sec;
     }
-    for (const g of groups) {
-      const name = names.get(g.collectionId) ?? short(g.collectionId);
+    const byCol = /* @__PURE__ */ new Map();
+    for (const s2 of sales) {
+      const a = byCol.get(s2.collectionId) ?? [];
+      a.push(s2);
+      byCol.set(s2.collectionId, a);
+    }
+    const groups = [...byCol.entries()].sort((a, b) => b[1].length - a[1].length);
+    for (const [cid, list] of groups) {
+      const name = names.get(cid) ?? short(cid);
+      const groupEarned = list.reduce((s2, x) => s2 + x.publisherFeeSats + x.holderFeeSats, 0);
+      const buyerKeys = /* @__PURE__ */ new Map();
+      for (const s2 of list) if (!buyerKeys.has(s2.buyerPubKeyHex.toLowerCase())) buyerKeys.set(s2.buyerPubKeyHex.toLowerCase(), s2.buyerPubKeyHex);
+      const uniq = [...buyerKeys.values()];
       const card2 = document.createElement("div");
       card2.className = "sales-group";
       const gh = document.createElement("button");
       gh.type = "button";
       gh.className = "sales-group-head";
-      gh.innerHTML = `<span class="chev">\u25B8</span> <span class="sales-group-name">${escapeHtml(name)}</span><span class="sales-group-meta">${g.sales} sale${g.sales === 1 ? "" : "s"} \xB7 ${g.buyers.length} buyer${g.buyers.length === 1 ? "" : "s"} \xB7 ${g.earnings.toLocaleString()} sat</span>`;
-      const list = document.createElement("div");
-      list.className = "buyers-list";
-      list.hidden = true;
+      gh.innerHTML = `<span class="chev">\u25B8</span> <span class="sales-group-name">${escapeHtml(name)}</span><span class="sales-group-meta">${list.length} sale${list.length === 1 ? "" : "s"} \xB7 ${uniq.length} buyer${uniq.length === 1 ? "" : "s"} \xB7 ${groupEarned.toLocaleString()} sat<span class="gift-badge" data-cid="${escapeHtml(cid)}"></span></span>`;
+      const body = document.createElement("div");
+      body.className = "buyers-list";
+      body.hidden = true;
       const msgAll = document.createElement("button");
       msgAll.className = "secondary";
       msgAll.style.margin = "6px 0";
-      msgAll.textContent = `\u2709 Message all ${g.buyers.length}`;
-      msgAll.onclick = () => openCompose(g.buyers.map((b) => b.pubKeyHex), { who: `${g.buyers.length} buyers`, product: name, recipientRole: "buyer" });
-      list.append(msgAll);
-      for (const b of g.buyers) {
+      msgAll.textContent = `\u2709 Message all ${uniq.length}`;
+      msgAll.onclick = () => openCompose(uniq, { who: `${uniq.length} buyer${uniq.length === 1 ? "" : "s"}`, product: name, recipientRole: "buyer" });
+      body.append(msgAll);
+      for (const s2 of [...list].sort((a, b) => (b.time || b.height || 0) - (a.time || a.height || 0))) {
         const row = document.createElement("div");
         row.className = "buyer-row";
         const who = document.createElement("div");
         who.className = "buyer-who";
-        who.innerHTML = `${nameChip(b.pubKeyHex)}${b.count > 1 ? ` <span class="muted">\xD7${b.count}</span>` : ""}`;
+        const date = s2.time ? new Date(s2.time * 1e3).toLocaleDateString(void 0, { month: "short", day: "numeric" }) : s2.height ? "" : "pending";
+        const amt = s2.publisherFeeSats + s2.holderFeeSats;
+        const kind = s2.publisherFeeSats > 0 && s2.holderFeeSats > 0 ? "both fees" : s2.publisherFeeSats > 0 ? "publisher fee" : "holder fee";
+        who.innerHTML = `${nameChip(s2.buyerPubKeyHex)} <span class="sale-tag muted">${date ? escapeHtml(date) + " \xB7 " : ""}${kind} \xB7 +${amt.toLocaleString()} sat</span>`;
         const msg = document.createElement("button");
         msg.className = "secondary";
         msg.textContent = "\u2709 Message";
-        msg.onclick = () => composeTo(b.pubKeyHex, "this buyer", { product: name, recipientRole: "buyer" });
+        msg.onclick = () => composeTo(s2.buyerPubKeyHex, "this buyer", { product: name, recipientRole: "buyer" });
         row.append(who, msg);
-        list.append(row);
+        body.append(row);
       }
       gh.onclick = () => {
-        list.hidden = !list.hidden;
-        gh.querySelector(".chev").textContent = list.hidden ? "\u25B8" : "\u25BE";
+        body.hidden = !body.hidden;
+        gh.querySelector(".chev").textContent = body.hidden ? "\u25B8" : "\u25BE";
       };
-      card2.append(gh, list);
+      card2.append(gh, body);
       sec.append(card2);
     }
     return sec;
+  }
+  async function fillGiftStats(res) {
+    const val0 = document.getElementById("salesGiftVal");
+    if (key == null) {
+      if (val0) {
+        val0.textContent = "\u2014";
+        val0.title = "Watch-only wallet \u2014 gift links can\u2019t be derived here";
+      }
+      return;
+    }
+    const cids = [...new Set(res.sales.filter((s2) => s2.publisherFeeSats > 0).map((s2) => s2.collectionId))];
+    let total = 0;
+    const perCol = /* @__PURE__ */ new Map();
+    for (const cid of cids) {
+      try {
+        const g = await scanGiftVouchers(provider, key, cid);
+        if (g.claimedCount > 0) {
+          total += g.claimedCount;
+          perCol.set(cid, g.claimedCount);
+        }
+      } catch {
+      }
+    }
+    if (salesCache !== res) return;
+    const val2 = document.getElementById("salesGiftVal");
+    if (val2) {
+      val2.textContent = String(total);
+      val2.classList.remove("muted");
+    }
+    for (const [cid, n] of perCol) {
+      const b = document.querySelector(`.gift-badge[data-cid="${cid}"]`);
+      if (b) b.textContent = ` \xB7 \u{1F381} ${n} gifted`;
+    }
   }
   var discAnchor = null;
   function discRooms() {
@@ -28543,7 +28624,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"65b6017"} \xB7 ${"2026-06-30"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"acafaa0"} \xB7 ${"2026-07-01"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

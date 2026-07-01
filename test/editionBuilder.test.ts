@@ -130,6 +130,9 @@ test('scanMySales: creator sees ALL sales of their mint; reseller sees only thei
     getAddressHistory: async () => [rep1.txId, rep2.txId].map(txId => ({ txId, blockHeight: 100 })),
     getUtxos: async () => [],
     getSourceTransaction: async (id: string) => byId[id] ?? (() => { throw new Error(`no tx ${id}`) })(),
+    // scanMySales fetches only the small replicate outputs (never full content) via capped per-output reads.
+    getOutputScriptHexCapped: async (id: string, index: number) => { const o = byId[id]?.outputs[index]; return o ? o.lockingScript.toHex() : null },
+    getTxConfirmation: async () => ({ blockHeight: 100, time: 0 }),
   } as unknown as Parameters<typeof scanMySales>[0]
 
   // Publisher's view: creator = both sales of the mint; reseller = only rep1 (publisher was the source).
