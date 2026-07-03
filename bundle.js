@@ -24399,15 +24399,15 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     overlay.querySelector(".seed-copy")?.addEventListener("click", () => void navigator.clipboard?.writeText(mnemonic));
     document.body.append(overlay);
   }
-  var ORANGE_SIGNUP = "https://exchange.orangegateway.com/signup?ref-code=";
-  var DEFAULT_REF_CODE = "13a59b79-e805-4a01-a2f6-4eb3e936d8cd";
+  var SIMPLESWAP_BASE = "https://simpleswap.io/";
+  var DEFAULT_REF_CODE = "";
   var incomingAff = null;
   function extractRefCode(input) {
     const s2 = input.trim();
     if (s2 === "") return null;
-    const m = s2.match(/[?&]ref-code=([^&\s]+)/i);
+    const m = s2.match(/[?&]ref=([^&\s]+)/i);
     if (m) return decodeURIComponent(m[1]);
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s2)) return s2;
+    if (/^[A-Za-z0-9_-]{3,}$/.test(s2)) return s2;
     return null;
   }
   function myRefCode() {
@@ -24432,8 +24432,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
   }
   function buyBsvUrl() {
-    const code = incomingAff ?? myRefCode() ?? refByCode() ?? DEFAULT_REF_CODE;
-    return ORANGE_SIGNUP + encodeURIComponent(code);
+    const code = incomingAff || myRefCode() || refByCode() || DEFAULT_REF_CODE;
+    return code ? SIMPLESWAP_BASE + "?ref=" + encodeURIComponent(code) : SIMPLESWAP_BASE;
   }
   function onBuyBsv() {
     window.open(buyBsvUrl(), "_blank", "noopener,noreferrer");
@@ -24520,7 +24520,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     const code = extractRefCode(raw);
     if (code == null) {
-      setStatus("That doesn\u2019t look like an Orange Gateway link or ref-code.", "error");
+      setStatus("That doesn\u2019t look like a SimpleSwap link or ref-code.", "error");
       return;
     }
     try {
@@ -28674,7 +28674,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"5f238fb"} \xB7 ${"2026-07-01"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"688979b"} \xB7 ${"2026-07-03"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

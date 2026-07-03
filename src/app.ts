@@ -254,21 +254,25 @@ function showSeedModal(mnemonic: string, opts: { gated?: boolean; intro?: string
 }
 
 // ─── Buy BSV (on-ramp) + referral propagation ───────────────────────
-// Orange Gateway signup referral. The Buy-BSV button onboards new users and pays a signup referral to a
-// ref-code chosen by precedence: a share link's ?aff=… (the publisher who shared the page wins — Orange
-// Gateway has no sub-affiliates, so it simply OVERRIDES) → your own saved ref-code (p:affRefCode) → the
-// app's default. Your own ref-code rides on the sales-page links you share (withAff), closing the loop.
-const ORANGE_SIGNUP = 'https://exchange.orangegateway.com/signup?ref-code='
-const DEFAULT_REF_CODE = '13a59b79-e805-4a01-a2f6-4eb3e936d8cd'
+// SimpleSwap referral (Orange Gateway shut down). The Buy-BSV button opens SimpleSwap (swap any crypto for BSV,
+// or buy with card) and tags a referral chosen by precedence: a share link's ?aff=… (the publisher who shared
+// the page wins) → your own saved ref-code (p:affRefCode) → who gifted you (persisted) → the app default.
+// SimpleSwap has a TWO-TIER affiliate, so a referrer you brought in still earns you a cut — but the LINK only
+// ever carries one winning code; the tiering is settled on SimpleSwap's side. Your own code rides on the links
+// you share (withAff), closing the loop.
+const SIMPLESWAP_BASE = 'https://simpleswap.io/'
+// Default SimpleSwap ref-code, used when no other is found. TODO: set to your own code from
+// simpleswap.io/affiliate-program → Web Tools → Referral link. Empty = plain SimpleSwap (works, uncredited).
+const DEFAULT_REF_CODE = ''
 let incomingAff: string | null = null // ref-code carried in on a share link opened this session
 
-/** Pull a ref-code out of a full Orange Gateway URL or a bare code; null if neither. */
+/** Pull a ref-code out of a full SimpleSwap URL (?ref=…) or a bare code; null if neither. */
 function extractRefCode(input: string): string | null {
   const s = input.trim()
   if (s === '') return null
-  const m = s.match(/[?&]ref-code=([^&\s]+)/i)
+  const m = s.match(/[?&]ref=([^&\s]+)/i)
   if (m) return decodeURIComponent(m[1])
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return s // bare UUID
+  if (/^[A-Za-z0-9_-]{3,}$/.test(s)) return s // a bare ref-code
   return null
 }
 function myRefCode(): string | null {
@@ -284,11 +288,11 @@ function rememberGifter(): void {
   if (incomingAff == null || incomingAff === '') return
   try { if (localStorage.getItem('p:refBy') == null) localStorage.setItem('p:refBy', incomingAff) } catch { /* ignore */ }
 }
-/** The Buy-BSV signup URL for the active context. Precedence: a share link's aff (current page) → your own
- *  saved code → who gifted you (persisted) → app default. */
+/** The Buy-BSV (SimpleSwap) URL for the active context. Precedence: a share link's aff (current page) → your
+ *  own saved code → who gifted you (persisted) → app default. `||` so an empty code falls through cleanly. */
 function buyBsvUrl(): string {
-  const code = incomingAff ?? myRefCode() ?? refByCode() ?? DEFAULT_REF_CODE
-  return ORANGE_SIGNUP + encodeURIComponent(code)
+  const code = incomingAff || myRefCode() || refByCode() || DEFAULT_REF_CODE
+  return code ? SIMPLESWAP_BASE + '?ref=' + encodeURIComponent(code) : SIMPLESWAP_BASE
 }
 function onBuyBsv(): void { window.open(buyBsvUrl(), '_blank', 'noopener,noreferrer') }
 
@@ -364,7 +368,7 @@ function renderAffField(): void {
   const el = document.getElementById('affRefCode') as HTMLInputElement | null
   if (el != null) el.value = myRefCode() ?? ''
 }
-/** Save (or clear) the user's Orange Gateway referral code from the settings field. */
+/** Save (or clear) the user's SimpleSwap referral code from the settings field. */
 function onSaveAff(): void {
   const raw = val('affRefCode')
   if (raw === '') {
@@ -372,7 +376,7 @@ function onSaveAff(): void {
     setStatus('Referral code cleared — your shared links use the app default.', 'ok'); return
   }
   const code = extractRefCode(raw)
-  if (code == null) { setStatus('That doesn’t look like an Orange Gateway link or ref-code.', 'error'); return }
+  if (code == null) { setStatus('That doesn’t look like a SimpleSwap link or ref-code.', 'error'); return }
   try { localStorage.setItem('p:affRefCode', code) } catch { /* ignore */ }
   ;($('affRefCode') as HTMLInputElement).value = code
   setStatus('Saved — your shared sales pages now carry your Buy-BSV referral.', 'ok')
