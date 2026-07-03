@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 660" font-family="'Segoe UI',system-ui,-apple-system,Roboto,sans-serif">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c88a00"/>
+    </marker>
+    <style>
+      text{fill:#0e1116}
+      .title{font-size:30px;font-weight:800}
+      .tag{font-size:14px;font-weight:700;fill:#64748b}
+      .h{font-size:20px;font-weight:800}
+      .s{font-size:13.5px;fill:#475569;font-weight:500}
+      .cap{font-size:16px;fill:#334155;font-weight:600}
+      .bnum{font-size:15px;font-weight:800;fill:#ffffff}
+      .mtxt{font-size:15px;font-weight:700;fill:#7a5200}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="660" rx="18" fill="#f8fafc"/>
+  <rect x="1" y="1" width="998" height="658" rx="18" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+
+  <text class="title" x="40" y="52">How Phar Lap “sells itself”</text>
+  <text class="tag" x="960" y="50" text-anchor="end">🐎  PHAR LAP</text>
+
+  <!-- loop arrows (clockwise) -->
+  <path d="M630,150 Q780,160 810,300" fill="none" stroke="#94a3b8" stroke-width="3" marker-end="url(#ah)"/>
+  <path d="M810,400 Q795,548 683,552" fill="none" stroke="#94a3b8" stroke-width="3" marker-end="url(#ah)"/>
+  <path d="M315,552 Q205,548 210,405" fill="none" stroke="#c88a00" stroke-width="3.5" marker-end="url(#ahg)"/>
+  <path d="M210,296 Q225,158 360,150" fill="none" stroke="#94a3b8" stroke-width="3" marker-end="url(#ah)"/>
+
+  <!-- centre medallion -->
+  <circle cx="500" cy="350" r="96" fill="#fef8e7" stroke="#e7b400" stroke-width="3"/>
+  <text x="500" y="322" text-anchor="middle" font-size="40">🐇</text>
+  <text x="500" y="360" text-anchor="middle" font-size="22" font-weight="800" fill="#8a6100">SELLS ITSELF</text>
+  <text x="500" y="386" text-anchor="middle" font-size="12.5" fill="#7a5200" font-weight="600">no platform</text>
+  <text x="500" y="404" text-anchor="middle" font-size="12.5" fill="#7a5200" font-weight="600">taking a cut</text>
+
+  <!-- royalty arrow into centre -->
+  <path d="M363,350 L402,350" fill="none" stroke="#c88a00" stroke-width="3.5" marker-end="url(#ahg)"/>
+
+  <!-- NODE 1 (top) -->
+  <g>
+    <rect x="360" y="100" width="280" height="100" rx="14" fill="#f0fbf3" stroke="#3fb950" stroke-width="2.5"/>
+    <circle cx="388" cy="128" r="15" fill="#3fb950"/><text class="bnum" x="388" y="133" text-anchor="middle">1</text>
+    <text class="h" x="416" y="134">You publish once</text>
+    <text class="s" x="380" y="164">Mint your song or book as a Smart NFT —</text>
+    <text class="s" x="380" y="184">one time, and it’s yours forever.</text>
+  </g>
+
+  <!-- NODE 2 (right) -->
+  <g>
+    <rect x="685" y="300" width="252" height="100" rx="14" fill="#eff6ff" stroke="#388bfd" stroke-width="2.5"/>
+    <circle cx="713" cy="328" r="15" fill="#388bfd"/><text class="bnum" x="713" y="333" text-anchor="middle">2</text>
+    <text class="h" x="741" y="334">A fan buys a copy</text>
+    <text class="s" x="705" y="364">They pay you directly.</text>
+    <text class="s" x="705" y="384">No middleman, no gatekeeper.</text>
+  </g>
+
+  <!-- NODE 3 (bottom) -->
+  <g>
+    <rect x="315" y="502" width="370" height="100" rx="14" fill="#eff6ff" stroke="#388bfd" stroke-width="2.5"/>
+    <circle cx="345" cy="530" r="15" fill="#388bfd"/><text class="bnum" x="345" y="535" text-anchor="middle">3</text>
+    <text class="h" x="373" y="536">Their copy is really theirs</text>
+    <text class="s" x="337" y="566">So they can resell it to the next fan —</text>
+    <text class="s" x="337" y="586">just like reselling anything they own.</text>
+  </g>
+
+  <!-- NODE 4 (left, the payoff) -->
+  <g>
+    <rect x="63" y="292" width="300" height="116" rx="14" fill="#fef8e7" stroke="#e7b400" stroke-width="2.5"/>
+    <circle cx="91" cy="320" r="15" fill="#e7b400"/><text class="bnum" x="91" y="325" text-anchor="middle">4</text>
+    <text class="h" x="119" y="326">You earn every time 💰</text>
+    <text class="s" x="83" y="356">A set % of every resale flows</text>
+    <text class="s" x="83" y="376">back to you — automatically,</text>
+    <text class="s" x="83" y="396">on every hand it passes through.</text>
+  </g>
+
+  <text class="cap" x="500" y="640" text-anchor="middle">Every owner can become a seller — and every resale pays you again.</text>
+</svg>

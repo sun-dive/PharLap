@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 850" font-family="'Segoe UI',system-ui,-apple-system,Roboto,sans-serif">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+    <style>
+      text{fill:#0e1116}
+      .title{font-size:30px;font-weight:800}
+      .tag{font-size:14px;font-weight:700;fill:#64748b}
+      .sec{font-size:18px;font-weight:800;fill:#0f172a}
+      .ct{font-size:18px;font-weight:800}
+      .cb{font-size:13.5px;fill:#475569;font-weight:500}
+      .row{font-size:14px;font-weight:600;fill:#1e293b}
+      .cap{font-size:16px;fill:#334155;font-weight:600}
+      .ck{font-size:14px;font-weight:800;fill:#3fb950}
+      .b{font-size:13.5px;fill:#334155;font-weight:500}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1160" height="850" rx="18" fill="#f8fafc"/>
+  <rect x="1" y="1" width="1158" height="848" rx="18" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+  <text class="title" x="40" y="52">Gift copies — and build a list you truly own</text>
+  <text class="tag" x="1120" y="50" text-anchor="end">🐎  PHAR LAP</text>
+
+  <!-- ============ BAND 1 : create & send ============ -->
+  <text class="sec" x="40" y="108">① Create your gifts &amp; send them privately</text>
+
+  <!-- flow arrows -->
+  <path d="M372,200 L411,200" fill="none" stroke="#94a3b8" stroke-width="5" marker-end="url(#ah)"/>
+  <path d="M747,200 L786,200" fill="none" stroke="#94a3b8" stroke-width="5" marker-end="url(#ah)"/>
+
+  <!-- A: generate -->
+  <rect x="40" y="128" width="330" height="146" rx="14" fill="#fff7f0" stroke="#ff8c42" stroke-width="2.5"/>
+  <rect x="40" y="128" width="330" height="8" rx="4" fill="#ff8c42"/>
+  <text class="ct" x="64" y="182">🎁 Generate gift links</text>
+  <text class="cb" x="64" y="212">Make a whole batch at once —</text>
+  <text class="cb" x="64" y="232">one link per copy you give away.</text>
+
+  <!-- B: back up -->
+  <rect x="415" y="128" width="330" height="146" rx="14" fill="#fff7f0" stroke="#ff8c42" stroke-width="2.5"/>
+  <rect x="415" y="128" width="330" height="8" rx="4" fill="#ff8c42"/>
+  <text class="ct" x="439" y="182">💾 Back up the set</text>
+  <text class="cb" x="439" y="212">Save the links safely. Each one</text>
+  <text class="cb" x="439" y="232">is a key — keep the set private.</text>
+
+  <!-- C: deliver privately -->
+  <rect x="790" y="128" width="330" height="146" rx="14" fill="#eff6ff" stroke="#388bfd" stroke-width="2.5"/>
+  <rect x="790" y="128" width="330" height="8" rx="4" fill="#388bfd"/>
+  <text class="ct" x="814" y="182">📤 Deliver privately</text>
+  <text class="cb" x="814" y="212">DM · email · private message ·</text>
+  <text class="cb" x="814" y="232">in person. <tspan font-weight="800" fill="#c2410c">Never post them publicly.</tspan></text>
+
+  <!-- ============ BAND 2 : they claim -> your list ============ -->
+  <text class="sec" x="40" y="322">② They claim — and your owned list grows</text>
+
+  <path d="M486,452 L516,452" fill="none" stroke="#94a3b8" stroke-width="5" marker-end="url(#ah)"/>
+
+  <!-- claim card -->
+  <rect x="40" y="340" width="440" height="224" rx="14" fill="#eff6ff" stroke="#388bfd" stroke-width="2.5"/>
+  <rect x="40" y="340" width="440" height="8" rx="4" fill="#388bfd"/>
+  <text class="ct" x="64" y="382">🎟️ They claim — no crypto needed</text>
+  <g>
+    <circle cx="74" cy="416" r="12" fill="#e6f4ea"/><text class="ck" x="74" y="421" text-anchor="middle">✓</text>
+    <text class="b" x="94" y="421">Tap the gift link — any browser, any phone</text>
+    <circle cx="74" cy="452" r="12" fill="#e6f4ea"/><text class="ck" x="74" y="457" text-anchor="middle">✓</text>
+    <text class="b" x="94" y="457">A wallet is created for them automatically</text>
+    <circle cx="74" cy="488" r="12" fill="#e6f4ea"/><text class="ck" x="74" y="493" text-anchor="middle">✓</text>
+    <text class="b" x="94" y="493">They save a 12-word seed phrase (their key)</text>
+    <circle cx="74" cy="524" r="12" fill="#e6f4ea"/><text class="ck" x="74" y="529" text-anchor="middle">✓</text>
+    <text class="b" x="94" y="529">They own their copy — free &amp; provably theirs</text>
+  </g>
+
+  <!-- list panel -->
+  <rect x="520" y="340" width="600" height="224" rx="14" fill="#ffffff" stroke="#3fb950" stroke-width="2.5"/>
+  <rect x="520" y="340" width="600" height="8" rx="4" fill="#3fb950"/>
+  <text class="ct" x="544" y="380">📇 A list you truly own</text>
+  <text class="cb" x="544" y="401">every claimed gift adds a holder you can reach</text>
+  <g class="row">
+    <rect x="542" y="410" width="556" height="32" rx="8" fill="#f1f5f9"/><text x="558" y="431">👤 Gifted holder #1</text><text x="1082" y="431" text-anchor="end">✉️</text>
+    <rect x="542" y="446" width="556" height="32" rx="8" fill="#f1f5f9"/><text x="558" y="467">👤 Gifted holder #2</text><text x="1082" y="467" text-anchor="end">✉️</text>
+    <rect x="542" y="482" width="556" height="32" rx="8" fill="#eafaef" stroke="#3fb950" stroke-width="1.5"/><text x="558" y="503" fill="#166534">👤 Gifted holder #3</text><text x="1000" y="503" font-size="12" font-weight="700" fill="#3fb950">+ just now</text><text x="1082" y="503" text-anchor="end">✉️</text>
+  </g>
+  <text x="820" y="544" text-anchor="middle" font-size="13.5" font-weight="700" fill="#334155">📣 You can message them   ·   💬 they can message you back</text>
+
+  <!-- ============ BAND 3 : optional deadline ============ -->
+  <text class="sec" x="40" y="618">③ Optional — put a clock on it</text>
+
+  <g fill="none" stroke="#94a3b8" stroke-width="5">
+    <path d="M296,712 L321,712" marker-end="url(#ah)"/>
+    <path d="M574,712 L599,712" marker-end="url(#ah)"/>
+    <path d="M852,712 L877,712" marker-end="url(#ah)"/>
+  </g>
+
+  <rect x="40" y="638" width="255" height="150" rx="14" fill="#fef8e7" stroke="#e7b400" stroke-width="2.5"/>
+  <rect x="40" y="638" width="255" height="8" rx="4" fill="#e7b400"/>
+  <text class="ct" x="62" y="690">⏳ Set a deadline</text>
+  <text class="cb" x="62" y="718">Give gifts an expiry —</text>
+  <text class="cb" x="62" y="738">e.g. “claim within 7 days.”</text>
+
+  <rect x="321" y="638" width="255" height="150" rx="14" fill="#fef8e7" stroke="#e7b400" stroke-width="2.5"/>
+  <rect x="321" y="638" width="255" height="8" rx="4" fill="#e7b400"/>
+  <text class="ct" x="343" y="690">⌛ Time runs out</text>
+  <text class="cb" x="343" y="718">Some gifts are never</text>
+  <text class="cb" x="343" y="738">claimed. That’s fine.</text>
+
+  <rect x="599" y="638" width="255" height="150" rx="14" fill="#f3edfc" stroke="#8957e5" stroke-width="2.5"/>
+  <rect x="599" y="638" width="255" height="8" rx="4" fill="#8957e5"/>
+  <text class="ct" x="621" y="690">🔁 Sweep them back</text>
+  <text class="cb" x="621" y="718">Unclaimed copies return</text>
+  <text class="cb" x="621" y="738">to your wallet — nothing lost.</text>
+
+  <rect x="877" y="638" width="255" height="150" rx="14" fill="#eff6ff" stroke="#388bfd" stroke-width="2.5"/>
+  <rect x="877" y="638" width="255" height="8" rx="4" fill="#388bfd"/>
+  <text class="ct" x="899" y="690">🔗 Back to a sales link</text>
+  <text class="cb" x="899" y="716">The same link becomes a</text>
+  <text class="cb" x="899" y="736">normal sales page — they</text>
+  <text class="cb" x="899" y="756">can still just buy it.</text>
+
+  <text class="cap" x="580" y="826" text-anchor="middle">Gifting is the fastest way to grow an audience you own — that you can message — and no platform can take from you.</text>
+</svg>

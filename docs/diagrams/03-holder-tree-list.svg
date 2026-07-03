@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 700" font-family="'Segoe UI',system-ui,-apple-system,Roboto,sans-serif">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8957e5"/>
+    </marker>
+    <marker id="ahb" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      text{fill:#0e1116}
+      .title{font-size:30px;font-weight:800}
+      .tag{font-size:14px;font-weight:700;fill:#64748b}
+      .lvl{font-size:13px;font-weight:700;fill:#94a3b8;letter-spacing:.5px}
+      .ph{font-size:19px;font-weight:800}
+      .sub{font-size:13px;fill:#64748b;font-weight:600}
+      .row{font-size:14px;font-weight:600;fill:#1e293b}
+      .cap{font-size:16px;fill:#334155;font-weight:600}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="700" rx="18" fill="#f8fafc"/>
+  <rect x="1" y="1" width="1118" height="698" rx="18" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+  <text class="title" x="40" y="52">Every copy grows a list you own</text>
+  <text class="tag" x="1080" y="50" text-anchor="end">🐎  PHAR LAP</text>
+
+  <!-- level labels -->
+  <text class="lvl" x="60" y="120">PUBLISHER</text>
+  <text class="lvl" x="60" y="262">BUYERS</text>
+  <text class="lvl" x="40" y="398">THEIR</text>
+  <text class="lvl" x="40" y="414">BUYERS</text>
+
+  <!-- replication edges -->
+  <g fill="none" stroke="#8957e5" stroke-width="2.5">
+    <path d="M300,150 Q210,190 168,236" marker-end="url(#ah)"/>
+    <path d="M300,150 L300,236" marker-end="url(#ah)"/>
+    <path d="M300,150 Q400,190 452,236" marker-end="url(#ah)"/>
+    <path d="M168,290 Q130,340 112,378" marker-end="url(#ah)"/>
+    <path d="M168,290 Q205,340 214,378" marker-end="url(#ah)"/>
+    <path d="M300,290 L300,378" marker-end="url(#ah)"/>
+    <path d="M452,290 Q414,340 402,378" marker-end="url(#ah)"/>
+    <path d="M452,290 Q490,340 500,378" marker-end="url(#ah)"/>
+  </g>
+
+  <!-- publisher -->
+  <rect x="196" y="88" width="208" height="60" rx="12" fill="#eafaef" stroke="#3fb950" stroke-width="2.5"/>
+  <text x="300" y="124" text-anchor="middle" font-size="17" font-weight="800" fill="#166534">🐎  YOU — the publisher</text>
+
+  <!-- buyers (level 2) -->
+  <g>
+    <rect x="108" y="238" width="120" height="52" rx="11" fill="#eff6ff" stroke="#388bfd" stroke-width="2.2"/>
+    <text x="168" y="270" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">👤 Buyer</text>
+    <rect x="240" y="238" width="120" height="52" rx="11" fill="#eff6ff" stroke="#388bfd" stroke-width="2.2"/>
+    <text x="300" y="270" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">👤 Buyer</text>
+    <rect x="392" y="238" width="120" height="52" rx="11" fill="#eff6ff" stroke="#388bfd" stroke-width="2.2"/>
+    <text x="452" y="270" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">👤 Buyer</text>
+  </g>
+
+  <!-- their buyers (level 3) -->
+  <g>
+    <circle cx="112" cy="404" r="24" fill="#f3edfc" stroke="#8957e5" stroke-width="2.2"/><text x="112" y="410" text-anchor="middle" font-size="18">👤</text>
+    <circle cx="214" cy="404" r="24" fill="#f3edfc" stroke="#8957e5" stroke-width="2.2"/><text x="214" y="410" text-anchor="middle" font-size="18">👤</text>
+    <circle cx="300" cy="404" r="24" fill="#f3edfc" stroke="#8957e5" stroke-width="2.2"/><text x="300" y="410" text-anchor="middle" font-size="18">👤</text>
+    <circle cx="402" cy="404" r="24" fill="#f3edfc" stroke="#8957e5" stroke-width="2.2"/><text x="402" y="410" text-anchor="middle" font-size="18">👤</text>
+    <circle cx="500" cy="404" r="24" fill="#f3edfc" stroke="#8957e5" stroke-width="2.2"/><text x="500" y="410" text-anchor="middle" font-size="18">👤</text>
+    <text x="300" y="452" text-anchor="middle" font-size="12.5" font-style="italic" fill="#8957e5">…and on down the line, forever</text>
+  </g>
+
+  <text x="300" y="482" text-anchor="middle" font-size="13" font-weight="600" fill="#7c3aed">Each arrow = one copy made (a “replication”)</text>
+
+  <!-- arrow from tree to list -->
+  <path d="M528,264 C588,264 588,214 606,206" fill="none" stroke="#94a3b8" stroke-width="3" stroke-dasharray="2 5" marker-end="url(#ahb)"/>
+  <text x="565" y="238" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b">every copy</text>
+  <text x="565" y="253" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b">adds a name →</text>
+
+  <!-- LIST PANEL -->
+  <rect x="612" y="96" width="470" height="430" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <rect x="612" y="96" width="470" height="8" rx="4" fill="#3fb950"/>
+  <text class="ph" x="636" y="140">📇 Your audience list</text>
+  <text class="sub" x="636" y="162">grows automatically with every copy</text>
+
+  <g class="row">
+    <rect x="634" y="178" width="426" height="34" rx="8" fill="#f1f5f9"/><text x="650" y="200">👤 Holder #1</text><text x="1044" y="200" text-anchor="end">✉️</text>
+    <rect x="634" y="216" width="426" height="34" rx="8" fill="#f1f5f9"/><text x="650" y="238">👤 Holder #2</text><text x="1044" y="238" text-anchor="end">✉️</text>
+    <rect x="634" y="254" width="426" height="34" rx="8" fill="#f1f5f9"/><text x="650" y="276">👤 Holder #3</text><text x="1044" y="276" text-anchor="end">✉️</text>
+    <rect x="634" y="292" width="426" height="34" rx="8" fill="#f1f5f9"/><text x="650" y="314">👤 Holder #4</text><text x="1044" y="314" text-anchor="end">✉️</text>
+    <rect x="634" y="330" width="426" height="34" rx="8" fill="#f1f5f9"/><text x="650" y="352">👤 Holder #5</text><text x="1044" y="352" text-anchor="end">✉️</text>
+    <rect x="634" y="368" width="426" height="34" rx="8" fill="#f1f5f9"/><text x="650" y="390">👤 Holder #6</text><text x="1044" y="390" text-anchor="end">✉️</text>
+    <rect x="634" y="406" width="426" height="34" rx="8" fill="#eafaef" stroke="#3fb950" stroke-width="1.5"/><text x="650" y="428" fill="#166534">👤 Holder #7</text><text x="980" y="428" font-size="12" font-weight="700" fill="#3fb950">+ just now</text><text x="1044" y="428" text-anchor="end">✉️</text>
+  </g>
+  <text x="847" y="470" text-anchor="middle" font-size="13.5" font-weight="600" fill="#334155">No opt-in forms. No autoresponder to rent.</text>
+  <text x="847" y="492" text-anchor="middle" font-size="13.5" font-weight="600" fill="#334155">The buyers list themselves, just by owning.</text>
+
+  <!-- TWO-WAY MESSAGING BADGE -->
+  <rect x="40" y="516" width="530" height="126" rx="14" fill="#fff" stroke="#e2e8f0" stroke-width="2"/>
+  <text x="305" y="548" text-anchor="middle" font-size="17" font-weight="800" fill="#0e1116">↕ It’s a two-way channel</text>
+  <g>
+    <path d="M120,588 L470,588" fill="none" stroke="#3fb950" stroke-width="3" marker-end="url(#ahb)"/>
+    <text x="295" y="581" text-anchor="middle" font-size="13.5" font-weight="700" fill="#166534">📣 You broadcast down to every holder</text>
+    <path d="M470,616 L120,616" fill="none" stroke="#388bfd" stroke-width="3" marker-end="url(#ahb)"/>
+    <text x="295" y="634" text-anchor="middle" font-size="13.5" font-weight="700" fill="#1d4ed8">💬 Any holder can message you back</text>
+  </g>
+
+  <text class="cap" x="847" y="588" text-anchor="middle">You own this audience outright —</text>
+  <text class="cap" x="847" y="612" text-anchor="middle">no platform can take it, freeze it,</text>
+  <text class="cap" x="847" y="636" text-anchor="middle">or rent it back to you.</text>
+</svg>
