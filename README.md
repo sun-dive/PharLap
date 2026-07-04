@@ -112,7 +112,7 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   A stranger can **"Get a copy"** in one click: the page resolves the holder's current edition (deterministically,
   by script hash — no indexer), funds-checks, runs the permissionless replicate, and reveals/decrypts the content.
 - **Buy BSV (on-ramp) + referrals.** A **💵 Buy BSV** button (in the wallet and on every storefront) sends a
-  would-be buyer to **SimpleSwap** — swap any crypto for BSV, or buy with a card, no exchange account — so
+  would-be buyer to **SimpleSwap** — swap any crypto — including stablecoins (USDT/USDC) — for BSV, no exchange account — so
   newcomers can fund a wallet without leaving the flow. Publishers can save their own **SimpleSwap referral
   code**, which rides on every sales page they share, earning the commission when a buyer funds up. Purely an
   external link — no covenant or protocol involvement. (Replaced Orange Gateway, which shut down.)

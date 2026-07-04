@@ -198,7 +198,7 @@ and keep working unchanged — each collection embeds its own covenant, so the t
 | **Sales** | A dashboard of your sales — stats (count, earnings, this-month), buyers, and earnings per collection, as **creator** and **reseller**. |
 | **Sales page / Share** | Open a collection's public storefront and copy a postable link to it. |
 | **Get a copy** | Buy an edition in one click from a sales link (resolve → fund → replicate → reveal). |
-| **Buy BSV** | Fund a wallet through **SimpleSwap** (swap any crypto for BSV, or buy with a card — no exchange account); opens from the wallet and every storefront. |
+| **Buy BSV** | Fund a wallet through **SimpleSwap** (swap any crypto — including stablecoins USDT/USDC — for BSV, no exchange account); opens from the wallet and every storefront. |
 | **Earn referrals** | Save your **SimpleSwap** referral code; it rides on every sales page you share, so buyers who tap **Buy BSV** earn you the commission. |
 | **Seller note / bonus** | Attach a public promo note (+ optional link/code bonus) buyers receive at purchase. |
 | **Send / Transfer** | Move a token to another wallet (owner-signed, free). |
