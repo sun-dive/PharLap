@@ -24400,7 +24400,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     document.body.append(overlay);
   }
   var SIMPLESWAP_BASE = "https://simpleswap.io/";
-  var DEFAULT_REF_CODE = "DzckoPqltw";
+  var DEFAULT_REF_CODE = "efe9f9694b4f";
   var incomingAff = null;
   function extractRefCode(input) {
     const s2 = input.trim();
@@ -24433,7 +24433,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
   function buyBsvUrl() {
     const code = incomingAff || myRefCode() || refByCode() || DEFAULT_REF_CODE;
-    return code ? SIMPLESWAP_BASE + "?ref=" + encodeURIComponent(code) : SIMPLESWAP_BASE;
+    const ref = code ? "ref=" + encodeURIComponent(code) + "&" : "";
+    return SIMPLESWAP_BASE + "?" + ref + "from=btc-btc&to=bsv-bsv";
   }
   function onBuyBsv() {
     window.open(buyBsvUrl(), "_blank", "noopener,noreferrer");
@@ -28674,7 +28675,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"0a41220"} \xB7 ${"2026-07-04"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"238aad0"} \xB7 ${"2026-07-04"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

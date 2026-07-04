@@ -261,9 +261,10 @@ function showSeedModal(mnemonic: string, opts: { gated?: boolean; intro?: string
 // ever carries one winning code; the tiering is settled on SimpleSwap's side. Your own code rides on the links
 // you share (withAff), closing the loop.
 const SIMPLESWAP_BASE = 'https://simpleswap.io/'
-// Default SimpleSwap ref-code, used when no other referral is present. This is sun-dive's affiliate code
-// (from the partners.simpleswap.io dashboard). The Buy-BSV button becomes https://simpleswap.io/?ref=<code>.
-const DEFAULT_REF_CODE = 'DzckoPqltw'
+// Default SimpleSwap ref-code, used when no other referral is present. This is sun-dive's AFFILIATE code (the
+// exchange "?ref=" link from partners.simpleswap.io — NOT the customer refer-a-friend code DzckoPqltw, whose
+// link forces a signup). Buy-BSV becomes simpleswap.io/?ref=<code>&from=btc-btc&to=bsv-bsv (BSV pre-selected).
+const DEFAULT_REF_CODE = 'efe9f9694b4f'
 let incomingAff: string | null = null // ref-code carried in on a share link opened this session
 
 /** Pull a ref-code out of a SimpleSwap URL — either the exchange link (?ref=…) or the partner-signup link
@@ -290,10 +291,12 @@ function rememberGifter(): void {
   try { if (localStorage.getItem('p:refBy') == null) localStorage.setItem('p:refBy', incomingAff) } catch { /* ignore */ }
 }
 /** The Buy-BSV (SimpleSwap) URL for the active context. Precedence: a share link's aff (current page) → your
- *  own saved code → who gifted you (persisted) → app default. `||` so an empty code falls through cleanly. */
+ *  own saved code → who gifted you (persisted) → app default. `||` so an empty code falls through cleanly.
+ *  Pre-selects a BTC → BSV swap so newcomers land ready to buy BSV (they can still change the source coin). */
 function buyBsvUrl(): string {
   const code = incomingAff || myRefCode() || refByCode() || DEFAULT_REF_CODE
-  return code ? SIMPLESWAP_BASE + '?ref=' + encodeURIComponent(code) : SIMPLESWAP_BASE
+  const ref = code ? 'ref=' + encodeURIComponent(code) + '&' : ''
+  return SIMPLESWAP_BASE + '?' + ref + 'from=btc-btc&to=bsv-bsv'
 }
 function onBuyBsv(): void { window.open(buyBsvUrl(), '_blank', 'noopener,noreferrer') }
 
