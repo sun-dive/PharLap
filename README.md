@@ -111,6 +111,11 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   that opens a **storefront**: cover image, title, description, lock state, and price, served entirely client-side.
   A stranger can **"Get a copy"** in one click: the page resolves the holder's current edition (deterministically,
   by script hash — no indexer), funds-checks, runs the permissionless replicate, and reveals/decrypts the content.
+- **Buy BSV (on-ramp) + referrals.** A **💵 Buy BSV** button (in the wallet and on every storefront) sends a
+  would-be buyer to **SimpleSwap** — swap any crypto for BSV, or buy with a card, no exchange account — so
+  newcomers can fund a wallet without leaving the flow. Publishers can save their own **SimpleSwap referral
+  code**, which rides on every sales page they share, earning the commission when a buyer funds up. Purely an
+  external link — no covenant or protocol involvement. (Replaced Orange Gateway, which shut down.)
 - **Seller notes & bonuses.** A seller can attach a public **note** (promo / redemption info) to a collection; it
   rides on-chain to the buyer at purchase and **propagates down the resale chain** as a sticky default (any owner
   can overwrite it). The note can carry an optional **bonus** — an external link or code the buyer claims from the

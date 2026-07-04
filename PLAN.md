@@ -652,8 +652,8 @@ Initial testers already hold BSV, so no testnet/faucet (also sidesteps "is Chron
 "Get a copy" shows a **fund-this-address** prompt = the wallet's **receiving address** (NOT the pubkey — a
 standard BSV wallet sends to an address; the pubkey is only for receiving tokens/messages) + a **copy** button
 + a **QR** of the address (covers PC-testing / phone-funding) + the suggested amount. A **"Buy BSV"** link to
-**Orange Gateway** (buy as little as ~$10 BSV) is reserved for real-world use, not the test phase. QR needs a
-tiny pure-JS encoder bundled (no external image calls).
+**SimpleSwap** (swap any crypto for BSV, or buy with a card) is reserved for real-world use, not the test phase.
+(Was Orange Gateway, which has since shut down.) QR needs a tiny pure-JS encoder bundled (no external image calls).
 
 **D2 — Resolution: any-holder address-history trace now; tiny read-cache resolver service in production.**
 Every current holder gets their OWN share page, not just the publisher. Share link carries collection + holder:
