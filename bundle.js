@@ -28363,8 +28363,14 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     const top = res.asCreator[0] ?? res.asReseller[0];
     const noHeight = height === 0;
     const monthLbl = noHeight ? "period n/a" : "this month";
-    const giftVal = !giftsDone.has(res) ? '<span class="muted">\u2026</span>' : key == null ? "\u2014" : String(S.filter((s2) => s2.isGift).length);
-    statsEl.innerHTML = '<div class="stat-grid">' + statTile("Sales", String(S.length), `${salesMonth} ${monthLbl}`) + statTile("Earned", `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV \xB7 ${earnedMonth.toLocaleString()} sat ${monthLbl}`) + statTile("Unique buyers", String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : "across your sales") + statTile("Gifts", giftVal, "claimed via gift links") + "</div>";
+    const giftsKnown = giftsDone.has(res);
+    const giftCount = giftsKnown ? S.filter((s2) => s2.isGift).length : 0;
+    const giftEarned = giftsKnown ? S.filter((s2) => s2.isGift).reduce((s2, x) => s2 + earnOf(x), 0) : 0;
+    const netEarned = earned - giftEarned;
+    const giftVal = !giftsKnown ? '<span class="muted">\u2026</span>' : key == null ? "\u2014" : String(giftCount);
+    const netVal = key == null ? "\u2014" : !giftsKnown ? '<span class="muted">\u2026</span>' : `${netEarned.toLocaleString()} <span class="stat-unit">sat</span>`;
+    const netSub = !giftsKnown ? "gifts excluded \u2014 checking\u2026" : giftCount === 0 ? "no gift claims \u2014 same as earned" : `${fmtBsv(netEarned)} BSV \xB7 excl. ${giftCount} gift claim${giftCount === 1 ? "" : "s"} (\u2212${giftEarned.toLocaleString()} sat)`;
+    statsEl.innerHTML = '<div class="stat-grid">' + statTile("Sales", String(S.length), `${salesMonth} ${monthLbl}`) + statTile("Earned", `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV \xB7 ${earnedMonth.toLocaleString()} sat ${monthLbl}`) + statTile("Net revenue", netVal, netSub) + statTile("Unique buyers", String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : "across your sales") + statTile("Gifts", giftVal, "claimed via gift links") + "</div>";
     statusEl.textContent = `${S.length} sale${S.length === 1 ? "" : "s"}${res.capped ? ` \xB7 most recent ${res.scanned} txs` : ""}${noHeight ? " \xB7 block height unavailable, periods approximate" : ""}`;
     bodyEl.innerHTML = "";
     bodyEl.append(salesUnified(S, salesNames));
@@ -28675,7 +28681,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"dabc44f"} \xB7 ${"2026-07-04"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"0831c0f"} \xB7 ${"2026-07-04"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
