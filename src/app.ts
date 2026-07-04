@@ -254,8 +254,8 @@ function showSeedModal(mnemonic: string, opts: { gated?: boolean; intro?: string
 }
 
 // ─── Buy BSV (on-ramp) + referral propagation ───────────────────────
-// SimpleSwap referral (Orange Gateway shut down). The Buy-BSV button opens SimpleSwap (swap any crypto for BSV,
-// or buy with card) and tags a referral chosen by precedence: a share link's ?aff=… (the publisher who shared
+// SimpleSwap referral (Orange Gateway shut down). The Buy-BSV button opens SimpleSwap (swap any crypto —
+// incl. stablecoins USDT/USDC — for BSV) and tags a referral chosen by precedence: a share link's ?aff=… (publisher who shared
 // the page wins) → your own saved ref-code (p:affRefCode) → who gifted you (persisted) → the app default.
 // SimpleSwap has a TWO-TIER affiliate, so a referrer you brought in still earns you a cut — but the LINK only
 // ever carries one winning code; the tiering is settled on SimpleSwap's side. Your own code rides on the links
