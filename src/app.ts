@@ -3933,11 +3933,24 @@ function paintSales(res: MySales, height: number): void {
   const noHeight = height === 0
   const monthLbl = noHeight ? 'period n/a' : 'this month'
 
-  // Gifts: exact count of sales funded by your gift vouchers — "…" until the check finishes, "—" if watch-only.
-  const giftVal = !giftsDone.has(res) ? '<span class="muted">…</span>' : key == null ? '—' : String(S.filter(s => s.isGift).length)
+  // A gift claim cycles your OWN pre-funded voucher money back as "fees", so it's not real revenue. Once the
+  // background gift-tagging finishes we can subtract those for a true "Net revenue". Both stats show "…" until
+  // then, and "—" in watch-only mode (no key → can't detect which sales were gift-funded).
+  const giftsKnown = giftsDone.has(res)
+  const giftCount = giftsKnown ? S.filter(s => s.isGift).length : 0
+  const giftEarned = giftsKnown ? S.filter(s => s.isGift).reduce((s, x) => s + earnOf(x), 0) : 0
+  const netEarned = earned - giftEarned // gifts excluded
+  const giftVal = !giftsKnown ? '<span class="muted">…</span>' : key == null ? '—' : String(giftCount)
+  const netVal = key == null ? '—'
+    : !giftsKnown ? '<span class="muted">…</span>'
+    : `${netEarned.toLocaleString()} <span class="stat-unit">sat</span>`
+  const netSub = !giftsKnown ? 'gifts excluded — checking…'
+    : giftCount === 0 ? 'no gift claims — same as earned'
+    : `${fmtBsv(netEarned)} BSV · excl. ${giftCount} gift claim${giftCount === 1 ? '' : 's'} (−${giftEarned.toLocaleString()} sat)`
   statsEl.innerHTML = '<div class="stat-grid">' +
     statTile('Sales', String(S.length), `${salesMonth} ${monthLbl}`) +
     statTile('Earned', `${earned.toLocaleString()} <span class="stat-unit">sat</span>`, `${fmtBsv(earned)} BSV · ${earnedMonth.toLocaleString()} sat ${monthLbl}`) +
+    statTile('Net revenue', netVal, netSub) +
     statTile('Unique buyers', String(uniqueBuyers), top != null ? `top: ${escapeHtml(salesNames.get(top.collectionId) ?? short(top.collectionId))}` : 'across your sales') +
     statTile('Gifts', giftVal, 'claimed via gift links') +
     '</div>'
