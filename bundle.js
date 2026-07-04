@@ -24400,12 +24400,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     document.body.append(overlay);
   }
   var SIMPLESWAP_BASE = "https://simpleswap.io/";
-  var DEFAULT_REF_CODE = "";
+  var DEFAULT_REF_CODE = "DzckoPqltw";
   var incomingAff = null;
   function extractRefCode(input) {
     const s2 = input.trim();
     if (s2 === "") return null;
-    const m = s2.match(/[?&]ref=([^&\s]+)/i);
+    const m = s2.match(/[?&](?:ref|referral)=([^&\s]+)/i);
     if (m) return decodeURIComponent(m[1]);
     if (/^[A-Za-z0-9_-]{3,}$/.test(s2)) return s2;
     return null;
@@ -28674,7 +28674,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"cbebfd9"} \xB7 ${"2026-07-04"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"0a41220"} \xB7 ${"2026-07-04"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
