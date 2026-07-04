@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 720" font-family="'Segoe UI',system-ui,-apple-system,Roboto,sans-serif">
+  <defs>
+    <marker id="dn" viewBox="0 0 10 10" refX="5" refY="8.5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,0 L5,10 z" fill="#388bfd"/>
+    </marker>
+    <style>
+      text{fill:#0e1116}
+      .title{font-size:29px;font-weight:800}
+      .tag{font-size:14px;font-weight:700;fill:#64748b}
+      .ph{font-size:21px;font-weight:800}
+      .sub{font-size:13.5px;fill:#64748b;font-weight:600}
+      .fh{font-size:16px;font-weight:800}
+      .fs{font-size:13px;fill:#475569;font-weight:500}
+      .step{font-size:15.5px;font-weight:700;fill:#1e293b}
+      .foot{font-size:14px;font-weight:700;fill:#334155}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="720" rx="18" fill="#f8fafc"/>
+  <rect x="1" y="1" width="1118" height="718" rx="18" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+  <text class="title" x="40" y="52">Why BSV — and why you never have to think about it</text>
+  <text class="tag" x="1080" y="50" text-anchor="end">🐎  PHAR LAP</text>
+
+  <!-- ============ LEFT: only possible on BSV ============ -->
+  <rect x="40" y="96" width="510" height="500" rx="16" fill="#f0fbf3" stroke="#3fb950" stroke-width="2.5"/>
+  <rect x="40" y="96" width="510" height="8" rx="4" fill="#3fb950"/>
+  <text class="ph" x="64" y="146">① It could only be built on BSV</text>
+  <text class="sub" x="64" y="170">the engine needs a purpose-built chain</text>
+
+  <!-- feature 1 -->
+  <text x="86" y="234" font-size="26" text-anchor="middle">🔁</text>
+  <text class="fh" x="120" y="228">Automatic resale royalty</text>
+  <text class="fs" x="120" y="250">Paid on every resale, forever — enforced</text>
+  <text class="fs" x="120" y="269">by the blockchain itself, no middleman.</text>
+
+  <!-- feature 2 -->
+  <text x="86" y="324" font-size="26" text-anchor="middle">📦</text>
+  <text class="fh" x="120" y="318">Content lives on-chain</text>
+  <text class="fs" x="120" y="340">The actual file — song, book, art — not</text>
+  <text class="fs" x="120" y="359">just a link that can rot or be revoked.</text>
+
+  <!-- feature 3 -->
+  <text x="86" y="414" font-size="26" text-anchor="middle">🪙</text>
+  <text class="fh" x="120" y="408">Near-zero fees</text>
+  <text class="fs" x="120" y="430">Sub-cent per action — so micro-priced</text>
+  <text class="fs" x="120" y="449">copies and tiny royalties actually work.</text>
+
+  <rect x="64" y="486" width="462" height="86" rx="12" fill="#ffffff" stroke="#bfe6ca" stroke-width="1.5"/>
+  <text x="295" y="522" text-anchor="middle" font-size="15" font-weight="800" fill="#166534">These aren't features you can bolt onto</text>
+  <text x="295" y="546" text-anchor="middle" font-size="15" font-weight="800" fill="#166534">other chains — the economics only work here.</text>
+
+  <!-- ============ RIGHT: you never see it ============ -->
+  <rect x="570" y="96" width="510" height="500" rx="16" fill="#eff6ff" stroke="#388bfd" stroke-width="2.5"/>
+  <rect x="570" y="96" width="510" height="8" rx="4" fill="#388bfd"/>
+  <text class="ph" x="594" y="146">② You never have to know it's BSV</text>
+  <text class="sub" x="594" y="170">buying feels like any online purchase</text>
+
+  <!-- step flow -->
+  <rect x="655" y="196" width="340" height="52" rx="12" fill="#ffffff" stroke="#c7dbf5" stroke-width="1.8"/>
+  <text class="step" x="825" y="228" text-anchor="middle">1 · Tap “Buy”</text>
+  <path d="M825,252 L825,282" fill="none" stroke="#388bfd" stroke-width="3" marker-end="url(#dn)"/>
+
+  <rect x="605" y="288" width="440" height="74" rx="12" fill="#ffffff" stroke="#c7dbf5" stroke-width="1.8"/>
+  <text class="step" x="825" y="316" text-anchor="middle">2 · Fund with what you already hold</text>
+  <text x="825" y="342" text-anchor="middle" font-size="14" font-weight="800" fill="#1d4ed8">BTC · ETH · stablecoins (USDT / USDC)</text>
+  <path d="M825,366 L825,396" fill="none" stroke="#388bfd" stroke-width="3" marker-end="url(#dn)"/>
+
+  <rect x="655" y="402" width="340" height="52" rx="12" fill="#eafaef" stroke="#3fb950" stroke-width="2"/>
+  <text class="step" x="825" y="434" text-anchor="middle" fill="#166534">3 · Own your copy ✓</text>
+
+  <rect x="594" y="486" width="462" height="86" rx="12" fill="#ffffff" stroke="#c7dbf5" stroke-width="1.5"/>
+  <text x="825" y="516" text-anchor="middle" font-size="15" font-weight="800" fill="#1d4ed8">No special wallet. No “first buy this coin.”</text>
+  <text x="825" y="540" text-anchor="middle" font-size="14" font-weight="600" fill="#334155">No jargon. The blockchain is invisible plumbing.</text>
+
+  <!-- ============ BOTTOM pull-quote ============ -->
+  <rect x="40" y="624" width="1040" height="72" rx="14" fill="#fef8e7" stroke="#e7b400" stroke-width="2.5"/>
+  <text x="560" y="668" text-anchor="middle" font-size="19" font-weight="800" fill="#8a6100">Built on BSV because it had to be — funded from any chain because now it can be.</text>
+</svg>
