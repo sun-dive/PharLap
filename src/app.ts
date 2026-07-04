@@ -261,16 +261,17 @@ function showSeedModal(mnemonic: string, opts: { gated?: boolean; intro?: string
 // ever carries one winning code; the tiering is settled on SimpleSwap's side. Your own code rides on the links
 // you share (withAff), closing the loop.
 const SIMPLESWAP_BASE = 'https://simpleswap.io/'
-// Default SimpleSwap ref-code, used when no other is found. TODO: set to your own code from
-// simpleswap.io/affiliate-program → Web Tools → Referral link. Empty = plain SimpleSwap (works, uncredited).
-const DEFAULT_REF_CODE = ''
+// Default SimpleSwap ref-code, used when no other referral is present. This is sun-dive's affiliate code
+// (from the partners.simpleswap.io dashboard). The Buy-BSV button becomes https://simpleswap.io/?ref=<code>.
+const DEFAULT_REF_CODE = 'DzckoPqltw'
 let incomingAff: string | null = null // ref-code carried in on a share link opened this session
 
-/** Pull a ref-code out of a full SimpleSwap URL (?ref=…) or a bare code; null if neither. */
+/** Pull a ref-code out of a SimpleSwap URL — either the exchange link (?ref=…) or the partner-signup link
+ *  (customer-account/signup?referral=…) — or a bare code; null if none. */
 function extractRefCode(input: string): string | null {
   const s = input.trim()
   if (s === '') return null
-  const m = s.match(/[?&]ref=([^&\s]+)/i)
+  const m = s.match(/[?&](?:ref|referral)=([^&\s]+)/i)
   if (m) return decodeURIComponent(m[1])
   if (/^[A-Za-z0-9_-]{3,}$/.test(s)) return s // a bare ref-code
   return null
