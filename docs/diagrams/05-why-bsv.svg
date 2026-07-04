@@ -24,30 +24,37 @@
   <!-- ============ LEFT: only possible on BSV ============ -->
   <rect x="40" y="96" width="510" height="500" rx="16" fill="#f0fbf3" stroke="#3fb950" stroke-width="2.5"/>
   <rect x="40" y="96" width="510" height="8" rx="4" fill="#3fb950"/>
-  <text class="ph" x="64" y="146">① It could only be built on BSV</text>
-  <text class="sub" x="64" y="170">the engine needs a purpose-built chain</text>
+  <text class="ph" x="64" y="138">① It could only be built on BSV</text>
+  <text class="sub" x="64" y="159">the engine needs a purpose-built chain</text>
 
   <!-- feature 1 -->
-  <text x="86" y="234" font-size="26" text-anchor="middle">🔁</text>
-  <text class="fh" x="120" y="228">Automatic resale royalty</text>
-  <text class="fs" x="120" y="250">Paid on every resale, forever — enforced</text>
-  <text class="fs" x="120" y="269">by the blockchain itself, no middleman.</text>
+  <text x="86" y="204" font-size="23" text-anchor="middle">🔁</text>
+  <text class="fh" x="120" y="200">Automatic resale royalty</text>
+  <text class="fs" x="120" y="220">Every resale pays the creator — enforced by the chain.</text>
 
   <!-- feature 2 -->
-  <text x="86" y="324" font-size="26" text-anchor="middle">📦</text>
-  <text class="fh" x="120" y="318">Content lives on-chain</text>
-  <text class="fs" x="120" y="340">The actual file — song, book, art — not</text>
-  <text class="fs" x="120" y="359">just a link that can rot or be revoked.</text>
+  <text x="86" y="270" font-size="23" text-anchor="middle">📦</text>
+  <text class="fh" x="120" y="266">Content lives on-chain</text>
+  <text class="fs" x="120" y="286">The actual file — song, book, art — not just a link.</text>
 
   <!-- feature 3 -->
-  <text x="86" y="414" font-size="26" text-anchor="middle">🪙</text>
-  <text class="fh" x="120" y="408">Near-zero fees</text>
-  <text class="fs" x="120" y="430">Sub-cent per action — so micro-priced</text>
-  <text class="fs" x="120" y="449">copies and tiny royalties actually work.</text>
+  <text x="86" y="336" font-size="23" text-anchor="middle">⚡</text>
+  <text class="fh" x="120" y="332">Near-instant transactions</text>
+  <text class="fs" x="120" y="352">Verified in seconds via SPV — no waiting for confirmations.</text>
 
-  <rect x="64" y="486" width="462" height="86" rx="12" fill="#ffffff" stroke="#bfe6ca" stroke-width="1.5"/>
-  <text x="295" y="522" text-anchor="middle" font-size="15" font-weight="800" fill="#166534">These aren't features you can bolt onto</text>
-  <text x="295" y="546" text-anchor="middle" font-size="15" font-weight="800" fill="#166534">other chains — the economics only work here.</text>
+  <!-- feature 4 -->
+  <text x="86" y="402" font-size="23" text-anchor="middle">📈</text>
+  <text class="fh" x="120" y="398">Massive throughput</text>
+  <text class="fs" x="120" y="418">Scales to ~1,000,000 transactions/sec — no congestion.</text>
+
+  <!-- feature 5 -->
+  <text x="86" y="468" font-size="23" text-anchor="middle">🪙</text>
+  <text class="fh" x="120" y="464">Near-zero fees</text>
+  <text class="fs" x="120" y="484">Sub-cent per action — so micro-pricing actually works.</text>
+
+  <rect x="64" y="506" width="462" height="66" rx="12" fill="#ffffff" stroke="#bfe6ca" stroke-width="1.5"/>
+  <text x="295" y="534" text-anchor="middle" font-size="14" font-weight="800" fill="#166534">You can't bolt these onto other chains —</text>
+  <text x="295" y="555" text-anchor="middle" font-size="14" font-weight="800" fill="#166534">the economics only work here.</text>
 
   <!-- ============ RIGHT: you never see it ============ -->
   <rect x="570" y="96" width="510" height="500" rx="16" fill="#eff6ff" stroke="#388bfd" stroke-width="2.5"/>
