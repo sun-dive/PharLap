@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Phar Lap — how it works (diagrams)</title>
+<style>
+  :root{--ink:#0e1116;--muted:#64748b}
+  *{box-sizing:border-box}
+  body{margin:0;background:#eef2f7;color:var(--ink);
+       font:16px/1.6 'Segoe UI',system-ui,-apple-system,Roboto,sans-serif}
+  header{max-width:1120px;margin:0 auto;padding:32px 20px 8px}
+  h1{margin:0 0 4px;font-size:26px}
+  p.lede{margin:0;color:var(--muted)}
+  .toolbar{max-width:1120px;margin:14px auto 0;padding:0 20px;display:flex;gap:10px;flex-wrap:wrap}
+  button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 16px;cursor:pointer;
+          background:#3fb950;color:#04140a}
+  button.sec{background:#e2e8f0;color:#0e1116}
+  main{max-width:1120px;margin:0 auto;padding:20px}
+  figure{margin:0 0 28px;background:#fff;border:1px solid #dbe2ea;border-radius:14px;
+          overflow:hidden;box-shadow:0 10px 30px -20px rgba(0,0,0,.45)}
+  figure img{display:block;width:100%;height:auto}
+  figcaption{padding:12px 18px;color:var(--muted);font-size:14px;border-top:1px solid #eef2f7}
+  figcaption b{color:var(--ink)}
+  @media print{
+    body{background:#fff}
+    header,.toolbar{display:none}
+    main{padding:0;max-width:none}
+    figure{border:0;box-shadow:none;margin:0;page-break-after:always;break-after:page}
+    figcaption{display:none}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>How Phar Lap works</h1>
+  <p class="lede">Three quick pictures — no jargon. Made for people who know sales &amp; marketing, not blockchain.</p>
+</header>
+<div class="toolbar">
+  <button onclick="window.print()">🖨️ Print / Save as PDF</button>
+  <button class="sec" onclick="document.body.classList.toggle('light')">Toggle page tint</button>
+</div>
+<main>
+  <figure>
+    <img src="01-sells-itself-loop.svg" alt="The sells-itself royalty loop"/>
+    <figcaption><b>1 · It sells itself.</b> Publish once; every fan who buys can resell, and a set % of every resale flows back to you — automatically.</figcaption>
+  </figure>
+  <figure>
+    <img src="02-web2-integration.svg" alt="How Phar Lap plugs into ordinary web2 sites"/>
+    <figcaption><b>2 · It fits the web you already use.</b> Share a normal link anywhere; the buyer needs no crypto (a wallet is made for them, they just save a seed phrase); then upsell to any bonus, affiliate offer, or another product.</figcaption>
+  </figure>
+  <figure>
+    <img src="03-holder-tree-list.svg" alt="How replications build a holder tree and an owned, two-way audience list"/>
+    <figcaption><b>3 · Every copy builds a list you own.</b> Each replication branches your tree of holders and adds a contactable name — and you can message them, they can message you. No platform can take it.</figcaption>
+  </figure>
+  <figure>
+    <img src="04-gifting-list-building.svg" alt="How gifting builds an owned list: generate, back up, deliver privately, claim, optional deadline and sweep-back"/>
+    <figcaption><b>4 · Gifting = fast list-building.</b> Generate a batch of gift links, back them up, and deliver them <b>privately</b> (DM, email, in person). Each claim adds a holder to a list you own. Add an optional deadline; unclaimed gifts sweep back and the link reverts to a normal sales page.</figcaption>
+  </figure>
+</main>
+</body>
+</html>
