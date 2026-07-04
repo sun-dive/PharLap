@@ -24434,7 +24434,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function buyBsvUrl() {
     const code = incomingAff || myRefCode() || refByCode() || DEFAULT_REF_CODE;
     const ref = code ? "ref=" + encodeURIComponent(code) + "&" : "";
-    return SIMPLESWAP_BASE + "?" + ref + "from=btc-btc&to=bsv-bsv";
+    return SIMPLESWAP_BASE + "?" + ref + "from=btc-btc&to=bsv-bsv&amount=0.001";
   }
   function onBuyBsv() {
     window.open(buyBsvUrl(), "_blank", "noopener,noreferrer");
@@ -28675,7 +28675,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"238aad0"} \xB7 ${"2026-07-04"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"906e12c"} \xB7 ${"2026-07-04"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

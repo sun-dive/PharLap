@@ -292,11 +292,12 @@ function rememberGifter(): void {
 }
 /** The Buy-BSV (SimpleSwap) URL for the active context. Precedence: a share link's aff (current page) → your
  *  own saved code → who gifted you (persisted) → app default. `||` so an empty code falls through cleanly.
- *  Pre-selects a BTC → BSV swap so newcomers land ready to buy BSV (they can still change the source coin). */
+ *  Pre-selects a BTC → BSV swap of ~0.001 BTC (a sane default ≈ $60 of BSV; SimpleSwap's own default is a
+ *  wild 0.1 BTC). The buyer can still change the source coin and the amount. */
 function buyBsvUrl(): string {
   const code = incomingAff || myRefCode() || refByCode() || DEFAULT_REF_CODE
   const ref = code ? 'ref=' + encodeURIComponent(code) + '&' : ''
-  return SIMPLESWAP_BASE + '?' + ref + 'from=btc-btc&to=bsv-bsv'
+  return SIMPLESWAP_BASE + '?' + ref + 'from=btc-btc&to=bsv-bsv&amount=0.001'
 }
 function onBuyBsv(): void { window.open(buyBsvUrl(), '_blank', 'noopener,noreferrer') }
 
