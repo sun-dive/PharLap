@@ -12,6 +12,9 @@ LISTING_SITE_PLAN.md
 smart-nfts-app.zip
 *.zip
 
+# Regenerable PNG renders of the SVG diagrams (build output; SVGs are the source of truth)
+docs/diagrams/png/
+
 # Local high-res source art (fal.ai masters etc.) — kept local, never deployed.
 # Export the optimized .jpg you actually use into brand/home/.
 art-src/
