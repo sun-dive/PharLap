@@ -680,11 +680,30 @@ function paintCoverPreview(blob: Blob | null): void {
   if (coverPrevUrl) { URL.revokeObjectURL(coverPrevUrl); coverPrevUrl = null }
   if (!blob) { host.innerHTML = ''; return }
   coverPrevUrl = URL.createObjectURL(blob)
-  host.innerHTML = `<img src="${coverPrevUrl}" alt="cover" /><span class="muted" style="font-size:12px">Cropped cover — ${kb(blob.size)}, square WebP</span>`
+  host.innerHTML = `<img src="${coverPrevUrl}" alt="cover" /><span class="muted" style="font-size:12px">Cover — ${kb(blob.size)}</span>`
 }
 
-/** Crop a chosen image (file or photo) and store the processed cover bytes. Returns false if cancelled. */
+/** True for an animated WebP (has an ANIM chunk) or a GIF — running these through the crop canvas would
+ *  flatten them to a single static frame, so we offer to keep them as-is instead. */
+async function isAnimatedImage(f: File): Promise<boolean> {
+  if (f.type === 'image/gif' || /\.gif$/i.test(f.name)) return true
+  if (f.type === 'image/webp' || /\.webp$/i.test(f.name)) {
+    try { const s = String.fromCharCode(...new Uint8Array(await f.slice(0, 4096).arrayBuffer())); return s.includes('ANIM') || s.includes('ANMF') } catch { return false }
+  }
+  return false
+}
+
+/** Crop a chosen image (file or photo) and store the processed cover bytes. Returns false if cancelled.
+ *  An animated WebP/GIF is offered as a pass-through (keeps the loop) rather than being flattened by the crop. */
 async function cropAndStoreCover(f: File): Promise<boolean> {
+  if (await isAnimatedImage(f)) {
+    if (confirm(`"${f.name}" is animated (${kb(f.size)}). Keep it animated as the cover?\n\nOK — keep the animation as-is (it rides on-chain, so a larger animated cover costs a little more to mint).\nCancel — crop it to a small, static 800×800 cover instead.`)) {
+      const bytes = Array.from(new Uint8Array(await f.arrayBuffer()))
+      croppedCover = { mimeType: f.type || 'image/webp', fileName: f.name || 'cover.webp', bytes }
+      paintCoverPreview(new Blob([new Uint8Array(bytes)], { type: croppedCover.mimeType }))
+      return true
+    }
+  }
   const blob = await openCropModal(f)
   if (!blob) return false
   croppedCover = { mimeType: blob.type || 'image/webp', fileName: 'cover.webp', bytes: Array.from(new Uint8Array(await blob.arrayBuffer())) }

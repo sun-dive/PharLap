@@ -20788,7 +20788,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
 
   // src/sellerNote.ts
-  var MAX_NOTE_BYTES = 560;
+  var MAX_NOTE_BYTES = 1024;
   var MAX_HISTORY_SCAN = 30;
   function utf8Len(s2) {
     return new TextEncoder().encode(s2).length;
@@ -24837,9 +24837,32 @@ Proceed?`
       return;
     }
     coverPrevUrl = URL.createObjectURL(blob);
-    host.innerHTML = `<img src="${coverPrevUrl}" alt="cover" /><span class="muted" style="font-size:12px">Cropped cover \u2014 ${kb(blob.size)}, square WebP</span>`;
+    host.innerHTML = `<img src="${coverPrevUrl}" alt="cover" /><span class="muted" style="font-size:12px">Cover \u2014 ${kb(blob.size)}</span>`;
+  }
+  async function isAnimatedImage(f2) {
+    if (f2.type === "image/gif" || /\.gif$/i.test(f2.name)) return true;
+    if (f2.type === "image/webp" || /\.webp$/i.test(f2.name)) {
+      try {
+        const s2 = String.fromCharCode(...new Uint8Array(await f2.slice(0, 4096).arrayBuffer()));
+        return s2.includes("ANIM") || s2.includes("ANMF");
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
   async function cropAndStoreCover(f2) {
+    if (await isAnimatedImage(f2)) {
+      if (confirm(`"${f2.name}" is animated (${kb(f2.size)}). Keep it animated as the cover?
+
+OK \u2014 keep the animation as-is (it rides on-chain, so a larger animated cover costs a little more to mint).
+Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
+        const bytes2 = Array.from(new Uint8Array(await f2.arrayBuffer()));
+        croppedCover = { mimeType: f2.type || "image/webp", fileName: f2.name || "cover.webp", bytes: bytes2 };
+        paintCoverPreview(new Blob([new Uint8Array(bytes2)], { type: croppedCover.mimeType }));
+        return true;
+      }
+    }
     const blob = await openCropModal(f2);
     if (!blob) return false;
     croppedCover = { mimeType: blob.type || "image/webp", fileName: "cover.webp", bytes: Array.from(new Uint8Array(await blob.arrayBuffer())) };
@@ -28681,7 +28704,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c5fd757"} \xB7 ${"2026-07-04"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c83aec7"} \xB7 ${"2026-07-05"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
