@@ -3200,7 +3200,7 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   // skip (not a hard failure) so a transient/late hiccup can't break a load that already has what it needs.
   for (let i = 0; i < 6; i++) {
     let hex: string | 'oversized' | null
-    try { hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 2 * 1024 * 1024) } // headroom for a front+back storefront
+    try { hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 8 * 1024 * 1024) } // headroom for a rich animated front+back storefront cover
     catch { hex = null }
     if (hex == null) { if (template != null) break; continue }
     if (hex === 'oversized') { hasContentFile = true; continue } // the embedded content file — skipped, not downloaded
