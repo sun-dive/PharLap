@@ -27565,7 +27565,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     for (let i = 0; i < 6; i++) {
       let hex;
       try {
-        hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 2 * 1024 * 1024);
+        hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 8 * 1024 * 1024);
       } catch {
         hex = null;
       }
@@ -28705,7 +28705,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6dbf74b"} \xB7 ${"2026-07-06"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"59ee7b6"} \xB7 ${"2026-07-06"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
