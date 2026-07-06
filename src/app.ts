@@ -3521,6 +3521,8 @@ function showFundPrompt(needed: number, have: number): void {
   $('cvFundQr').innerHTML = `<div class="qr-holder qr-fund">${qrSvg(bsvPaymentUri(address, needed))}</div>`
   $('cvFund').style.display = 'block'
   setCvStatus('Not enough funds yet — send a little BSV to your wallet, then click “I’ve funded”.', 'error')
+  // The fund panel sits below the buy card — make sure it's visible when it appears (esp. from the top button).
+  $('cvFund').scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 function hideFundPrompt(): void { $('cvFund').style.display = 'none' }
 
@@ -4387,7 +4389,12 @@ function init(): void {
   $('cvShare').onclick = () => void shareCollectionLink()
   $('cvQr').onclick = () => void (async () => { const l = await currentShareLink(); if (l) showQrModal('Scan to open this sales page', l) })()
   $('cvGet').onclick = () => void onGetCopy()
-  $('cvGetTop').onclick = () => void onGetCopy()
+  $('cvGetTop').onclick = () => {
+    // The hero button sits above the fold, but the flow it drives (status, price confirm, fund prompt) lives
+    // in the buy card lower down — scroll it into view so the purchase isn't happening off-screen.
+    document.querySelector('.cv-buy')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    void onGetCopy()
+  }
   // Deliberate re-purchase escape hatch (shown only once you own a copy): a confirm, then the normal buy flow.
   $('cvBuyAnother').onclick = () => {
     if (!currentCollection) return
