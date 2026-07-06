@@ -27914,6 +27914,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     $("cvFundQr").innerHTML = `<div class="qr-holder qr-fund">${qrSvg(bsvPaymentUri(address, needed))}</div>`;
     $("cvFund").style.display = "block";
     setCvStatus("Not enough funds yet \u2014 send a little BSV to your wallet, then click \u201CI\u2019ve funded\u201D.", "error");
+    $("cvFund").scrollIntoView({ behavior: "smooth", block: "center" });
   }
   function hideFundPrompt() {
     $("cvFund").style.display = "none";
@@ -28704,7 +28705,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"ef051d5"} \xB7 ${"2026-07-05"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6dbf74b"} \xB7 ${"2026-07-06"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -28890,7 +28891,10 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
       if (l) showQrModal("Scan to open this sales page", l);
     })();
     $("cvGet").onclick = () => void onGetCopy();
-    $("cvGetTop").onclick = () => void onGetCopy();
+    $("cvGetTop").onclick = () => {
+      document.querySelector(".cv-buy")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      void onGetCopy();
+    };
     $("cvBuyAnother").onclick = () => {
       if (!currentCollection) return;
       if (confirm(`You already own a copy of \u201C${currentCollection.info.name}\u201D.
