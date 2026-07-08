@@ -87,7 +87,8 @@ const server = http.createServer((req, res) => {
       method: req.method,
       headers: {
         'Accept': req.headers.accept || '*/*',
-        'User-Agent': 'MPT-Prototype/1.0',
+        // BananaBlocks 403s non-browser User-Agents (e.g. python-urllib), so present a browser-like one.
+        'User-Agent': 'Mozilla/5.0 (PharLap dev proxy)',
       },
     }
 
