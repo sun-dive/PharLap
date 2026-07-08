@@ -78,6 +78,41 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  // Proxy /banana/* to GorillaPool's BananaBlocks API (second broadcast relay; see walletProvider.broadcast)
+  if (req.url.startsWith('/banana/')) {
+    const apiPath = req.url.slice(7) // strip "/banana"
+    const options = {
+      hostname: 'bananablocks.com',
+      path: apiPath,
+      method: req.method,
+      headers: {
+        'Accept': req.headers.accept || '*/*',
+        'User-Agent': 'MPT-Prototype/1.0',
+      },
+    }
+
+    if (req.headers['content-type']) {
+      options.headers['Content-Type'] = req.headers['content-type']
+    }
+
+    const proxyReq = https.request(options, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode, {
+        'Content-Type': proxyRes.headers['content-type'] || 'application/octet-stream',
+        'Access-Control-Allow-Origin': '*',
+      })
+      proxyRes.pipe(res)
+    })
+
+    proxyReq.on('error', (err) => {
+      console.error('BananaBlocks proxy error:', err.message)
+      res.writeHead(502)
+      res.end('Proxy error')
+    })
+
+    req.pipe(proxyReq)
+    return
+  }
+
   // Static file serving
   let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url)
   const ext = path.extname(filePath)
@@ -96,5 +131,6 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   console.log(`Dev server running at http://localhost:${PORT}`)
   console.log(`WoC API proxy at http://localhost:${PORT}/woc/...`)
+  console.log(`BananaBlocks proxy at http://localhost:${PORT}/banana/...`)
   console.log('Press Ctrl+C to stop')
 })

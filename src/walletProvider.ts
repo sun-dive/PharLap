@@ -20,6 +20,14 @@ const WOC_BASE = (typeof location !== 'undefined' && location.hostname === 'loca
   ? '/woc/v1/bsv/main'
   : 'https://api.whatsonchain.com/v1/bsv/main'
 
+// GorillaPool's BananaBlocks — an independent, miner-direct relay broadcast to ALONGSIDE WoC for resilience.
+// WoC now front-ends ARC (stricter policy that can bounce non-standard covenant txs); GorillaPool is a permissive
+// miner, so a covenant tx WoC rejects still has a home. Native REST broadcast: POST /tx/broadcast { rawtx }.
+// Same localhost-proxy shape as WoC to dodge browser CORS in dev (see serve.mjs).
+const BANANA_BASE = (typeof location !== 'undefined' && location.hostname === 'localhost')
+  ? '/banana/api/v1'
+  : 'https://bananablocks.com/api/v1'
+
 // ─── Types ──────────────────────────────────────────────────────────
 
 export interface Utxo {
@@ -227,18 +235,39 @@ export class WalletProvider {
   // ── Broadcasting ──────────────────────────────────────────────
 
   async broadcast(rawHex: string): Promise<string> {
-    const resp = await queuedFetch(`${WOC_BASE}/tx/raw`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ txhex: rawHex }),
+    // The txid is deterministic from the signed tx, so compute it locally instead of trusting a relay's echo —
+    // an ARC-style relay can return 200 + a txid for a tx it later orphans (see bitcoin-sv/arc #1006).
+    const txId = Transaction.fromHex(rawHex).id('hex')
+
+    // Fan the SAME signed tx out to two independent relays and succeed on the FIRST acceptance. WoC front-ends
+    // ARC (stricter policy — can bounce non-standard covenant txs); GorillaPool's BananaBlocks routes straight to
+    // a permissive miner. Same tx → same txid, so sending to both carries no double-spend risk: it just gives the
+    // tx two independent shots at a miner and removes WoC as a single point of failure. A relay CORS-blocked or
+    // down in one environment simply loses its race; the other carries the tx (graceful degradation).
+    const relays: Array<{ name: string, url: string, body: unknown }> = [
+      { name: 'WoC', url: `${WOC_BASE}/tx/raw`, body: { txhex: rawHex } },
+      { name: 'BananaBlocks', url: `${BANANA_BASE}/tx/broadcast`, body: { rawtx: rawHex } },
+    ]
+    const attempts = relays.map(async r => {
+      const resp = await queuedFetch(r.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(r.body),
+      })
+      if (!resp.ok) throw new Error(`${r.name} ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
+      return r.name
     })
-    if (!resp.ok) {
-      const text = await resp.text()
-      throw new Error(`Broadcast failed (${resp.status}): ${text}`)
+
+    try {
+      const winner = await Promise.any(attempts) // resolves on the first acceptance; rejects only if ALL reject
+      console.info(`[broadcast] ${txId} accepted by ${winner}`)
+    } catch (agg) {
+      const errs = (agg as AggregateError)?.errors?.map(e => String((e as Error)?.message ?? e)) ?? [String(agg)]
+      throw new Error(`Broadcast rejected by all relays (${txId}): ${errs.join(' | ')}`)
     }
-    const txId = (await resp.text()).replace(/"/g, '')
+
     // Cache the raw hex of what we just broadcast so a spend of one of its outputs (transfer / replicate /
-    // burn of a freshly-created edition) can be built immediately, without waiting for WoC to index the tx.
+    // burn of a freshly-created edition) can be built immediately, without waiting for a relay to index the tx.
     this.txCache.set(txId, rawHex)
     return txId
   }
