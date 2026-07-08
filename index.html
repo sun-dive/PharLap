@@ -359,6 +359,10 @@
     .foot a { color:var(--accent2); }
     .woc-badge { height:56px; width:auto; opacity:.9; }
     .woc-badge:hover { opacity:1; }
+    .bb-badge { display:flex; align-items:center; justify-content:center; gap:7px; margin-top:10px; font-size:13px; color:var(--muted); font-weight:600; text-decoration:none; }
+    .bb-badge .bb-logo { height:11px; width:auto; border-radius:3px; }
+    .bb-badge .bb-word { color:#ffce1f; font-weight:800; letter-spacing:-.2px; }
+    .bb-badge:hover .bb-word { text-decoration:underline; }
     /* BSV branding */
     .bsv-coin { width:18px; height:18px; vertical-align:-4px; flex:none; }
     .bsv-tag { display:inline-block; background:#eab300; color:#1a1206; font-size:10px; font-weight:800; letter-spacing:.5px; padding:1px 7px; border-radius:999px; vertical-align:middle; margin-left:7px; }
@@ -981,6 +985,7 @@
       <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
         <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
       </a>
+      <a class="bb-badge" href="https://bananablocks.com" target="_blank" rel="noopener" aria-label="Powered by BananaBlocks">Powered by <img src="./brand/bananablocks-logo.png" alt="" class="bb-logo" /> <span class="bb-word">BananaBlocks</span></a>
       <div style="margin-top:8px">SMART NFTs is experimental — use small amounts. · powered by PHAR LAP</div>
       <div id="appVersion" class="app-version muted"></div>
     </footer>
@@ -1063,6 +1068,7 @@
         <a href="https://whatsonchain.com" target="_blank" rel="noopener" aria-label="Powered by WhatsOnChain">
           <img src="./brand/powered-by-whatsonchain-white.svg" alt="Powered by WhatsOnChain" class="woc-badge" />
         </a>
+        <a class="bb-badge" href="https://bananablocks.com" target="_blank" rel="noopener" aria-label="Powered by BananaBlocks">Powered by <img src="./brand/bananablocks-logo.png" alt="" class="bb-logo" /> <span class="bb-word">BananaBlocks</span></a>
         <div style="margin-top:8px">SMART NFTs is experimental — use small amounts. · powered by PHAR LAP</div>
       </footer>
     </div>
