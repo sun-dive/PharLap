@@ -2362,7 +2362,7 @@ function tokenExtrasHtml(t: StoredToken): string {
     `${latest ? `<div class="state" style="color:var(--accent)">📣 ${escapeHtml(latest.text)}</div>` : ''}`
 }
 
-/** The per-copy action buttons (Replicate/Transfer/View/Sales/Verify for editions; Send/Verify/View else). */
+/** The per-copy action buttons (Replicate/Transfer/OPEN/Sales/Verify for editions; Send/Verify/OPEN else). */
 function tokenActions(t: StoredToken, myHash: string): HTMLElement {
   const isEdition = t.kind === 'edition'
   const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myHash
@@ -2374,7 +2374,7 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
   actions.className = 'actions'
   if (isEdition) {
     const view = document.createElement('button')
-    view.textContent = 'View'; view.className = 'secondary'
+    view.textContent = 'OPEN'; view.className = 'secondary'
     view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Edition')
     const sales = document.createElement('button')
     sales.textContent = 'Sales page'; sales.className = 'secondary'
@@ -2427,7 +2427,7 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
     }
   } else {
     const view = document.createElement('button')
-    view.textContent = 'View'; view.className = 'secondary'
+    view.textContent = 'OPEN'; view.className = 'secondary'
     view.onclick = () => void onView(t.collectionId, t.collectionName ?? 'Collection')
     if (!ro) {
       const send = document.createElement('button')

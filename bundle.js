@@ -26748,7 +26748,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
     actions.className = "actions";
     if (isEdition) {
       const view = document.createElement("button");
-      view.textContent = "View";
+      view.textContent = "OPEN";
       view.className = "secondary";
       view.onclick = () => void onView(t.collectionId, t.collectionName ?? "Edition");
       const sales = document.createElement("button");
@@ -26808,7 +26808,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       }
     } else {
       const view = document.createElement("button");
-      view.textContent = "View";
+      view.textContent = "OPEN";
       view.className = "secondary";
       view.onclick = () => void onView(t.collectionId, t.collectionName ?? "Collection");
       if (!ro) {
@@ -28795,7 +28795,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"5032c81"} \xB7 ${"2026-07-08"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"1dfc79b"} \xB7 ${"2026-07-08"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
