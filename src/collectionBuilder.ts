@@ -32,7 +32,10 @@ import type { TemplateFields, FileFields, StorefrontFields } from './tokenCodec.
 /** Satoshi value of each PushDrop record output (token / template / file). */
 export const PHARLAP_OUTPUT_SATS = 1
 /** Default fee rate (satoshis per kilobyte) — current BSV standard is 100 sat/KB. */
-export const DEFAULT_FEE_PER_KB = 100
+// 101, not 100: the official minimum is 100 sats/KB, and the extra 1 sat/KB is a safety hair so a tx can never
+// round or estimate its way *under* the floor. This is NOT ARC's inflated 500 — we hold at the true minimum
+// (miners mine 100 sats/KB fine; see [[fee-rate-policy]]); the +1 is belt-and-braces only.
+export const DEFAULT_FEE_PER_KB = 101
 
 export interface FundingInput {
   utxo: Utxo

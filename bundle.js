@@ -20102,7 +20102,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
 
   // src/collectionBuilder.ts
   var PHARLAP_OUTPUT_SATS = 1;
-  var DEFAULT_FEE_PER_KB = 100;
+  var DEFAULT_FEE_PER_KB = 101;
   async function getSafeUtxos(provider2) {
     const utxos = await provider2.getUtxos();
     return utxos.filter((u) => u.satoshis > PHARLAP_OUTPUT_SATS);
@@ -28705,7 +28705,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"59ee7b6"} \xB7 ${"2026-07-06"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c6c1239"} \xB7 ${"2026-07-08"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
