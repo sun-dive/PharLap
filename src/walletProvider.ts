@@ -28,6 +28,10 @@ const BANANA_BASE = (typeof location !== 'undefined' && location.hostname === 'l
   ? '/banana/api/v1'
   : 'https://bananablocks.com/api/v1'
 
+// Orphan-guard poll: after a relay accepts, re-check the tx is actually visible; if it vanishes, re-broadcast.
+const CONFIRM_POLL_TRIES = 3
+const CONFIRM_POLL_INTERVAL_MS = 15_000
+
 // ─── Types ──────────────────────────────────────────────────────────
 
 export interface Utxo {
@@ -234,6 +238,25 @@ export class WalletProvider {
 
   // ── Broadcasting ──────────────────────────────────────────────
 
+  /** POST the same signed tx to both relays; resolves with the name of the FIRST to accept, rejects
+   *  (AggregateError) only if ALL reject. Shared by the initial broadcast and the orphan-guard re-broadcast. */
+  private relayBroadcast(rawHex: string): Promise<string> {
+    const relays: Array<{ name: string, url: string, body: unknown }> = [
+      { name: 'WoC', url: `${WOC_BASE}/tx/raw`, body: { txhex: rawHex } },
+      { name: 'BananaBlocks', url: `${BANANA_BASE}/tx/broadcast`, body: { rawtx: rawHex } },
+    ]
+    // Promise.any resolves on the first acceptance; rejects only if ALL reject.
+    return Promise.any(relays.map(async r => {
+      const resp = await queuedFetch(r.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(r.body),
+      })
+      if (!resp.ok) throw new Error(`${r.name} ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
+      return r.name
+    }))
+  }
+
   async broadcast(rawHex: string): Promise<string> {
     // The txid is deterministic from the signed tx, so compute it locally instead of trusting a relay's echo —
     // an ARC-style relay can return 200 + a txid for a tx it later orphans (see bitcoin-sv/arc #1006).
@@ -244,22 +267,8 @@ export class WalletProvider {
     // a permissive miner. Same tx → same txid, so sending to both carries no double-spend risk: it just gives the
     // tx two independent shots at a miner and removes WoC as a single point of failure. A relay CORS-blocked or
     // down in one environment simply loses its race; the other carries the tx (graceful degradation).
-    const relays: Array<{ name: string, url: string, body: unknown }> = [
-      { name: 'WoC', url: `${WOC_BASE}/tx/raw`, body: { txhex: rawHex } },
-      { name: 'BananaBlocks', url: `${BANANA_BASE}/tx/broadcast`, body: { rawtx: rawHex } },
-    ]
-    const attempts = relays.map(async r => {
-      const resp = await queuedFetch(r.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(r.body),
-      })
-      if (!resp.ok) throw new Error(`${r.name} ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
-      return r.name
-    })
-
     try {
-      const winner = await Promise.any(attempts) // resolves on the first acceptance; rejects only if ALL reject
+      const winner = await this.relayBroadcast(rawHex)
       console.info(`[broadcast] ${txId} accepted by ${winner}`)
     } catch (agg) {
       const errs = (agg as AggregateError)?.errors?.map(e => String((e as Error)?.message ?? e)) ?? [String(agg)]
@@ -269,7 +278,37 @@ export class WalletProvider {
     // Cache the raw hex of what we just broadcast so a spend of one of its outputs (transfer / replicate /
     // burn of a freshly-created edition) can be built immediately, without waiting for a relay to index the tx.
     this.txCache.set(txId, rawHex)
+
+    // ORPHAN-GUARD (non-blocking): a relay can accept a tx (200 + txid) then silently drop it without mining —
+    // arc #1006 saw txs sit in ORPHAN_MEMPOOL until re-broadcast. Verify in the background that the tx actually
+    // becomes visible on a relay; if it vanishes, re-broadcast once (idempotent — same txid). Best-effort.
+    void this.confirmLanded(txId, rawHex).catch(() => {})
     return txId
+  }
+
+  /** Poll the relays until a just-broadcast tx is visible; if neither reports it after a short grace window,
+   *  re-broadcast once. BananaBlocks is checked first (independent + non-pruning → more complete mempool view).
+   *  Non-blocking and best-effort — the caller already holds the deterministic txid. */
+  private async confirmLanded(txId: string, rawHex: string): Promise<void> {
+    const visibleOn = async (): Promise<string | null> => {
+      const relays: Array<[string, string]> = [
+        ['BananaBlocks', `${BANANA_BASE}/tx/${txId}`],
+        ['WoC', `${WOC_BASE}/tx/${txId}/hex`],
+      ]
+      const seen = await Promise.all(relays.map(async ([name, url]) => {
+        try { return (await fetch(url)).ok ? name : null } catch { return null }
+      }))
+      return seen.find(Boolean) ?? null
+    }
+    for (let i = 0; i < CONFIRM_POLL_TRIES; i++) {
+      await new Promise(r => setTimeout(r, CONFIRM_POLL_INTERVAL_MS))
+      const on = await visibleOn()
+      if (on) { console.info(`[broadcast] ${txId} confirmed live in mempool (seen by ${on})`); return }
+    }
+    const secs = Math.round(CONFIRM_POLL_TRIES * CONFIRM_POLL_INTERVAL_MS / 1000)
+    console.warn(`[broadcast] ${txId} not visible on any relay after ~${secs}s — re-broadcasting (possible ARC orphan, arc #1006)`)
+    try { const w = await this.relayBroadcast(rawHex); console.info(`[broadcast] ${txId} re-broadcast, accepted by ${w}`) }
+    catch { console.error(`[broadcast] ${txId} re-broadcast rejected by all relays`) }
   }
 
   // ── Raw Transactions ──────────────────────────────────────────
@@ -328,9 +367,21 @@ export class WalletProvider {
 
   // ── Block Headers (feeds into SPV verification) ───────────────
 
-  /** WoC-reported confirmation of a tx: its block height + block time (unix seconds), or null if unconfirmed
-   *  (mempool) or not found. For provenance display only — not an SPV proof (use getMerkleProof for that). */
+  /** Relay-reported confirmation of a tx: its block height + block time (unix seconds), or null if unconfirmed
+   *  (mempool) or not found. For provenance display only — not an SPV proof (use getMerkleProof for that).
+   *  Prefers BananaBlocks (GorillaPool — independent + non-pruning, so a more complete/reliable index than WoC,
+   *  which now sits behind the BSVA/pruning landscape), falling back to WoC if BananaBlocks is unavailable. */
   async getTxConfirmation(txId: string): Promise<{ blockHeight: number; time: number } | null> {
+    // Primary: BananaBlocks native /tx/{id} → { block_height, block_time, confirmations }.
+    try {
+      const resp = await fetchWithRetry(`${BANANA_BASE}/tx/${txId}`)
+      if (resp.ok) {
+        const d = await resp.json()
+        const h = (d?.block_height ?? 0) as number
+        return h > 0 ? { blockHeight: h, time: (d?.block_time ?? 0) as number } : null // known; null ⇒ mempool
+      }
+    } catch { /* fall back to WoC below */ }
+    // Fallback: WoC /tx/hash/{id} → { blockheight, blocktime }.
     const resp = await fetchWithRetry(`${WOC_BASE}/tx/hash/${txId}`)
     if (!resp.ok) return null
     const d = await resp.json()

@@ -19185,6 +19185,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   // src/walletProvider.ts
   var WOC_BASE = typeof location !== "undefined" && location.hostname === "localhost" ? "/woc/v1/bsv/main" : "https://api.whatsonchain.com/v1/bsv/main";
   var BANANA_BASE = typeof location !== "undefined" && location.hostname === "localhost" ? "/banana/api/v1" : "https://bananablocks.com/api/v1";
+  var CONFIRM_POLL_TRIES = 3;
+  var CONFIRM_POLL_INTERVAL_MS = 15e3;
   var MIN_REQUEST_DELAY = 350;
   var fetchQueue = Promise.resolve();
   function queuedFetch(url, init2) {
@@ -19325,13 +19327,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       return utxos.reduce((sum, u) => sum + u.satoshis, 0);
     }
     // ── Broadcasting ──────────────────────────────────────────────
-    async broadcast(rawHex) {
-      const txId = Transaction.fromHex(rawHex).id("hex");
+    /** POST the same signed tx to both relays; resolves with the name of the FIRST to accept, rejects
+     *  (AggregateError) only if ALL reject. Shared by the initial broadcast and the orphan-guard re-broadcast. */
+    relayBroadcast(rawHex) {
       const relays = [
         { name: "WoC", url: `${WOC_BASE}/tx/raw`, body: { txhex: rawHex } },
         { name: "BananaBlocks", url: `${BANANA_BASE}/tx/broadcast`, body: { rawtx: rawHex } }
       ];
-      const attempts = relays.map(async (r2) => {
+      return Promise.any(relays.map(async (r2) => {
         const resp = await queuedFetch(r2.url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -19339,16 +19342,56 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         });
         if (!resp.ok) throw new Error(`${r2.name} ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
         return r2.name;
-      });
+      }));
+    }
+    async broadcast(rawHex) {
+      const txId = Transaction.fromHex(rawHex).id("hex");
       try {
-        const winner = await Promise.any(attempts);
+        const winner = await this.relayBroadcast(rawHex);
         console.info(`[broadcast] ${txId} accepted by ${winner}`);
       } catch (agg) {
         const errs = agg?.errors?.map((e) => String(e?.message ?? e)) ?? [String(agg)];
         throw new Error(`Broadcast rejected by all relays (${txId}): ${errs.join(" | ")}`);
       }
       this.txCache.set(txId, rawHex);
+      void this.confirmLanded(txId, rawHex).catch(() => {
+      });
       return txId;
+    }
+    /** Poll the relays until a just-broadcast tx is visible; if neither reports it after a short grace window,
+     *  re-broadcast once. BananaBlocks is checked first (independent + non-pruning → more complete mempool view).
+     *  Non-blocking and best-effort — the caller already holds the deterministic txid. */
+    async confirmLanded(txId, rawHex) {
+      const visibleOn = async () => {
+        const relays = [
+          ["BananaBlocks", `${BANANA_BASE}/tx/${txId}`],
+          ["WoC", `${WOC_BASE}/tx/${txId}/hex`]
+        ];
+        const seen = await Promise.all(relays.map(async ([name, url]) => {
+          try {
+            return (await fetch(url)).ok ? name : null;
+          } catch {
+            return null;
+          }
+        }));
+        return seen.find(Boolean) ?? null;
+      };
+      for (let i = 0; i < CONFIRM_POLL_TRIES; i++) {
+        await new Promise((r2) => setTimeout(r2, CONFIRM_POLL_INTERVAL_MS));
+        const on = await visibleOn();
+        if (on) {
+          console.info(`[broadcast] ${txId} confirmed live in mempool (seen by ${on})`);
+          return;
+        }
+      }
+      const secs = Math.round(CONFIRM_POLL_TRIES * CONFIRM_POLL_INTERVAL_MS / 1e3);
+      console.warn(`[broadcast] ${txId} not visible on any relay after ~${secs}s \u2014 re-broadcasting (possible ARC orphan, arc #1006)`);
+      try {
+        const w = await this.relayBroadcast(rawHex);
+        console.info(`[broadcast] ${txId} re-broadcast, accepted by ${w}`);
+      } catch {
+        console.error(`[broadcast] ${txId} re-broadcast rejected by all relays`);
+      }
     }
     // ── Raw Transactions ──────────────────────────────────────────
     async getRawTransaction(txId) {
@@ -19420,9 +19463,20 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       return hex.length === 0 ? null : hex;
     }
     // ── Block Headers (feeds into SPV verification) ───────────────
-    /** WoC-reported confirmation of a tx: its block height + block time (unix seconds), or null if unconfirmed
-     *  (mempool) or not found. For provenance display only — not an SPV proof (use getMerkleProof for that). */
+    /** Relay-reported confirmation of a tx: its block height + block time (unix seconds), or null if unconfirmed
+     *  (mempool) or not found. For provenance display only — not an SPV proof (use getMerkleProof for that).
+     *  Prefers BananaBlocks (GorillaPool — independent + non-pruning, so a more complete/reliable index than WoC,
+     *  which now sits behind the BSVA/pruning landscape), falling back to WoC if BananaBlocks is unavailable. */
     async getTxConfirmation(txId) {
+      try {
+        const resp2 = await fetchWithRetry(`${BANANA_BASE}/tx/${txId}`);
+        if (resp2.ok) {
+          const d2 = await resp2.json();
+          const h2 = d2?.block_height ?? 0;
+          return h2 > 0 ? { blockHeight: h2, time: d2?.block_time ?? 0 } : null;
+        }
+      } catch {
+      }
       const resp = await fetchWithRetry(`${WOC_BASE}/tx/hash/${txId}`);
       if (!resp.ok) return null;
       const d = await resp.json();
@@ -28717,7 +28771,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"3055469"} \xB7 ${"2026-07-08"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"a911803"} \xB7 ${"2026-07-08"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
