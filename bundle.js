@@ -19184,6 +19184,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
 
   // src/walletProvider.ts
   var WOC_BASE = typeof location !== "undefined" && location.hostname === "localhost" ? "/woc/v1/bsv/main" : "https://api.whatsonchain.com/v1/bsv/main";
+  var BANANA_BASE = typeof location !== "undefined" && location.hostname === "localhost" ? "/banana/api/v1" : "https://bananablocks.com/api/v1";
   var MIN_REQUEST_DELAY = 350;
   var fetchQueue = Promise.resolve();
   function queuedFetch(url, init2) {
@@ -19325,16 +19326,27 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     // ── Broadcasting ──────────────────────────────────────────────
     async broadcast(rawHex) {
-      const resp = await queuedFetch(`${WOC_BASE}/tx/raw`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ txhex: rawHex })
+      const txId = Transaction.fromHex(rawHex).id("hex");
+      const relays = [
+        { name: "WoC", url: `${WOC_BASE}/tx/raw`, body: { txhex: rawHex } },
+        { name: "BananaBlocks", url: `${BANANA_BASE}/tx/broadcast`, body: { rawtx: rawHex } }
+      ];
+      const attempts = relays.map(async (r2) => {
+        const resp = await queuedFetch(r2.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(r2.body)
+        });
+        if (!resp.ok) throw new Error(`${r2.name} ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+        return r2.name;
       });
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Broadcast failed (${resp.status}): ${text}`);
+      try {
+        const winner = await Promise.any(attempts);
+        console.info(`[broadcast] ${txId} accepted by ${winner}`);
+      } catch (agg) {
+        const errs = agg?.errors?.map((e) => String(e?.message ?? e)) ?? [String(agg)];
+        throw new Error(`Broadcast rejected by all relays (${txId}): ${errs.join(" | ")}`);
       }
-      const txId = (await resp.text()).replace(/"/g, "");
       this.txCache.set(txId, rawHex);
       return txId;
     }
@@ -28705,7 +28717,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c8325fd"} \xB7 ${"2026-07-08"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"3055469"} \xB7 ${"2026-07-08"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
