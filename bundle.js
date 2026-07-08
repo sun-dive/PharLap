@@ -20788,7 +20788,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
 
   // src/sellerNote.ts
-  var MAX_NOTE_BYTES = 2048;
+  var MAX_NOTE_BYTES = 3072;
   var MAX_HISTORY_SCAN = 30;
   function utf8Len(s2) {
     return new TextEncoder().encode(s2).length;
@@ -28705,7 +28705,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c6c1239"} \xB7 ${"2026-07-08"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c8325fd"} \xB7 ${"2026-07-08"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
