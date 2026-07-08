@@ -21,10 +21,11 @@ import { PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, getSafeUtxos, selectFunding } 
 import type { WalletProvider } from './walletProvider.ts'
 
 /** Cap the note so it stays cheap and rides comfortably on the notification/propagation output. Raised
- *  280→560 (2026-06-26), then 560→2048 (2026-07-05) to fit a full listing "story" + terms: the extra bytes
- *  per resale are negligible on BSV, and the full text is on-chain + search-engine-indexable even when the
- *  UI truncates the visible portion. */
-export const MAX_NOTE_BYTES = 2048
+ *  280→560 (2026-06-26), 560→2048 (2026-07-05), then 2048→3072 (2026-07-08) to fit a full listing "story" +
+ *  terms with room to spare: the extra bytes per resale are negligible on BSV, and the full text is on-chain +
+ *  search-engine-indexable even when the UI truncates the visible portion. (Pre-written notes are kept ≤2 KB
+ *  so the seller has ~1 KB of headroom to edit before hitting the cap.) */
+export const MAX_NOTE_BYTES = 3072
 /** Bound how far back we scan a seller's history looking for their latest note. */
 const MAX_HISTORY_SCAN = 30
 
