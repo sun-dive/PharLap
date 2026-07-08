@@ -28,6 +28,13 @@ const BANANA_BASE = (typeof location !== 'undefined' && location.hostname === 'l
   ? '/banana/api/v1'
   : 'https://bananablocks.com/api/v1'
 
+// BananaBlocks' WhatsOnChain-compatible READ path (drop-in for WoC's /tx/{id}/proof/tsc and /block/{hash}/header),
+// used for Merkle-proof retrieval. NOTE: its tsc `target` is the MERKLE ROOT, whereas WoC's is the block hash —
+// so getMerkleProof adapts per source (see merkleProofBanana vs merkleProofWoC).
+const BANANA_WOC_BASE = (typeof location !== 'undefined' && location.hostname === 'localhost')
+  ? '/banana/api/v1/bsv/main'
+  : 'https://bananablocks.com/api/v1/bsv/main'
+
 // Orphan-guard poll: after a relay accepts, re-check the tx is actually visible; if it vanishes, re-broadcast.
 const CONFIRM_POLL_TRIES = 3
 const CONFIRM_POLL_INTERVAL_MS = 15_000
@@ -507,46 +514,64 @@ export class WalletProvider {
   // ── Merkle Proofs (feeds into proof chain construction) ───────
 
   async getMerkleProof(txId: string): Promise<MerkleProofEntry | null> {
-    const resp = await fetchWithRetry(`${WOC_BASE}/tx/${txId}/proof/tsc`)
-    if (!resp.ok) {
-      console.debug(`getMerkleProof: WoC returned ${resp.status} for ${txId.slice(0, 12)}...`)
-      return null
-    }
+    // Prefer BananaBlocks (independent + non-pruning → a more complete proof index than WoC); fall back to WoC.
+    // The two return DIFFERENT tsc `target`s — BananaBlocks = merkle root, WoC = block hash — so each has its own
+    // adapter below. Both anchor merkleRoot to the block HEADER (not the proof's self-reported target).
+    return (await this.merkleProofBanana(txId)) ?? (await this.merkleProofWoC(txId))
+  }
 
-    const raw = await resp.json()
-    console.debug('getMerkleProof: raw response:', JSON.stringify(raw).slice(0, 200))
-    const data = Array.isArray(raw) ? raw[0] : raw
-    if (!data || !data.target) {
-      console.debug('getMerkleProof: no target in proof data:', data)
-      return null
-    }
-
-    const nodes: string[] = data.nodes ?? []
-    const index: number = data.index ?? 0
+  /** TSC `nodes` + tx `index` → L/R sibling path ('*' = duplicate-up, no sibling). Shared by both sources. */
+  private tscPath(nodes: string[], index: number): MerklePathNode[] {
     const path: MerklePathNode[] = []
-
     let idx = index
     for (const node of nodes) {
-      if (node === '*') {
-        idx = idx >> 1
-        continue
-      }
-      const position: 'L' | 'R' = (idx % 2 === 0) ? 'R' : 'L'
-      path.push({ hash: node, position })
+      if (node === '*') { idx = idx >> 1; continue }
+      path.push({ hash: node, position: (idx % 2 === 0) ? 'R' : 'L' })
       idx = idx >> 1
     }
+    return path
+  }
 
-    const blockHash = data.target
-    const headerResp = await fetchWithRetry(`${WOC_BASE}/block/${blockHash}/header`)
+  /** BananaBlocks: tsc `target` is the MERKLE ROOT. Take the block hash from the native tx record, read the
+   *  header (trusted source of merkleroot + height), and require the header's root to equal the proof's target
+   *  — so the path is anchored to a header, not to the relay's self-reported root. */
+  private async merkleProofBanana(txId: string): Promise<MerkleProofEntry | null> {
+    try {
+      const pResp = await fetchWithRetry(`${BANANA_WOC_BASE}/tx/${txId}/proof/tsc`)
+      if (!pResp.ok) return null
+      const raw = await pResp.json()
+      const data = Array.isArray(raw) ? raw[0] : raw
+      if (!data?.target) return null
+      const path = this.tscPath(data.nodes ?? [], data.index ?? 0)
+
+      const txResp = await fetchWithRetry(`${BANANA_BASE}/tx/${txId}`)
+      if (!txResp.ok) return null
+      const blockHash = (await txResp.json())?.block_hash as string | undefined
+      if (!blockHash) return null
+
+      const hResp = await fetchWithRetry(`${BANANA_WOC_BASE}/block/${blockHash}/header`)
+      if (!hResp.ok) return null
+      const header = await hResp.json()
+      if (header?.merkleroot !== data.target) { // integrity gate: path root must match the header's root
+        console.debug(`getMerkleProof(banana): merkleroot mismatch for ${txId.slice(0, 12)}…`)
+        return null
+      }
+      return { txId, blockHeight: header.height, merkleRoot: header.merkleroot, path }
+    } catch { return null }
+  }
+
+  /** WoC: tsc `target` IS the block hash → its header gives merkleroot + height directly. */
+  private async merkleProofWoC(txId: string): Promise<MerkleProofEntry | null> {
+    const resp = await fetchWithRetry(`${WOC_BASE}/tx/${txId}/proof/tsc`)
+    if (!resp.ok) { console.debug(`getMerkleProof(woc): ${resp.status} for ${txId.slice(0, 12)}…`); return null }
+    const raw = await resp.json()
+    const data = Array.isArray(raw) ? raw[0] : raw
+    if (!data?.target) return null
+    const path = this.tscPath(data.nodes ?? [], data.index ?? 0)
+    const headerResp = await fetchWithRetry(`${WOC_BASE}/block/${data.target}/header`)
     if (!headerResp.ok) return null
     const header = await headerResp.json()
-
-    return {
-      txId,
-      blockHeight: header.height,
-      merkleRoot: header.merkleroot,
-      path,
-    }
+    return { txId, blockHeight: header.height, merkleRoot: header.merkleroot, path }
   }
 }
 

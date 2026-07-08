@@ -19185,6 +19185,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   // src/walletProvider.ts
   var WOC_BASE = typeof location !== "undefined" && location.hostname === "localhost" ? "/woc/v1/bsv/main" : "https://api.whatsonchain.com/v1/bsv/main";
   var BANANA_BASE = typeof location !== "undefined" && location.hostname === "localhost" ? "/banana/api/v1" : "https://bananablocks.com/api/v1";
+  var BANANA_WOC_BASE = typeof location !== "undefined" && location.hostname === "localhost" ? "/banana/api/v1/bsv/main" : "https://bananablocks.com/api/v1/bsv/main";
   var CONFIRM_POLL_TRIES = 3;
   var CONFIRM_POLL_INTERVAL_MS = 15e3;
   var MIN_REQUEST_DELAY = 350;
@@ -19581,20 +19582,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     // ── Merkle Proofs (feeds into proof chain construction) ───────
     async getMerkleProof(txId) {
-      const resp = await fetchWithRetry(`${WOC_BASE}/tx/${txId}/proof/tsc`);
-      if (!resp.ok) {
-        console.debug(`getMerkleProof: WoC returned ${resp.status} for ${txId.slice(0, 12)}...`);
-        return null;
-      }
-      const raw = await resp.json();
-      console.debug("getMerkleProof: raw response:", JSON.stringify(raw).slice(0, 200));
-      const data = Array.isArray(raw) ? raw[0] : raw;
-      if (!data || !data.target) {
-        console.debug("getMerkleProof: no target in proof data:", data);
-        return null;
-      }
-      const nodes = data.nodes ?? [];
-      const index = data.index ?? 0;
+      return await this.merkleProofBanana(txId) ?? await this.merkleProofWoC(txId);
+    }
+    /** TSC `nodes` + tx `index` → L/R sibling path ('*' = duplicate-up, no sibling). Shared by both sources. */
+    tscPath(nodes, index) {
       const path = [];
       let idx = index;
       for (const node of nodes) {
@@ -19602,20 +19593,53 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           idx = idx >> 1;
           continue;
         }
-        const position = idx % 2 === 0 ? "R" : "L";
-        path.push({ hash: node, position });
+        path.push({ hash: node, position: idx % 2 === 0 ? "R" : "L" });
         idx = idx >> 1;
       }
-      const blockHash = data.target;
-      const headerResp = await fetchWithRetry(`${WOC_BASE}/block/${blockHash}/header`);
+      return path;
+    }
+    /** BananaBlocks: tsc `target` is the MERKLE ROOT. Take the block hash from the native tx record, read the
+     *  header (trusted source of merkleroot + height), and require the header's root to equal the proof's target
+     *  — so the path is anchored to a header, not to the relay's self-reported root. */
+    async merkleProofBanana(txId) {
+      try {
+        const pResp = await fetchWithRetry(`${BANANA_WOC_BASE}/tx/${txId}/proof/tsc`);
+        if (!pResp.ok) return null;
+        const raw = await pResp.json();
+        const data = Array.isArray(raw) ? raw[0] : raw;
+        if (!data?.target) return null;
+        const path = this.tscPath(data.nodes ?? [], data.index ?? 0);
+        const txResp = await fetchWithRetry(`${BANANA_BASE}/tx/${txId}`);
+        if (!txResp.ok) return null;
+        const blockHash = (await txResp.json())?.block_hash;
+        if (!blockHash) return null;
+        const hResp = await fetchWithRetry(`${BANANA_WOC_BASE}/block/${blockHash}/header`);
+        if (!hResp.ok) return null;
+        const header = await hResp.json();
+        if (header?.merkleroot !== data.target) {
+          console.debug(`getMerkleProof(banana): merkleroot mismatch for ${txId.slice(0, 12)}\u2026`);
+          return null;
+        }
+        return { txId, blockHeight: header.height, merkleRoot: header.merkleroot, path };
+      } catch {
+        return null;
+      }
+    }
+    /** WoC: tsc `target` IS the block hash → its header gives merkleroot + height directly. */
+    async merkleProofWoC(txId) {
+      const resp = await fetchWithRetry(`${WOC_BASE}/tx/${txId}/proof/tsc`);
+      if (!resp.ok) {
+        console.debug(`getMerkleProof(woc): ${resp.status} for ${txId.slice(0, 12)}\u2026`);
+        return null;
+      }
+      const raw = await resp.json();
+      const data = Array.isArray(raw) ? raw[0] : raw;
+      if (!data?.target) return null;
+      const path = this.tscPath(data.nodes ?? [], data.index ?? 0);
+      const headerResp = await fetchWithRetry(`${WOC_BASE}/block/${data.target}/header`);
       if (!headerResp.ok) return null;
       const header = await headerResp.json();
-      return {
-        txId,
-        blockHeight: header.height,
-        merkleRoot: header.merkleroot,
-        path
-      };
+      return { txId, blockHeight: header.height, merkleRoot: header.merkleroot, path };
     }
   };
 
@@ -28771,7 +28795,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"a911803"} \xB7 ${"2026-07-08"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"5032c81"} \xB7 ${"2026-07-08"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
