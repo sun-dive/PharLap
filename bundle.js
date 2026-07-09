@@ -27929,7 +27929,17 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
           audio.controls = true;
           audio.autoplay = true;
           audio.src = cvPreviewObjectUrl;
-          prevHost.replaceChildren(audio);
+          audio.style.width = "100%";
+          audio.setAttribute("controlsList", "nodownload");
+          const ext = /mp4|m4a|aac/i.test(clip.mimeType || "") ? "m4a" : "mp3";
+          const base = (info.name || "preview").replace(/[\/\\:*?"<>|]+/g, "").replace(/\s+/g, " ").trim() || "preview";
+          const dl = document.createElement("a");
+          dl.href = cvPreviewObjectUrl;
+          dl.download = `${base}.${ext}`;
+          dl.textContent = "\u2B07 Download";
+          dl.title = "Download the preview clip";
+          dl.style.cssText = "display:inline-block;margin-top:6px;font-size:12px;color:var(--muted);text-decoration:none";
+          prevHost.replaceChildren(audio, dl);
         } catch (e) {
           btn.disabled = false;
           btn.textContent = "\u{1F3A7} Preview";
@@ -28976,7 +28986,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"9c39bba"} \xB7 ${"2026-07-09"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"0d463ec"} \xB7 ${"2026-07-09"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
