@@ -3274,8 +3274,10 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   const cover = storefront?.coverBytes
     ? { mimeType: storefront.coverMimeType ?? 'application/octet-stream', bytes: storefront.coverBytes }
     : null
-  const backCover = storefront?.backCoverBytes
-    ? { mimeType: storefront.backCoverMimeType ?? 'application/octet-stream', bytes: storefront.backCoverBytes }
+  // Back cover only counts if it's genuinely an IMAGE — a non-image (e.g. a zip mis-parked in the back-cover
+  // slot at mint) otherwise shows an empty flip on the sales page.
+  const backCover = storefront?.backCoverBytes && (storefront.backCoverMimeType ?? '').toLowerCase().startsWith('image/')
+    ? { mimeType: storefront.backCoverMimeType ?? 'image/jpeg', bytes: storefront.backCoverBytes }
     : null
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
