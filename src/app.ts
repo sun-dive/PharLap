@@ -3330,7 +3330,16 @@ function renderCollectionView(info: CollectionInfo): void {
         if (cvPreviewObjectUrl) URL.revokeObjectURL(cvPreviewObjectUrl)
         cvPreviewObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(clip.bytes)], { type: clip.mimeType || 'audio/mpeg' }))
         const audio = document.createElement('audio'); audio.controls = true; audio.autoplay = true; audio.src = cvPreviewObjectUrl
-        prevHost.replaceChildren(audio)
+        audio.style.width = '100%'
+        audio.setAttribute('controlsList', 'nodownload') // hide the native download — a blob url saves an unnamed file
+        // Our own download link so the clip saves as the collection title ("Artist - Track.mp3"). Blob urls are
+        // same-origin, so the download attribute's filename is honoured.
+        const ext = /mp4|m4a|aac/i.test(clip.mimeType || '') ? 'm4a' : 'mp3'
+        const base = (info.name || 'preview').replace(/[\/\\:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim() || 'preview'
+        const dl = document.createElement('a'); dl.href = cvPreviewObjectUrl; dl.download = `${base}.${ext}`
+        dl.textContent = '⬇ Download'; dl.title = 'Download the preview clip'
+        dl.style.cssText = 'display:inline-block;margin-top:6px;font-size:12px;color:var(--muted);text-decoration:none'
+        prevHost.replaceChildren(audio, dl)
       } catch (e) {
         btn.disabled = false; btn.textContent = '🎧 Preview'
         setCvStatus(`Preview failed: ${(e as Error).message}`, 'error')
