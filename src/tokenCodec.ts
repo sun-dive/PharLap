@@ -50,6 +50,12 @@ export const RECORD_PROFILE = 0x08
  *  address and ECIES-encrypted to itself — only that key can read it. Resolved by scanning your own address
  *  (latest-by-height wins) on WIF restore. See configBackup.ts. */
 export const RECORD_CONFIG = 0x09
+/** A publisher's PUBLIC audio preview clip for a collection — a "listen before you buy" sample. Locked to the
+ *  publisher's pubkey, keyed to a collection, posted on the publisher's own address and resolved by scan
+ *  (latest-by-publisher wins), exactly like a NOTE — but it carries a binary audio payload (mp3), not text, so
+ *  it lives in its own record instead of bloating the 3 KB note. Plaintext/public: any prospective buyer (and
+ *  the nft.sale curator, which holds no key) plays it with no decryption. See preview.ts. */
+export const RECORD_PREVIEW = 0x0A
 
 /** tokenRules restrictions bitfield. */
 export const RESTRICTION_FUNGIBLE = 0x0001 // interchangeable amounts (satoshis = units)
@@ -524,6 +530,59 @@ export function parseNoteScript(
   const fields = decodeNoteFields(d.fields)
   if (fields == null) return null
   return { authorPubKeyHex: d.pubKeyHex, fields }
+}
+
+// ─── PREVIEW record (a publisher's public audio sample) ─────────────
+//   [ P, version, RECORD_PREVIEW, collectionRef(32B), mimeType, previewBytes ]
+// Collection-keyed like NOTE + binary payload like FILE. Locked to the publisher's pubkey, posted on their own
+// address; resolved by scanning that address (latest-by-publisher wins). Public/plaintext — no encryption.
+
+export interface PreviewFields {
+  /** Collection id (TX1 txid, 32-byte hex) this preview is for. */
+  collectionRef: string
+  /** Audio MIME (e.g. 'audio/mpeg' for mp3). */
+  mimeType: string
+  /** The preview clip bytes (a short public sample; ~200–500 KB). */
+  previewBytes: number[]
+}
+
+export function encodePreviewFields(data: PreviewFields): number[][] {
+  return [
+    P_PREFIX,
+    [P_VERSION],
+    [RECORD_PREVIEW],
+    hexToBytes(data.collectionRef),
+    utf8ToBytes(data.mimeType),
+    data.previewBytes,
+  ]
+}
+
+export function decodePreviewFields(fields: number[][]): PreviewFields | null {
+  if (fields.length < 6) return null
+  if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null
+  if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
+  if (fields[2].length !== 1 || fields[2][0] !== RECORD_PREVIEW) return null
+  if (fields[3].length !== 32) return null
+  return {
+    collectionRef: bytesToHex(fields[3]),
+    mimeType: bytesToUtf8(fields[4]),
+    previewBytes: fields[5],
+  }
+}
+
+/** Build a PREVIEW PushDrop locking script, locked to the publisher's public key. */
+export function buildPreviewScript(publisherPubKeyHex: string, data: PreviewFields): LockingScript {
+  return pushDropLock(publisherPubKeyHex, encodePreviewFields(data))
+}
+
+export function parsePreviewScript(
+  script: LockingScript,
+): { publisherPubKeyHex: string; fields: PreviewFields } | null {
+  const d = pushDropDecode(script)
+  if (d == null) return null
+  const fields = decodePreviewFields(d.fields)
+  if (fields == null) return null
+  return { publisherPubKeyHex: d.pubKeyHex, fields }
 }
 
 // ─── CONFIG record (a key's encrypted self-backup) ──────────────────
