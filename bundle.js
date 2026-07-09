@@ -27846,7 +27846,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       }
     }
     const cover = storefront?.coverBytes ? { mimeType: storefront.coverMimeType ?? "application/octet-stream", bytes: storefront.coverBytes } : null;
-    const backCover = storefront?.backCoverBytes ? { mimeType: storefront.backCoverMimeType ?? "application/octet-stream", bytes: storefront.backCoverBytes } : null;
+    const backCover = storefront?.backCoverBytes && (storefront.backCoverMimeType ?? "").toLowerCase().startsWith("image/") ? { mimeType: storefront.backCoverMimeType ?? "image/jpeg", bytes: storefront.backCoverBytes } : null;
     return {
       tx1Ref,
       name: template.tokenName,
@@ -28976,7 +28976,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"7475d82"} \xB7 ${"2026-07-09"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"9c39bba"} \xB7 ${"2026-07-09"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
