@@ -25,6 +25,7 @@ import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
 import { resolveCue } from './sceneTimeline.ts'
 import { sendMessage, scanIncomingMessages, type IncomingMessage } from './messageBuilder.ts'
 import { publishSellerNote, resolveSellerNote, readNoteFromTx, noteHasContent, type SellerNote } from './sellerNote.ts'
+import { publishPreview, resolvePreview, MAX_PREVIEW_BYTES } from './preview.ts'
 import { publishBroadcast, resolveBroadcasts, type Broadcast } from './broadcast.ts'
 import { qrSvg, bsvPaymentUri } from './qr.ts'
 import type { Part } from './messageCodec.ts'
@@ -2362,6 +2363,36 @@ function tokenExtrasHtml(t: StoredToken): string {
     `${latest ? `<div class="state" style="color:var(--accent)">📣 ${escapeHtml(latest.text)}</div>` : ''}`
 }
 
+/** Publisher-only: publish a PUBLIC "listen before you buy" preview clip for a collection. The publisher uploads
+ *  a finished mp3 (trimmed in their DAW); it's posted on-chain under their key so the sales page + nft.sale can
+ *  play it to prospective buyers. Latest published wins. PHAR LAP does not trim/transcode — upload only. */
+async function onPublishPreview(t: StoredToken): Promise<void> {
+  const k = requireKey(); if (k == null) return
+  const name = t.collectionName ?? 'this collection'
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'audio/mpeg,.mp3'
+  input.onchange = async () => {
+    const clip = await readFile(input)
+    if (!clip) return
+    const kb = Math.round(clip.bytes.length / 1024)
+    if (clip.bytes.length > MAX_PREVIEW_BYTES) {
+      setStatus(`Preview too large (${kb} KB; max ${Math.round(MAX_PREVIEW_BYTES / 1024)} KB). Use a shorter or lower-bitrate mp3.`, 'error'); return
+    }
+    if (!confirm(`Publish a ${kb} KB preview clip for “${name}”?\n\nIt's posted on-chain (a small one-off fee) so anyone can listen before buying. Replaces any previous preview for this collection.`)) return
+    setStatus('Publishing preview clip…')
+    try {
+      const txId = await publishPreview(provider, k, t.collectionId, { mimeType: clip.mimeType || 'audio/mpeg', bytes: clip.bytes })
+      setStatusHtml(`🎧 Preview published ✓ — <a href="https://whatsonchain.com/tx/${txId}" target="_blank" rel="noopener">${txId.slice(0, 16)}…</a>`, 'ok')
+      toast('Preview clip published ✓')
+      console.info(`[preview] published ${txId} for ${t.collectionId}`)
+    } catch (e) {
+      setStatus(`Preview publish failed: ${(e as Error).message}`, 'error')
+    }
+  }
+  input.click()
+}
+
 /** The per-copy action buttons (Replicate/Transfer/OPEN/Sales/Verify for editions; Send/Verify/OPEN else). */
 function tokenActions(t: StoredToken, myHash: string): HTMLElement {
   const isEdition = t.kind === 'edition'
@@ -2418,7 +2449,10 @@ function tokenActions(t: StoredToken, myHash: string): HTMLElement {
         const bc = document.createElement('button')
         bc.textContent = '📣 Broadcast'; bc.className = 'secondary'
         bc.onclick = () => void onBroadcast(t)
-        actions.append(bc)
+        const prev = document.createElement('button')
+        prev.textContent = '🎧 Preview clip'; prev.className = 'secondary'
+        prev.onclick = () => void onPublishPreview(t)
+        actions.append(bc, prev)
       }
       const buyers = document.createElement('button')
       buyers.textContent = '👥 Buyers'; buyers.className = 'secondary'
@@ -3135,6 +3169,7 @@ interface CollectionInfo {
 
 let cvObjectUrl: string | null = null
 let cvBackObjectUrl: string | null = null // back-cover object URL for the sales-page flip
+let cvPreviewObjectUrl: string | null = null // audio-preview object URL for the sales page
 let currentCollection: { info: CollectionInfo; holderPubKey: string | null } | null = null
 /** The seller's current note (promo + optional bonus) for the open collection, captured onto a purchase. */
 let cvNote: SellerNote | null = null
@@ -3256,6 +3291,7 @@ function renderCollectionView(info: CollectionInfo): void {
   coverHost.innerHTML = ''
   if (cvObjectUrl) { URL.revokeObjectURL(cvObjectUrl); cvObjectUrl = null }
   if (cvBackObjectUrl) { URL.revokeObjectURL(cvBackObjectUrl); cvBackObjectUrl = null }
+  if (cvPreviewObjectUrl) { URL.revokeObjectURL(cvPreviewObjectUrl); cvPreviewObjectUrl = null }
   if (info.cover) {
     cvObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(info.cover.bytes)], { type: info.cover.mimeType }))
     const img = document.createElement('img'); img.src = cvObjectUrl; img.className = 'cv-cover-img'
@@ -3275,6 +3311,30 @@ function renderCollectionView(info: CollectionInfo): void {
     }
   } else {
     coverHost.innerHTML = '<div class="cv-cover-ph">🎴</div>'
+  }
+  // Public audio preview — a lazy "🎧 Preview": resolve + play only when a prospective buyer asks, so the sales
+  // page never fetches the (large) clip unless someone wants to listen. Plaintext/public — no holder gate.
+  const prevHost = $('cvPreview')
+  prevHost.innerHTML = ''
+  const pubForPreview = info.publisherPubKeyHex
+  if (pubForPreview != null) {
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'secondary'
+    btn.textContent = '🎧 Preview'
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = '⏳ Loading preview…'
+      try {
+        const clip = await resolvePreview(provider, pubForPreview, info.tx1Ref)
+        if (!clip) { btn.textContent = '🔇 No preview yet'; return }
+        if (cvPreviewObjectUrl) URL.revokeObjectURL(cvPreviewObjectUrl)
+        cvPreviewObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(clip.bytes)], { type: clip.mimeType || 'audio/mpeg' }))
+        const audio = document.createElement('audio'); audio.controls = true; audio.autoplay = true; audio.src = cvPreviewObjectUrl
+        prevHost.replaceChildren(audio)
+      } catch (e) {
+        btn.disabled = false; btn.textContent = '🎧 Preview'
+        setCvStatus(`Preview failed: ${(e as Error).message}`, 'error')
+      }
+    }
+    prevHost.append(btn)
   }
   const badges: string[] = []
   if (info.replicable) badges.push('<span class="badge">♾ Unlimited editions</span>')
@@ -3362,6 +3422,7 @@ function closeCollectionView(): void {
   $('collectionView').style.display = 'none'
   if (cvObjectUrl) { URL.revokeObjectURL(cvObjectUrl); cvObjectUrl = null }
   if (cvBackObjectUrl) { URL.revokeObjectURL(cvBackObjectUrl); cvBackObjectUrl = null }
+  if (cvPreviewObjectUrl) { URL.revokeObjectURL(cvPreviewObjectUrl); cvPreviewObjectUrl = null }
   // Drop the hash so a reload returns to the wallet rather than re-opening the storefront.
   if (location.hash) history.replaceState(null, '', location.pathname + location.search)
 }

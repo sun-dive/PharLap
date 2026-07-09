@@ -19856,6 +19856,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var RECORD_NOTE = 7;
   var RECORD_PROFILE = 8;
   var RECORD_CONFIG = 9;
+  var RECORD_PREVIEW = 10;
   var RESTRICTION_FUNGIBLE = 1;
   var RESTRICTION_REPLICABLE = 2;
   var RESTRICTION_TRACK_TRANSFERS = 4;
@@ -20141,6 +20142,38 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const fields = decodeNoteFields(d.fields);
     if (fields == null) return null;
     return { authorPubKeyHex: d.pubKeyHex, fields };
+  }
+  function encodePreviewFields(data) {
+    return [
+      P_PREFIX,
+      [P_VERSION],
+      [RECORD_PREVIEW],
+      hexToBytes(data.collectionRef),
+      utf8ToBytes2(data.mimeType),
+      data.previewBytes
+    ];
+  }
+  function decodePreviewFields(fields) {
+    if (fields.length < 6) return null;
+    if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null;
+    if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null;
+    if (fields[2].length !== 1 || fields[2][0] !== RECORD_PREVIEW) return null;
+    if (fields[3].length !== 32) return null;
+    return {
+      collectionRef: bytesToHex2(fields[3]),
+      mimeType: bytesToUtf8(fields[4]),
+      previewBytes: fields[5]
+    };
+  }
+  function buildPreviewScript(publisherPubKeyHex, data) {
+    return lock(publisherPubKeyHex, encodePreviewFields(data));
+  }
+  function parsePreviewScript(script) {
+    const d = decode(script);
+    if (d == null) return null;
+    const fields = decodePreviewFields(d.fields);
+    if (fields == null) return null;
+    return { publisherPubKeyHex: d.pubKeyHex, fields };
   }
   function encodeConfigFields(data) {
     return [P_PREFIX, [P_VERSION], [RECORD_CONFIG], data.envelope];
@@ -22922,6 +22955,79 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     const rank = (m) => m.height != null && m.height > 0 ? m.height : Number.MAX_SAFE_INTEGER;
     return found.sort((a, b) => rank(b) - rank(a) || (b.sentAt ?? 0) - (a.sentAt ?? 0));
+  }
+
+  // src/preview.ts
+  var MAX_PREVIEW_BYTES = 1048576;
+  var MAX_HISTORY_SCAN2 = 30;
+  async function publishPreview(provider2, key2, collectionId, clip) {
+    if (clip.bytes.length === 0) throw new Error("preview clip is empty");
+    if (clip.bytes.length > MAX_PREVIEW_BYTES) throw new Error(`preview exceeds ${MAX_PREVIEW_BYTES} bytes`);
+    const mimeType = clip.mimeType || "audio/mpeg";
+    const publisherPub = key2.toPublicKey().toString();
+    const estBytes = 300 + clip.bytes.length;
+    const estFee = Math.ceil(estBytes * DEFAULT_FEE_PER_KB / 1e3);
+    const target = PHARLAP_OUTPUT_SATS + estFee + Math.max(1e3, Math.ceil(estFee * 0.1));
+    const selected = selectFunding(await getSafeUtxos(provider2), target);
+    const funding = await Promise.all(
+      selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) }))
+    );
+    const tx = new Transaction();
+    for (const f2 of funding) {
+      tx.addInput({
+        sourceTransaction: f2.sourceTx,
+        sourceOutputIndex: f2.utxo.outputIndex,
+        unlockingScriptTemplate: new P2PKH().unlock(key2)
+      });
+    }
+    tx.addOutput({
+      lockingScript: buildPreviewScript(publisherPub, { collectionRef: collectionId, mimeType, previewBytes: clip.bytes }),
+      satoshis: PHARLAP_OUTPUT_SATS
+    });
+    tx.addOutput({ lockingScript: new P2PKH().lock(key2.toAddress()), change: true });
+    await tx.fee(new SatoshisPerKilobyte(DEFAULT_FEE_PER_KB));
+    await tx.sign();
+    await provider2.broadcast(tx.toHex());
+    const txId = tx.id("hex");
+    provider2.registerPendingTx(
+      txId,
+      selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
+      (tx.outputs[1]?.satoshis ?? 0) > 0 ? { outputIndex: 1, satoshis: tx.outputs[1].satoshis ?? 0 } : void 0
+    );
+    return txId;
+  }
+  async function resolvePreview(provider2, publisherPubKeyHex, collectionId) {
+    const address2 = PublicKey.fromString(publisherPubKeyHex).toAddress();
+    const heightByTx = /* @__PURE__ */ new Map();
+    try {
+      for (const h of await provider2.getAddressHistory(address2)) heightByTx.set(h.txId, h.blockHeight || 0);
+    } catch {
+    }
+    try {
+      for (const txId of await provider2.getRecentTxIdsForAddress(address2)) {
+        if (!heightByTx.has(txId)) heightByTx.set(txId, 0);
+      }
+    } catch {
+    }
+    if (heightByTx.size === 0) return null;
+    const ordered = [...heightByTx.entries()].sort((a, b) => (b[1] || 1e12) - (a[1] || 1e12)).slice(0, MAX_HISTORY_SCAN2).map(([txId]) => txId);
+    const pub = publisherPubKeyHex.toLowerCase();
+    const want = collectionId.toLowerCase();
+    for (const txId of ordered) {
+      let tx;
+      try {
+        tx = await provider2.getSourceTransaction(txId);
+      } catch {
+        continue;
+      }
+      for (const o of tx.outputs) {
+        const p = parsePreviewScript(o.lockingScript);
+        if (p && p.publisherPubKeyHex.toLowerCase() === pub && p.fields.collectionRef.toLowerCase() === want) {
+          return { mimeType: p.fields.mimeType, bytes: p.fields.previewBytes, txId };
+        }
+      }
+    }
+    return null;
   }
 
   // src/broadcast.ts
@@ -26736,6 +26842,36 @@ It's posted to your own address and spends a small network fee. Proceed?`
     const latest = latestBroadcast.get(t.collectionId);
     return `${stateText ? `<div class="state">state: ${escapeHtml(stateText)}</div>` : ""}${t.sellerNote ? `<div class="state" style="color:var(--accent2)">\u{1F4DD} ${escapeHtml(t.sellerNote)}</div>` : ""}${t.bonusValue ? t.bonusKind === "link" ? `<div class="state">\u{1F381} <a href="${escapeHtml(t.bonusValue)}" target="_blank" rel="noopener" class="bonus-claim">Claim your bonus \u2197</a></div>` : `<div class="state">\u{1F381} Bonus code: <span class="mono">${escapeHtml(t.bonusValue)}</span></div>` : ""}${latest ? `<div class="state" style="color:var(--accent)">\u{1F4E3} ${escapeHtml(latest.text)}</div>` : ""}`;
   }
+  async function onPublishPreview(t) {
+    const k = requireKey();
+    if (k == null) return;
+    const name = t.collectionName ?? "this collection";
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "audio/mpeg,.mp3";
+    input.onchange = async () => {
+      const clip = await readFile(input);
+      if (!clip) return;
+      const kb2 = Math.round(clip.bytes.length / 1024);
+      if (clip.bytes.length > MAX_PREVIEW_BYTES) {
+        setStatus(`Preview too large (${kb2} KB; max ${Math.round(MAX_PREVIEW_BYTES / 1024)} KB). Use a shorter or lower-bitrate mp3.`, "error");
+        return;
+      }
+      if (!confirm(`Publish a ${kb2} KB preview clip for \u201C${name}\u201D?
+
+It's posted on-chain (a small one-off fee) so anyone can listen before buying. Replaces any previous preview for this collection.`)) return;
+      setStatus("Publishing preview clip\u2026");
+      try {
+        const txId = await publishPreview(provider, k, t.collectionId, { mimeType: clip.mimeType || "audio/mpeg", bytes: clip.bytes });
+        setStatusHtml(`\u{1F3A7} Preview published \u2713 \u2014 <a href="https://whatsonchain.com/tx/${txId}" target="_blank" rel="noopener">${txId.slice(0, 16)}\u2026</a>`, "ok");
+        toast("Preview clip published \u2713");
+        console.info(`[preview] published ${txId} for ${t.collectionId}`);
+      } catch (e) {
+        setStatus(`Preview publish failed: ${e.message}`, "error");
+      }
+    };
+    input.click();
+  }
   function tokenActions(t, myHash) {
     const isEdition = t.kind === "edition";
     const iAmPublisher = t.publisherPubKeyHashHex != null && t.publisherPubKeyHashHex === myHash;
@@ -26798,7 +26934,11 @@ It's posted to your own address and spends a small network fee. Proceed?`
           bc.textContent = "\u{1F4E3} Broadcast";
           bc.className = "secondary";
           bc.onclick = () => void onBroadcast(t);
-          actions.append(bc);
+          const prev = document.createElement("button");
+          prev.textContent = "\u{1F3A7} Preview clip";
+          prev.className = "secondary";
+          prev.onclick = () => void onPublishPreview(t);
+          actions.append(bc, prev);
         }
         const buyers = document.createElement("button");
         buyers.textContent = "\u{1F465} Buyers";
@@ -27595,6 +27735,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
   }
   var cvObjectUrl = null;
   var cvBackObjectUrl = null;
+  var cvPreviewObjectUrl = null;
   var currentCollection = null;
   var cvNote = null;
   var cvGiftWif = null;
@@ -27737,6 +27878,10 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       URL.revokeObjectURL(cvBackObjectUrl);
       cvBackObjectUrl = null;
     }
+    if (cvPreviewObjectUrl) {
+      URL.revokeObjectURL(cvPreviewObjectUrl);
+      cvPreviewObjectUrl = null;
+    }
     if (info.cover) {
       cvObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(info.cover.bytes)], { type: info.cover.mimeType }));
       const img = document.createElement("img");
@@ -27760,6 +27905,38 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       }
     } else {
       coverHost.innerHTML = '<div class="cv-cover-ph">\u{1F3B4}</div>';
+    }
+    const prevHost = $("cvPreview");
+    prevHost.innerHTML = "";
+    const pubForPreview = info.publisherPubKeyHex;
+    if (pubForPreview != null) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "secondary";
+      btn.textContent = "\u{1F3A7} Preview";
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = "\u23F3 Loading preview\u2026";
+        try {
+          const clip = await resolvePreview(provider, pubForPreview, info.tx1Ref);
+          if (!clip) {
+            btn.textContent = "\u{1F507} No preview yet";
+            return;
+          }
+          if (cvPreviewObjectUrl) URL.revokeObjectURL(cvPreviewObjectUrl);
+          cvPreviewObjectUrl = URL.createObjectURL(new Blob([new Uint8Array(clip.bytes)], { type: clip.mimeType || "audio/mpeg" }));
+          const audio = document.createElement("audio");
+          audio.controls = true;
+          audio.autoplay = true;
+          audio.src = cvPreviewObjectUrl;
+          prevHost.replaceChildren(audio);
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = "\u{1F3A7} Preview";
+          setCvStatus(`Preview failed: ${e.message}`, "error");
+        }
+      };
+      prevHost.append(btn);
     }
     const badges = [];
     if (info.replicable) badges.push('<span class="badge">\u267E Unlimited editions</span>');
@@ -27841,6 +28018,10 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     if (cvBackObjectUrl) {
       URL.revokeObjectURL(cvBackObjectUrl);
       cvBackObjectUrl = null;
+    }
+    if (cvPreviewObjectUrl) {
+      URL.revokeObjectURL(cvPreviewObjectUrl);
+      cvPreviewObjectUrl = null;
     }
     if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   }
@@ -28795,7 +28976,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"2f511ad"} \xB7 ${"2026-07-08"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"7475d82"} \xB7 ${"2026-07-09"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
