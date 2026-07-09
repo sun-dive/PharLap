@@ -29,3 +29,4 @@ VIDEO_SCRIPTS.md
 # OG preview cache (created at runtime on the server)
 /og/
 /links/
+refresh.php
