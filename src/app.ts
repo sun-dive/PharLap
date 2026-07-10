@@ -593,6 +593,12 @@ async function onMint(): Promise<void> {
 /** Default refundable bond (sats) each edition rides on; the publisher overrides it per collection at mint. */
 const EDITION_BOND_SATS = 2100
 
+/** Readable price: large amounts as BSV (0.485 BSV / 1.25 BSV, ≥ 0.01 BSV), small ones as whole sats. */
+function fmtPrice (sats: number): string {
+  const s = Math.round(Number(sats) || 0)
+  return s >= 1_000_000 ? (s / 1e8).toFixed(3).replace(/\.?0+$/, '') + ' BSV' : s.toLocaleString() + ' sats'
+}
+
 /** The bond chosen in the mint form (≥ 1 sat dust floor). */
 function chosenBond(): number {
   return Math.max(1, parseInt(val('edBond') || String(EDITION_BOND_SATS), 10))
@@ -3360,15 +3366,15 @@ function renderCollectionView(info: CollectionInfo): void {
   $('cvDesc').textContent = info.description || '(no description provided)'
   const bond = info.bondSats || 0
   // Show the real buyer total: the seller's price/fees PLUS the refundable bond locked into the buyer's own copy.
-  const bondBit = bond > 1 ? ` + ${bond.toLocaleString()} refundable bond` : ''
-  const bondTail = bond > 1 ? `; the ${bond.toLocaleString()}-sat bond is reclaimable by burning your copy` : ''
+  const bondBit = bond > 1 ? ` + ${fmtPrice(bond)} refundable bond` : ''
+  const bondTail = bond > 1 ? `; the ${fmtPrice(bond)} bond is reclaimable by burning your copy` : ''
   if (info.isV2) {
     const total = info.v2PriceSats + bond
-    $('cvPrice').innerHTML = `Get your own copy — <b>${total.toLocaleString()} sats</b> <span class="muted">` +
-      `(reseller's price ${info.v2PriceSats.toLocaleString()}${bondBit}; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sats, plus a small network fee${bondTail})</span>`
+    $('cvPrice').innerHTML = `Get your own copy — <b title="${total.toLocaleString()} sats">${fmtPrice(total)}</b> <span class="muted">` +
+      `(reseller's price ${fmtPrice(info.v2PriceSats)}${bondBit}; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 10000)} sats, plus a small network fee${bondTail})</span>`
   } else if (info.fees) {
     const total = info.fees.publisher + info.fees.holder + bond
-    $('cvPrice').innerHTML = `Get your own copy — <b>${total.toLocaleString()} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}${bondBit}, plus a small network fee${bondTail})</span>`
+    $('cvPrice').innerHTML = `Get your own copy — <b title="${total.toLocaleString()} sats">${fmtPrice(total)}</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}${bondBit}, plus a small network fee${bondTail})</span>`
   } else {
     $('cvPrice').innerHTML = '<span class="muted">This collection is not a replicable edition.</span>'
   }
