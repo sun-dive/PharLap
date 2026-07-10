@@ -24948,6 +24948,10 @@ Proceed?`
     }
   }
   var EDITION_BOND_SATS = 2100;
+  function fmtPrice(sats) {
+    const s2 = Math.round(Number(sats) || 0);
+    return s2 >= 1e6 ? (s2 / 1e8).toFixed(3).replace(/\.?0+$/, "") + " BSV" : s2.toLocaleString() + " sats";
+  }
   function chosenBond() {
     return Math.max(1, parseInt(val("edBond") || String(EDITION_BOND_SATS), 10));
   }
@@ -27962,14 +27966,14 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     }
     $("cvDesc").textContent = info.description || "(no description provided)";
     const bond = info.bondSats || 0;
-    const bondBit = bond > 1 ? ` + ${bond.toLocaleString()} refundable bond` : "";
-    const bondTail = bond > 1 ? `; the ${bond.toLocaleString()}-sat bond is reclaimable by burning your copy` : "";
+    const bondBit = bond > 1 ? ` + ${fmtPrice(bond)} refundable bond` : "";
+    const bondTail = bond > 1 ? `; the ${fmtPrice(bond)} bond is reclaimable by burning your copy` : "";
     if (info.isV2) {
       const total = info.v2PriceSats + bond;
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${total.toLocaleString()} sats</b> <span class="muted">(reseller's price ${info.v2PriceSats.toLocaleString()}${bondBit}; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee${bondTail})</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b title="${total.toLocaleString()} sats">${fmtPrice(total)}</b> <span class="muted">(reseller's price ${fmtPrice(info.v2PriceSats)}${bondBit}; publisher takes ${(info.pBps / 100).toFixed(2)}% = ${Math.floor(info.v2PriceSats * info.pBps / 1e4)} sats, plus a small network fee${bondTail})</span>`;
     } else if (info.fees) {
       const total = info.fees.publisher + info.fees.holder + bond;
-      $("cvPrice").innerHTML = `Get your own copy \u2014 <b>${total.toLocaleString()} sats</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}${bondBit}, plus a small network fee${bondTail})</span>`;
+      $("cvPrice").innerHTML = `Get your own copy \u2014 <b title="${total.toLocaleString()} sats">${fmtPrice(total)}</b> <span class="muted">(publisher ${info.fees.publisher} + holder ${info.fees.holder}${bondBit}, plus a small network fee${bondTail})</span>`;
     } else {
       $("cvPrice").innerHTML = '<span class="muted">This collection is not a replicable edition.</span>';
     }
@@ -28986,7 +28990,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"0d463ec"} \xB7 ${"2026-07-09"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"8ddbb15"} \xB7 ${"2026-07-10"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
