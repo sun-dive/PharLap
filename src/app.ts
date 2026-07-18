@@ -1901,10 +1901,15 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   // (lyrics can overlay on top). Same active-index drive as the lyrics.
   const videoToggle = q<HTMLElement>('.ep-video-toggle')
   const scene = q<HTMLImageElement>('.ep-scene')
+  // Size the video view to the clip's real aspect ratio (square, 16:9, whatever) so it uses the largest
+  // available space instead of being centre-cropped into a fixed 1:1 box.
+  scene.onload = (): void => {
+    if (scene.naturalWidth > 0 && scene.naturalHeight > 0) player.style.setProperty('--ep-vid-ar', (scene.naturalWidth / scene.naturalHeight).toFixed(4))
+  }
   let timeline: SceneTimeline | null = null
   let lastScene = -1
   function loadTimeline(tl: SceneTimeline | null): void {
-    timeline = tl; lastScene = -1; scene.removeAttribute('src')
+    timeline = tl; lastScene = -1; scene.removeAttribute('src'); player.style.removeProperty('--ep-vid-ar')
     if (tl == null) { videoToggle.hidden = true; player.classList.remove('video-view'); return }
     videoToggle.hidden = false
   }
