@@ -19,6 +19,7 @@ import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './co
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
 import { packManifest, parseManifest, isManifest, MANIFEST_MIME, type ManifestRef } from './refManifest.ts'
+import { isBmf, parseBmf, fmtLrcTime } from './bmf.ts'
 import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
 import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
 import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
@@ -1609,11 +1610,63 @@ async function fetchCollectionContent(collectionId: string): Promise<DecodedCont
   return { mimeType: file.mimeType, fileName: file.fileName, bytes, verified, msg }
 }
 
+/** Resolve a Block Media Format (BMF) manifest: fetch each on-chain component (audio + scene clips) by its
+ *  txid, then hand the lot to the EXISTING scene-timeline player as an in-memory album — audio track + scene
+ *  clips + a synthesized `video.cue`. Each fetched component self-verifies against its own on-chain commitment
+ *  (fetchCollectionContent), so a resolved video is a composition of independently-provenanced, owned parts.
+ *  A clip referenced at several cues is fetched once and reused (store-once, reference-many). */
+async function viewBmf(collectionId: string, name: string, manifest: DecodedContent): Promise<void> {
+  const bmf = parseBmf(manifest.bytes)
+  if (bmf == null) { setStatus('This release is a Block Media manifest, but it is unreadable.', 'error'); return }
+  const distinctTx = new Set(bmf.scenes.filter(s => s.tx != null).map(s => s.tx as string)).size + (bmf.audio?.tx != null ? 1 : 0)
+  setStatus(`Resolving ${distinctTx} on-chain component${distinctTx === 1 ? '' : 's'} for the video…`)
+  const tracks: AlbumTrack[] = []
+  let missing = 0
+  // Audio (referenced by tx → fetch its bytes from chain).
+  let audioName = bmf.audio?.name ?? ''
+  if (bmf.audio?.tx != null) {
+    let d: DecodedContent | null = null
+    try { d = await fetchCollectionContent(bmf.audio.tx) } catch { d = null }
+    if (d != null) { audioName = bmf.audio.name || d.fileName; tracks.push({ name: audioName, mimeType: d.mimeType, bytes: d.bytes }) }
+    else missing++
+  }
+  // Scenes — fetch each DISTINCT tx once; remember the track name it resolved to for the cue.
+  const nameForTx = new Map<string, string>()
+  for (const s of bmf.scenes) {
+    if (s.tx == null || nameForTx.has(s.tx)) continue
+    let d: DecodedContent | null = null
+    try { d = await fetchCollectionContent(s.tx) } catch { d = null }
+    if (d == null) { missing++; nameForTx.set(s.tx, ''); continue }
+    const nm = s.name || d.fileName || `scene-${nameForTx.size + 1}.webp`
+    tracks.push({ name: nm, mimeType: d.mimeType || 'image/webp', bytes: d.bytes })
+    nameForTx.set(s.tx, nm)
+  }
+  // Synthesized cue mapping each scene time → its resolved track name (skip unresolved refs).
+  const cueLines: string[] = []
+  if (audioName) cueLines.push(`# audio: ${audioName}`)
+  for (const s of bmf.scenes) {
+    const nm = s.tx != null ? nameForTx.get(s.tx) : s.name
+    if (nm) cueLines.push(`[${fmtLrcTime(s.t)}]${nm}`)
+  }
+  tracks.push({ name: 'video.cue', mimeType: 'text/plain', bytes: Array.from(new TextEncoder().encode(cueLines.join('\n') + '\n')) })
+  if (tracks.every(t => /\.(cue|lrc)$/i.test(t.name))) { setStatus('None of the video’s components could be resolved on-chain.', 'error'); return }
+  // The manifest mint's own cover → disc fallback (best-effort).
+  let epCover: { mimeType: string; bytes: number[] } | null = null
+  try { epCover = (await loadCollection(collectionId)).cover } catch { /* no cover */ }
+  const msg = missing === 0
+    ? `✓ Block Media video resolved — ${nameForTx.size} scene component${nameForTx.size === 1 ? '' : 's'}${audioName ? ' + audio' : ''} fetched from chain and sequenced`
+    : `⚠ Block Media video: ${missing} component${missing === 1 ? '' : 's'} unavailable on-chain (played without them)`
+  showAlbumTracks(name, tracks, missing === 0 && manifest.verified, msg, `Block Media video · ${bmf.scenes.length} cues`, epCover)
+  setStatus(msg, missing === 0 ? 'ok' : 'error')
+}
+
 async function onView(collectionId: string, collectionName: string): Promise<void> {
   setStatus('Loading the embedded file from the collection…')
   try {
     const decoded = await fetchCollectionContent(collectionId)
     if (decoded == null) { setStatus(`"${collectionName}" has no embedded file.`, 'info'); return }
+    // A Block Media Format manifest references on-chain components (audio + scene clips) — resolve + play as video.
+    if (isBmf(decoded.mimeType, decoded.bytes)) { await viewBmf(collectionId, collectionName, decoded); return }
     // A reference manifest points at other works instead of embedding bytes — resolve + play them as an album.
     if (isManifest(decoded.mimeType, decoded.bytes)) { await viewReferenceManifest(collectionId, collectionName, decoded); return }
     showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg)
