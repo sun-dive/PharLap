@@ -18,6 +18,8 @@ export interface BmfRef { t: number; tx: string | null; name: string }
 export interface BmfManifest {
   audio: { tx: string | null; name: string } | null
   tempo: number | null
+  license: string | null       // reuse terms declared by the author, e.g. "CC BY 4.0"
+  attribution: string | null   // who to credit, e.g. "Evidnus"
   scenes: BmfRef[]
 }
 
@@ -51,7 +53,7 @@ export function isBmf(mimeType: string | null | undefined, bytes?: number[]): bo
 export function parseBmf(bytes: number[]): BmfManifest | null {
   const text = new TextDecoder().decode(new Uint8Array(bytes)).replace(/^﻿/, '').trim()
   if (text.startsWith('{')) {
-    let j: { audio?: { tx?: unknown; name?: unknown }; tempo?: unknown; scenes?: { t?: unknown; tx?: unknown; name?: unknown }[] }
+    let j: { audio?: { tx?: unknown; name?: unknown }; tempo?: unknown; license?: unknown; attribution?: unknown; scenes?: { t?: unknown; tx?: unknown; name?: unknown }[] }
     try { j = JSON.parse(text) } catch { return null }
     if (j == null || !Array.isArray(j.scenes)) return null
     const scenes: BmfRef[] = []
@@ -62,22 +64,32 @@ export function parseBmf(bytes: number[]): BmfManifest | null {
     }
     if (scenes.length === 0) return null
     const audio = j.audio != null ? { tx: toTxid(j.audio.tx), name: String(j.audio.name ?? 'audio') } : null
-    return { audio, tempo: isFinite(Number(j.tempo)) && Number(j.tempo) > 0 ? Number(j.tempo) : null, scenes: scenes.sort((a, b) => a.t - b.t) }
+    return {
+      audio, tempo: isFinite(Number(j.tempo)) && Number(j.tempo) > 0 ? Number(j.tempo) : null,
+      license: j.license != null ? String(j.license) : null,
+      attribution: j.attribution != null ? String(j.attribution) : null,
+      scenes: scenes.sort((a, b) => a.t - b.t),
+    }
   }
-  // Cue form: `[mm:ss.cc]name` scene lines + `# audio:`/`# tempo:` headers.
+  // Cue form: `[mm:ss.cc]name` scene lines + `# audio:`/`# tempo:`/`# license:`/`# attribution:` headers.
   const scenes: BmfRef[] = []
   let audioName: string | null = null
   let tempo: number | null = null
+  let license: string | null = null
+  let attribution: string | null = null
   for (const line of text.split(/\r?\n/)) {
-    const h = line.match(/^#\s*(audio|tempo)\s*:\s*(.+)$/i)
+    const h = line.match(/^#\s*(audio|tempo|license|attribution)\s*:\s*(.+)$/i)
     if (h != null) {
-      if (h[1].toLowerCase() === 'audio') audioName = h[2].trim()
-      else { const v = Number(h[2]); tempo = isFinite(v) && v > 0 ? v : null }
+      const key = h[1].toLowerCase(), val = h[2].trim()
+      if (key === 'audio') audioName = val
+      else if (key === 'tempo') { const v = Number(val); tempo = isFinite(v) && v > 0 ? v : null }
+      else if (key === 'license') license = val
+      else attribution = val
       continue
     }
     const m = line.match(/^\[(\d{1,2}):(\d{1,2}(?:\.\d{1,2})?)\](.+)$/)
     if (m != null) scenes.push({ t: parseInt(m[1], 10) * 60 + parseFloat(m[2]), tx: null, name: m[3].trim() })
   }
   if (scenes.length === 0) return null
-  return { audio: audioName != null ? { tx: null, name: audioName } : null, tempo, scenes: scenes.sort((a, b) => a.t - b.t) }
+  return { audio: audioName != null ? { tx: null, name: audioName } : null, tempo, license, attribution, scenes: scenes.sort((a, b) => a.t - b.t) }
 }

@@ -1653,10 +1653,13 @@ async function viewBmf(collectionId: string, name: string, manifest: DecodedCont
   // The manifest mint's own cover → disc fallback (best-effort).
   let epCover: { mimeType: string; bytes: number[] } | null = null
   try { epCover = (await loadCollection(collectionId)).cover } catch { /* no cover */ }
-  const msg = missing === 0
+  const lic = bmf.license != null ? `${bmf.license}${bmf.attribution ? ` — attribute ${bmf.attribution}` : ''}` : ''
+  const msg = (missing === 0
     ? `✓ Block Media video resolved — ${nameForTx.size} scene component${nameForTx.size === 1 ? '' : 's'}${audioName ? ' + audio' : ''} fetched from chain and sequenced`
-    : `⚠ Block Media video: ${missing} component${missing === 1 ? '' : 's'} unavailable on-chain (played without them)`
-  showAlbumTracks(name, tracks, missing === 0 && manifest.verified, msg, `Block Media video · ${bmf.scenes.length} cues`, epCover)
+    : `⚠ Block Media video: ${missing} component${missing === 1 ? '' : 's'} unavailable on-chain (played without them)`)
+    + (lic ? ` · Reuse: ${lic}` : '')
+  const subtitle = `Block Media video · ${bmf.scenes.length} cues${lic ? ` · ${lic}` : ''}`
+  showAlbumTracks(name, tracks, missing === 0 && manifest.verified, msg, subtitle, epCover)
   setStatus(msg, missing === 0 ? 'ok' : 'error')
 }
 

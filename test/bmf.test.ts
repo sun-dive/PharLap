@@ -65,6 +65,18 @@ test('isBmf: detects by mime, JSON content, and cue header', () => {
   assert.equal(isBmf(null, toBytes('# just a normal cue\n[00:00.00]a.webp')), false)
 })
 
+test('parseBmf: reuse license + attribution (JSON and cue forms)', () => {
+  const j = parseBmf(toBytes(JSON.stringify({ bmf: 0, license: 'CC BY 4.0', attribution: 'Evidnus', scenes: [{ t: 0, tx: TX, name: 'a.webp' }] })))
+  assert.equal(j!.license, 'CC BY 4.0')
+  assert.equal(j!.attribution, 'Evidnus')
+  const c = parseBmf(toBytes('# bmf: 0\n# license: CC0 1.0\n# attribution: SunDive\n[00:00.00]a.webp\n'))
+  assert.equal(c!.license, 'CC0 1.0')
+  assert.equal(c!.attribution, 'SunDive')
+  const none = parseBmf(toBytes(JSON.stringify({ bmf: 0, scenes: [{ t: 0, name: 'a.webp' }] })))
+  assert.equal(none!.license, null)
+  assert.equal(none!.attribution, null)
+})
+
 test('fmtLrcTime: seconds → mm:ss.cc with carry', () => {
   assert.equal(fmtLrcTime(0), '00:00.00')
   assert.equal(fmtLrcTime(4.36), '00:04.36')
