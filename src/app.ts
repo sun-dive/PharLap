@@ -32,7 +32,7 @@ import { qrSvg, bsvPaymentUri } from './qr.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage, verifyEditionCovenant } from './verify.ts'
-import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields, type StorefrontFields } from './tokenCodec.ts'
+import { parseTemplateScript, parseFileScript, parseStorefrontScript, parseLegacyFileScript, decodeTokenRules, type TemplateFields, type StorefrontFields } from './tokenCodec.ts'
 import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime, downscaleToAvatar } from './thumbs.ts'
 import { publishProfile, resolveProfile } from './profile.ts'
 import { readCorridor, postToNodeFeed, type CorridorNode, type DiscPost } from './discussion.ts'
@@ -1586,7 +1586,19 @@ async function fetchCollectionContent(collectionId: string): Promise<DecodedCont
     const f = parseFileScript(o.lockingScript); if (f) file = f.fields
     const t = parseTemplateScript(o.lockingScript); if (t) template = t.fields
   }
-  if (!file) return null
+  if (!file) {
+    // Legacy plaintext provenance mints (MPT-FILE / P-FILE): unencrypted content in an OP_RETURN, authentic
+    // by being the on-chain tx itself. Lets an origin mint be reused/played in a BMF composition.
+    for (const o of tx1.outputs) {
+      const leg = parseLegacyFileScript(o.lockingScript)
+      if (leg == null) continue
+      const bytes = leg.fields.fileBytes
+      const msg = `📜 Legacy ${leg.marker} — original on-chain provenance mint (plaintext, unencrypted)`
+      void cachedContentPut(collectionId, { mimeType: leg.fields.mimeType, fileName: leg.fields.fileName, bytes: new Uint8Array(bytes), verified: true, msg })
+      return { mimeType: leg.fields.mimeType, fileName: leg.fields.fileName, bytes, verified: true, msg }
+    }
+    return null
+  }
   const rules = template != null ? decodeTokenRules(template.tokenRules) : null
   const encrypted = rules?.isEncrypted ?? false
   // fileHash binds the ciphertext for encrypted content (privacy) but the ORIGINAL plaintext for public

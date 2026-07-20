@@ -327,6 +327,41 @@ export function parseFileScript(
   return { publisherPubKeyHex: d.pubKeyHex, fields }
 }
 
+// ─── LEGACY plaintext file format (pre-covenant provenance mints) ────────────────────────────────────
+// The original on-chain file encoding, superseded by the PushDrop FILE record above but still resolvable so
+// an origin provenance mint can be reused/played in a Block Media Format composition. Layout:
+//   OP_FALSE OP_RETURN  <marker>  <mimeType>  <fileName>  <data…>
+// where <marker> is "MPT-FILE" (Merkle-Proof-Token generation) or "P-FILE" (P-protocol generation). The
+// content is plaintext + unencrypted — authentic by being the on-chain transaction itself (no separate hash
+// commitment or Tier-1 wrapping). Extend LEGACY_FILE_MARKERS if further generations appear.
+const LEGACY_FILE_MARKERS = new Set(['MPT-FILE', 'P-FILE'])
+function readLegacyPush(bytes: number[], i: number): { data: number[]; next: number } | null {
+  const op = bytes[i++]
+  let len: number
+  if (op >= 0x01 && op <= 0x4b) len = op
+  else if (op === 0x4c) len = bytes[i++]
+  else if (op === 0x4d) { len = bytes[i] | (bytes[i + 1] << 8); i += 2 }
+  else if (op === 0x4e) { len = bytes[i] + bytes[i + 1] * 0x100 + bytes[i + 2] * 0x10000 + bytes[i + 3] * 0x1000000; i += 4 }
+  else return null // not a pushdata opcode
+  if (i + len > bytes.length) return null
+  return { data: bytes.slice(i, i + len), next: i + len }
+}
+export function parseLegacyFileScript(script: LockingScript): { fields: FileFields; marker: string } | null {
+  const bytes = script.toBinary()
+  let i = 0
+  if (bytes[i] === 0x00) i++ // optional OP_FALSE
+  if (bytes[i] !== 0x6a) return null // OP_RETURN
+  i++
+  const parts: number[][] = []
+  while (i < bytes.length) { const r = readLegacyPush(bytes, i); if (r == null) break; parts.push(r.data); i = r.next }
+  if (parts.length < 4) return null
+  const marker = Utils.toUTF8(parts[0])
+  if (!LEGACY_FILE_MARKERS.has(marker)) return null
+  const fileBytes: number[] = []
+  for (const p of parts.slice(3)) for (const b of p) fileBytes.push(b) // concat remaining pushes = the file
+  return { fields: { mimeType: Utils.toUTF8(parts[1]), fileName: Utils.toUTF8(parts[2]), fileBytes }, marker }
+}
+
 // ─── STOREFRONT record (TX1, optional) ──────────────────────────────
 // Immutable "what you're buying" metadata, carried as its own TX1 output so it stays in an immutable
 // record (TX1 is the Collection ID tx, never re-created) instead of the mutable stateData field. Every
