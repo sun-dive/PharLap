@@ -20,7 +20,7 @@ import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
 import { packManifest, parseManifest, isManifest, MANIFEST_MIME, type ManifestRef } from './refManifest.ts'
 import { isBmf, parseBmf, fmtLrcTime } from './bmf.ts'
-import { parseBmcSet, bmcMember } from './bmc.ts'
+import { parseBmcSet, bmcMember, type BmcSet } from './bmc.ts'
 import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
 import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
 import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
@@ -1700,6 +1700,9 @@ async function onView(collectionId: string, collectionName: string): Promise<voi
     if (isBmf(decoded.mimeType, decoded.bytes)) { await viewBmf(collectionId, collectionName, decoded); return }
     // A reference manifest points at other works instead of embedding bytes — resolve + play them as an album.
     if (isManifest(decoded.mimeType, decoded.bytes)) { await viewReferenceManifest(collectionId, collectionName, decoded); return }
+    // A BMC set is a store-only ZIP of independently-referenceable members — show them inline, not just the container.
+    const bmcSet = parseBmcSet(decoded.bytes)
+    if (bmcSet != null) { viewBmc(collectionName, decoded, bmcSet); setStatus(decoded.msg, decoded.verified ? 'ok' : 'error'); return }
     showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg)
     setStatus(decoded.msg, decoded.verified ? 'ok' : 'error')
   } catch (e) {
@@ -2201,6 +2204,62 @@ function showFile(title: string, file: { mimeType: string; fileName: string; fil
     a.className = 'viewer-dl'
     content.append(a)
   }
+  $('viewer').style.display = 'flex'
+}
+
+/** A BMC set is a store-only ZIP of N independently-referenceable members. Rather than hand over the opaque
+ *  .bmc as a download, render each member inline (image/audio/video/text → the right element, else a per-member
+ *  download link) with its name, plus a whole-set download for reuse/import elsewhere. */
+function viewBmc(title: string, content: DecodedContent, set: BmcSet): void {
+  const el = $('viewerContent')
+  revokeAlbumUrls()
+  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null }
+  $('viewerTitle').textContent =
+    `${title} — 📦 BMC set · ${set.members.length} member${set.members.length === 1 ? '' : 's'} · ${kb(content.bytes.length)}`
+  const banner = $('viewerProvenance')
+  banner.textContent = content.msg
+  banner.className = `viewer-banner ${content.verified ? 'ok' : 'error'}`
+  banner.style.display = 'block'
+  el.innerHTML = ''
+
+  const grid = document.createElement('div')
+  grid.style.cssText = 'display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-bottom:14px'
+  for (const m of set.members) {
+    const mime = (m.mimeType || 'application/octet-stream').toLowerCase()
+    const url = URL.createObjectURL(new Blob([new Uint8Array(m.bytes)], { type: mime }))
+    albumUrls.push(url) // revoked by revokeAlbumUrls() on close / next view
+    const card = document.createElement('div')
+    card.style.cssText = 'border:1px solid var(--line);border-radius:8px;padding:10px;background:#0d1117'
+    const label = document.createElement('div')
+    label.style.cssText = 'font-size:12px;font-weight:600;opacity:0.75;margin-bottom:8px;word-break:break-word'
+    label.textContent = `${m.name} · ${mime} · ${kb(m.bytes.length)}`
+    card.append(label)
+    if (mime.startsWith('image/')) {
+      const img = document.createElement('img'); img.src = url; img.className = 'viewer-img'; img.loading = 'lazy'; card.append(img)
+    } else if (mime.startsWith('audio/')) {
+      const au = document.createElement('audio'); au.src = url; au.controls = true; au.style.width = '100%'; card.append(au)
+    } else if (mime.startsWith('video/')) {
+      const v = document.createElement('video'); v.src = url; v.className = 'viewer-img'; v.controls = true; v.loop = true; v.playsInline = true; card.append(v)
+    } else if (mime.startsWith('text/') || mime === 'application/json') {
+      const pre = document.createElement('pre'); pre.className = 'viewer-pre'; pre.textContent = new TextDecoder().decode(new Uint8Array(m.bytes)); card.append(pre)
+    }
+    const dl = document.createElement('a')
+    dl.href = url; dl.download = m.file; dl.textContent = `⬇ ${m.file}`; dl.className = 'viewer-dl'
+    dl.style.cssText = 'display:inline-block;margin-top:8px;font-size:12px'
+    card.append(dl)
+    grid.append(card)
+  }
+  el.append(grid)
+
+  // The whole opaque .bmc container, for reuse/import into another composition.
+  const setUrl = URL.createObjectURL(new Blob([new Uint8Array(content.bytes)], { type: 'application/octet-stream' }))
+  albumUrls.push(setUrl)
+  const setDl = document.createElement('a')
+  setDl.href = setUrl; setDl.download = content.fileName || `${set.name}.bmc`
+  setDl.textContent = `⬇ Download the whole set (${content.fileName || `${set.name}.bmc`})`
+  setDl.className = 'viewer-dl'
+  el.append(setDl)
+
   $('viewer').style.display = 'flex'
 }
 

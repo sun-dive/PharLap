@@ -26371,6 +26371,12 @@ It's posted to your own address and spends a small network fee. Proceed?`
         await viewReferenceManifest(collectionId, collectionName, decoded);
         return;
       }
+      const bmcSet = parseBmcSet(decoded.bytes);
+      if (bmcSet != null) {
+        viewBmc(collectionName, decoded, bmcSet);
+        setStatus(decoded.msg, decoded.verified ? "ok" : "error");
+        return;
+      }
       showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg);
       setStatus(decoded.msg, decoded.verified ? "ok" : "error");
     } catch (e) {
@@ -26902,6 +26908,77 @@ It's posted to your own address and spends a small network fee. Proceed?`
       a.className = "viewer-dl";
       content.append(a);
     }
+    $("viewer").style.display = "flex";
+  }
+  function viewBmc(title, content, set) {
+    const el = $("viewerContent");
+    revokeAlbumUrls();
+    if (viewerUrl) {
+      URL.revokeObjectURL(viewerUrl);
+      viewerUrl = null;
+    }
+    $("viewerTitle").textContent = `${title} \u2014 \u{1F4E6} BMC set \xB7 ${set.members.length} member${set.members.length === 1 ? "" : "s"} \xB7 ${kb(content.bytes.length)}`;
+    const banner = $("viewerProvenance");
+    banner.textContent = content.msg;
+    banner.className = `viewer-banner ${content.verified ? "ok" : "error"}`;
+    banner.style.display = "block";
+    el.innerHTML = "";
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-bottom:14px";
+    for (const m of set.members) {
+      const mime = (m.mimeType || "application/octet-stream").toLowerCase();
+      const url = URL.createObjectURL(new Blob([new Uint8Array(m.bytes)], { type: mime }));
+      albumUrls.push(url);
+      const card2 = document.createElement("div");
+      card2.style.cssText = "border:1px solid var(--line);border-radius:8px;padding:10px;background:#0d1117";
+      const label = document.createElement("div");
+      label.style.cssText = "font-size:12px;font-weight:600;opacity:0.75;margin-bottom:8px;word-break:break-word";
+      label.textContent = `${m.name} \xB7 ${mime} \xB7 ${kb(m.bytes.length)}`;
+      card2.append(label);
+      if (mime.startsWith("image/")) {
+        const img = document.createElement("img");
+        img.src = url;
+        img.className = "viewer-img";
+        img.loading = "lazy";
+        card2.append(img);
+      } else if (mime.startsWith("audio/")) {
+        const au = document.createElement("audio");
+        au.src = url;
+        au.controls = true;
+        au.style.width = "100%";
+        card2.append(au);
+      } else if (mime.startsWith("video/")) {
+        const v = document.createElement("video");
+        v.src = url;
+        v.className = "viewer-img";
+        v.controls = true;
+        v.loop = true;
+        v.playsInline = true;
+        card2.append(v);
+      } else if (mime.startsWith("text/") || mime === "application/json") {
+        const pre = document.createElement("pre");
+        pre.className = "viewer-pre";
+        pre.textContent = new TextDecoder().decode(new Uint8Array(m.bytes));
+        card2.append(pre);
+      }
+      const dl = document.createElement("a");
+      dl.href = url;
+      dl.download = m.file;
+      dl.textContent = `\u2B07 ${m.file}`;
+      dl.className = "viewer-dl";
+      dl.style.cssText = "display:inline-block;margin-top:8px;font-size:12px";
+      card2.append(dl);
+      grid.append(card2);
+    }
+    el.append(grid);
+    const setUrl = URL.createObjectURL(new Blob([new Uint8Array(content.bytes)], { type: "application/octet-stream" }));
+    albumUrls.push(setUrl);
+    const setDl = document.createElement("a");
+    setDl.href = setUrl;
+    setDl.download = content.fileName || `${set.name}.bmc`;
+    setDl.textContent = `\u2B07 Download the whole set (${content.fileName || `${set.name}.bmc`})`;
+    setDl.className = "viewer-dl";
+    el.append(setDl);
     $("viewer").style.display = "flex";
   }
   function showAlbumTracks(title, tracks, verified, note, subtitle, fallbackCover) {
@@ -29264,7 +29341,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"ef1d6e6"} \xB7 ${"2026-07-21"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"31ab9c8"} \xB7 ${"2026-07-21"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
