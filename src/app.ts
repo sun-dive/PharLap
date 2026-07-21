@@ -20,6 +20,7 @@ import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
 import { packManifest, parseManifest, isManifest, MANIFEST_MIME, type ManifestRef } from './refManifest.ts'
 import { isBmf, parseBmf, fmtLrcTime } from './bmf.ts'
+import { parseBmcSet, bmcMember } from './bmc.ts'
 import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
 import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
 import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
@@ -1576,7 +1577,18 @@ interface DecodedContent { mimeType: string; fileName: string; bytes: number[]; 
 /** Fetch + decode + hash-verify ONE collection's embedded content (cache-first; persists a verified replica).
  *  Returns null if the collection has no embedded file. Throws on decode failure (caller handles) — kept
  *  status-free so it can be reused per-reference when resolving a manifest. */
-async function fetchCollectionContent(collectionId: string): Promise<DecodedContent | null> {
+// Fetch a component by BMF reference. If the collection is a BMC set and `memberName` is given, return that
+// member; otherwise the collection's single file (the name is then just informational).
+async function fetchCollectionContent(collectionId: string, memberName?: string): Promise<DecodedContent | null> {
+  const content = await fetchCollectionRaw(collectionId)
+  if (content == null || memberName == null || memberName === '') return content
+  const set = parseBmcSet(content.bytes)
+  if (set == null) return content // not a set — the reference name is just informational
+  const mem = bmcMember(set, memberName)
+  if (mem == null) return content
+  return { mimeType: mem.mimeType, fileName: mem.file, bytes: mem.bytes, verified: content.verified, msg: `📦 BMC set member “${mem.name}”` }
+}
+async function fetchCollectionRaw(collectionId: string): Promise<DecodedContent | null> {
   const hit = await cachedContentGet(collectionId)
   if (hit != null) return { mimeType: hit.mimeType, fileName: hit.fileName, bytes: Array.from(hit.bytes), verified: hit.verified, msg: hit.msg }
   const tx1 = await provider.getSourceTransaction(collectionId)
@@ -1642,22 +1654,26 @@ async function viewBmf(collectionId: string, name: string, manifest: DecodedCont
     if (d != null) { audioName = bmf.audio.name || d.fileName; tracks.push({ name: audioName, mimeType: d.mimeType, bytes: d.bytes }) }
     else missing++
   }
-  // Scenes — fetch each DISTINCT tx once; remember the track name it resolved to for the cue.
-  const nameForTx = new Map<string, string>()
+  // Scenes — fetch each DISTINCT reference once. Key by tx + member name, so several members of ONE BMC set
+  // (same tx, different name) each resolve, and a member reused across cues is fetched only once.
+  const refKey = (s: { tx?: string | null; name?: string }): string => `${s.tx ?? ''}::${s.name ?? ''}`
+  const nameForRef = new Map<string, string>()
   for (const s of bmf.scenes) {
-    if (s.tx == null || nameForTx.has(s.tx)) continue
+    if (s.tx == null) continue
+    const key = refKey(s)
+    if (nameForRef.has(key)) continue
     let d: DecodedContent | null = null
-    try { d = await fetchCollectionContent(s.tx) } catch { d = null }
-    if (d == null) { missing++; nameForTx.set(s.tx, ''); continue }
-    const nm = s.name || d.fileName || `scene-${nameForTx.size + 1}.webp`
+    try { d = await fetchCollectionContent(s.tx, s.name) } catch { d = null }
+    if (d == null) { missing++; nameForRef.set(key, ''); continue }
+    const nm = s.name || d.fileName || `scene-${nameForRef.size + 1}.webp`
     tracks.push({ name: nm, mimeType: d.mimeType || 'image/webp', bytes: d.bytes })
-    nameForTx.set(s.tx, nm)
+    nameForRef.set(key, nm)
   }
   // Synthesized cue mapping each scene time → its resolved track name (skip unresolved refs).
   const cueLines: string[] = []
   if (audioName) cueLines.push(`# audio: ${audioName}`)
   for (const s of bmf.scenes) {
-    const nm = s.tx != null ? nameForTx.get(s.tx) : s.name
+    const nm = s.tx != null ? nameForRef.get(refKey(s)) : s.name
     if (nm) cueLines.push(`[${fmtLrcTime(s.t)}]${nm}`)
   }
   tracks.push({ name: 'video.cue', mimeType: 'text/plain', bytes: Array.from(new TextEncoder().encode(cueLines.join('\n') + '\n')) })
@@ -1667,7 +1683,7 @@ async function viewBmf(collectionId: string, name: string, manifest: DecodedCont
   try { epCover = (await loadCollection(collectionId)).cover } catch { /* no cover */ }
   const lic = bmf.license != null ? `${bmf.license}${bmf.attribution ? ` — attribute ${bmf.attribution}` : ''}` : ''
   const msg = (missing === 0
-    ? `✓ Block Media video resolved — ${nameForTx.size} scene component${nameForTx.size === 1 ? '' : 's'}${audioName ? ' + audio' : ''} fetched from chain and sequenced`
+    ? `✓ Block Media video resolved — ${nameForRef.size} scene component${nameForRef.size === 1 ? '' : 's'}${audioName ? ' + audio' : ''} fetched from chain and sequenced`
     : `⚠ Block Media video: ${missing} component${missing === 1 ? '' : 's'} unavailable on-chain (played without them)`)
     + (lic ? ` · Reuse: ${lic}` : '')
   const subtitle = `Block Media video · ${bmf.scenes.length} cues${lic ? ` · ${lic}` : ''}`
