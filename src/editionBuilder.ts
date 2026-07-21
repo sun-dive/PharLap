@@ -590,7 +590,10 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     throw new Error(SPEND_CANCELLED)
   }
 
-  await provider.broadcast(t1.tx.toHex())
+  // Gate: block until TX1 is actually in a relay mempool before broadcasting TX2 (which spends TX1's change),
+  // so TX2 can't race ahead of its unconfirmed parent → "Missing inputs". Throws (aborting the mint) if TX1
+  // never surfaces, leaving no orphaned TX2. See walletProvider.awaitInMempool.
+  await provider.broadcast(t1.tx.toHex(), { awaitSeen: true })
   provider.registerPendingTx(t1.tx1Id, selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
     { outputIndex: t1.changeVout, satoshis: t1.changeSats })
   await provider.broadcast(t2.tx.toHex())
@@ -727,7 +730,10 @@ export async function createEditionV2(provider: WalletProvider, key: PrivateKey,
     ownerPubKey: ownerPub, stateData, mintCount, feePerKb,
   })
 
-  await provider.broadcast(t1.tx.toHex())
+  // Gate: block until TX1 is actually in a relay mempool before broadcasting TX2 (which spends TX1's change),
+  // so TX2 can't race ahead of its unconfirmed parent → "Missing inputs". Throws (aborting the mint) if TX1
+  // never surfaces, leaving no orphaned TX2. See walletProvider.awaitInMempool.
+  await provider.broadcast(t1.tx.toHex(), { awaitSeen: true })
   provider.registerPendingTx(t1.tx1Id, selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
     { outputIndex: t1.changeVout, satoshis: t1.changeSats })
   await provider.broadcast(t2.tx.toHex())

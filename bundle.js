@@ -19188,6 +19188,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var BANANA_WOC_BASE = typeof location !== "undefined" && location.hostname === "localhost" ? "/banana/api/v1/bsv/main" : "https://bananablocks.com/api/v1/bsv/main";
   var CONFIRM_POLL_TRIES = 3;
   var CONFIRM_POLL_INTERVAL_MS = 15e3;
+  var GATE_POLL_TRIES = 10;
+  var GATE_POLL_INTERVAL_MS = 2e3;
   var MIN_REQUEST_DELAY = 350;
   var fetchQueue = Promise.resolve();
   function queuedFetch(url, init2) {
@@ -19345,7 +19347,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         return r2.name;
       }));
     }
-    async broadcast(rawHex) {
+    async broadcast(rawHex, opts = {}) {
       const txId = Transaction.fromHex(rawHex).id("hex");
       try {
         const winner = await this.relayBroadcast(rawHex);
@@ -19355,31 +19357,34 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         throw new Error(`Broadcast rejected by all relays (${txId}): ${errs.join(" | ")}`);
       }
       this.txCache.set(txId, rawHex);
-      void this.confirmLanded(txId, rawHex).catch(() => {
+      if (opts.awaitSeen) await this.awaitInMempool(txId, rawHex);
+      else void this.confirmLanded(txId, rawHex).catch(() => {
       });
       return txId;
     }
+    /** Which relay (if any) currently reports this tx as present (mempool or mined). BananaBlocks is checked first —
+     *  it's independent and non-pruning, so it holds the more complete mempool view. */
+    async visibleOn(txId) {
+      const relays = [
+        ["BananaBlocks", `${BANANA_BASE}/tx/${txId}`],
+        ["WoC", `${WOC_BASE}/tx/${txId}/hex`]
+      ];
+      const seen = await Promise.all(relays.map(async ([name, url]) => {
+        try {
+          return (await fetch(url)).ok ? name : null;
+        } catch {
+          return null;
+        }
+      }));
+      return seen.find(Boolean) ?? null;
+    }
     /** Poll the relays until a just-broadcast tx is visible; if neither reports it after a short grace window,
-     *  re-broadcast once. BananaBlocks is checked first (independent + non-pruning → more complete mempool view).
-     *  Non-blocking and best-effort — the caller already holds the deterministic txid. */
+     *  re-broadcast once. Non-blocking and best-effort — the caller already holds the deterministic txid. Used as
+     *  the background orphan-guard for standalone txs (those with no child spending them in the same batch). */
     async confirmLanded(txId, rawHex) {
-      const visibleOn = async () => {
-        const relays = [
-          ["BananaBlocks", `${BANANA_BASE}/tx/${txId}`],
-          ["WoC", `${WOC_BASE}/tx/${txId}/hex`]
-        ];
-        const seen = await Promise.all(relays.map(async ([name, url]) => {
-          try {
-            return (await fetch(url)).ok ? name : null;
-          } catch {
-            return null;
-          }
-        }));
-        return seen.find(Boolean) ?? null;
-      };
       for (let i = 0; i < CONFIRM_POLL_TRIES; i++) {
         await new Promise((r2) => setTimeout(r2, CONFIRM_POLL_INTERVAL_MS));
-        const on = await visibleOn();
+        const on = await this.visibleOn(txId);
         if (on) {
           console.info(`[broadcast] ${txId} confirmed live in mempool (seen by ${on})`);
           return;
@@ -19393,6 +19398,34 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       } catch {
         console.error(`[broadcast] ${txId} re-broadcast rejected by all relays`);
       }
+    }
+    /** BLOCKING parent-tx gate: wait until txId is visible in a relay mempool so a child tx can safely spend its
+     *  output. Polls on a fast cadence (a just-accepted tx usually surfaces within a second or two); the first check
+     *  is immediate, so the common case returns near-instantly. If it stalls for a full window, re-broadcast once
+     *  (idempotent — same txid, no double-spend) then poll again — this recovers the ARC-orphan case that first
+     *  bit the suited-up mint. Throws if it never appears, so the caller aborts before broadcasting the child (no
+     *  orphaned child tx). SPV: mempool visibility is all the child needs — no block wait. */
+    async awaitInMempool(txId, rawHex) {
+      for (let round = 0; round < 2; round++) {
+        for (let i = 0; i < GATE_POLL_TRIES; i++) {
+          const on = await this.visibleOn(txId);
+          if (on) {
+            console.info(`[broadcast] parent ${txId} in mempool (seen by ${on}) \u2014 child tx clear to broadcast`);
+            return;
+          }
+          await new Promise((r2) => setTimeout(r2, GATE_POLL_INTERVAL_MS));
+        }
+        if (round === 0) {
+          const secs = Math.round(GATE_POLL_TRIES * GATE_POLL_INTERVAL_MS / 1e3);
+          console.warn(`[broadcast] parent ${txId} not in any mempool after ~${secs}s \u2014 re-broadcasting (possible ARC orphan, arc #1006)`);
+          try {
+            const w = await this.relayBroadcast(rawHex);
+            console.info(`[broadcast] parent ${txId} re-broadcast, accepted by ${w}`);
+          } catch {
+          }
+        }
+      }
+      throw new Error(`Parent tx ${txId} never appeared in a relay mempool \u2014 aborting before the dependent tx to avoid "Missing inputs". Please retry the mint.`);
     }
     // ── Raw Transactions ──────────────────────────────────────────
     async getRawTransaction(txId) {
@@ -20015,6 +20048,42 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (fields == null) return null;
     return { publisherPubKeyHex: d.pubKeyHex, fields };
   }
+  var LEGACY_FILE_MARKERS = /* @__PURE__ */ new Set(["MPT-FILE", "P-FILE"]);
+  function readLegacyPush(bytes2, i) {
+    const op3 = bytes2[i++];
+    let len;
+    if (op3 >= 1 && op3 <= 75) len = op3;
+    else if (op3 === 76) len = bytes2[i++];
+    else if (op3 === 77) {
+      len = bytes2[i] | bytes2[i + 1] << 8;
+      i += 2;
+    } else if (op3 === 78) {
+      len = bytes2[i] + bytes2[i + 1] * 256 + bytes2[i + 2] * 65536 + bytes2[i + 3] * 16777216;
+      i += 4;
+    } else return null;
+    if (i + len > bytes2.length) return null;
+    return { data: bytes2.slice(i, i + len), next: i + len };
+  }
+  function parseLegacyFileScript(script) {
+    const bytes2 = script.toBinary();
+    let i = 0;
+    if (bytes2[i] === 0) i++;
+    if (bytes2[i] !== 106) return null;
+    i++;
+    const parts = [];
+    while (i < bytes2.length) {
+      const r2 = readLegacyPush(bytes2, i);
+      if (r2 == null) break;
+      parts.push(r2.data);
+      i = r2.next;
+    }
+    if (parts.length < 4) return null;
+    const marker = utils_exports.toUTF8(parts[0]);
+    if (!LEGACY_FILE_MARKERS.has(marker)) return null;
+    const fileBytes = [];
+    for (const p of parts.slice(3)) for (const b of p) fileBytes.push(b);
+    return { fields: { mimeType: utils_exports.toUTF8(parts[1]), fileName: utils_exports.toUTF8(parts[2]), fileBytes }, marker };
+  }
   function encodeStorefrontFields(data) {
     const out = [
       P_PREFIX,
@@ -20365,7 +20434,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (params.confirmSpend != null && !await params.confirmSpend(spentSats(selected, t2.changeSats))) {
       throw new Error(SPEND_CANCELLED);
     }
-    await provider2.broadcast(t1.tx.toHex());
+    await provider2.broadcast(t1.tx.toHex(), { awaitSeen: true });
     provider2.registerPendingTx(
       t1.tx1Id,
       selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
@@ -21385,7 +21454,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (params.confirmSpend != null && !await params.confirmSpend(spentSats(selected, t2.changeSats))) {
       throw new Error(SPEND_CANCELLED);
     }
-    await provider2.broadcast(t1.tx.toHex());
+    await provider2.broadcast(t1.tx.toHex(), { awaitSeen: true });
     provider2.registerPendingTx(
       t1.tx1Id,
       selected.map((u) => ({ txId: u.txId, outputIndex: u.outputIndex })),
@@ -22374,6 +22443,118 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       refs.push({ id: id.toLowerCase(), hash: hash.toLowerCase(), name: String(r2.n ?? "track"), mimeType: String(r2.m ?? "application/octet-stream") });
     }
     return refs;
+  }
+
+  // src/bmf.ts
+  var BMF_MIME = "application/x.bmf";
+  var HEX642 = /^[0-9a-f]{64}$/i;
+  function toTxid(s2) {
+    const v = String(s2 ?? "").trim().split(":")[0].toLowerCase();
+    return HEX642.test(v) ? v : null;
+  }
+  function fmtLrcTime(sec) {
+    if (!isFinite(sec) || sec < 0) sec = 0;
+    let cs = Math.round(sec * 100);
+    const m = Math.floor(cs / 6e3);
+    cs -= m * 6e3;
+    const s2 = Math.floor(cs / 100);
+    cs -= s2 * 100;
+    return `${String(m).padStart(2, "0")}:${String(s2).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
+  }
+  function isBmf(mimeType, bytes2) {
+    if (mimeType === BMF_MIME || mimeType === "application/vnd.blockmedia+json") return true;
+    if (bytes2 == null) return false;
+    const head = new TextDecoder().decode(new Uint8Array(bytes2.slice(0, 256))).replace(/^﻿/, "").trimStart();
+    if (head.startsWith("{") && /"bmf"\s*:/.test(head)) return true;
+    if (/^#\s*bmf\s*:/im.test(head)) return true;
+    return false;
+  }
+  function parseBmf(bytes2) {
+    const text = new TextDecoder().decode(new Uint8Array(bytes2)).replace(/^﻿/, "").trim();
+    if (text.startsWith("{")) {
+      let j;
+      try {
+        j = JSON.parse(text);
+      } catch {
+        return null;
+      }
+      if (j == null || !Array.isArray(j.scenes)) return null;
+      const scenes2 = [];
+      for (const s2 of j.scenes) {
+        const t = Number(s2?.t);
+        if (!isFinite(t)) continue;
+        scenes2.push({ t, tx: toTxid(s2?.tx), name: String(s2?.name ?? "scene") });
+      }
+      if (scenes2.length === 0) return null;
+      const audio = j.audio != null ? { tx: toTxid(j.audio.tx), name: String(j.audio.name ?? "audio") } : null;
+      return {
+        audio,
+        tempo: isFinite(Number(j.tempo)) && Number(j.tempo) > 0 ? Number(j.tempo) : null,
+        license: j.license != null ? String(j.license) : null,
+        attribution: j.attribution != null ? String(j.attribution) : null,
+        scenes: scenes2.sort((a, b) => a.t - b.t)
+      };
+    }
+    const scenes = [];
+    let audioName = null;
+    let tempo = null;
+    let license = null;
+    let attribution = null;
+    for (const line of text.split(/\r?\n/)) {
+      const h = line.match(/^#\s*(audio|tempo|license|attribution)\s*:\s*(.+)$/i);
+      if (h != null) {
+        const key2 = h[1].toLowerCase(), val2 = h[2].trim();
+        if (key2 === "audio") audioName = val2;
+        else if (key2 === "tempo") {
+          const v = Number(val2);
+          tempo = isFinite(v) && v > 0 ? v : null;
+        } else if (key2 === "license") license = val2;
+        else attribution = val2;
+        continue;
+      }
+      const m = line.match(/^\[(\d{1,2}):(\d{1,2}(?:\.\d{1,2})?)\](.+)$/);
+      if (m != null) scenes.push({ t: parseInt(m[1], 10) * 60 + parseFloat(m[2]), tx: null, name: m[3].trim() });
+    }
+    if (scenes.length === 0) return null;
+    return { audio: audioName != null ? { tx: null, name: audioName } : null, tempo, license, attribution, scenes: scenes.sort((a, b) => a.t - b.t) };
+  }
+
+  // src/bmc.ts
+  function readStoreZip(bytes2) {
+    const u16 = (o) => bytes2[o] | bytes2[o + 1] << 8;
+    const u323 = (o) => bytes2[o] + bytes2[o + 1] * 256 + bytes2[o + 2] * 65536 + bytes2[o + 3] * 16777216;
+    const out = {};
+    let i = 0;
+    while (i + 30 <= bytes2.length && u323(i) === 67324752) {
+      const method = u16(i + 8);
+      const size = u323(i + 18);
+      const nameLen = u16(i + 26);
+      const extraLen = u16(i + 28);
+      if (method !== 0) return null;
+      const nameStart = i + 30;
+      let name = "";
+      for (let j = 0; j < nameLen; j++) name += String.fromCharCode(bytes2[nameStart + j]);
+      const dataStart = nameStart + nameLen + extraLen;
+      out[name] = bytes2.slice(dataStart, dataStart + size);
+      i = dataStart + size;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+  var isBmc = (b) => b.length > 4 && b[0] === 80 && b[1] === 75 && b[2] === 3 && b[3] === 4;
+  function parseBmcSet(bytes2) {
+    if (!isBmc(bytes2)) return null;
+    const files = readStoreZip(bytes2);
+    if (files == null || files["bmc.json"] == null) return null;
+    try {
+      const manifest = JSON.parse(utils_exports.toUTF8(files["bmc.json"]));
+      const members = (manifest.members ?? []).map((m) => ({ name: m.name, file: m.file, mimeType: m.mime ?? "application/octet-stream", bytes: files[m.file] })).filter((m) => Boolean(m.name) && m.bytes != null && m.bytes.length > 0);
+      return members.length > 0 ? { name: manifest.name ?? "set", members } : null;
+    } catch {
+      return null;
+    }
+  }
+  function bmcMember(set, name) {
+    return set.members.find((m) => m.name === name) ?? set.members.find((m) => m.file === name) ?? null;
   }
 
   // src/flacMeta.ts
@@ -26060,7 +26241,16 @@ It's posted to your own address and spends a small network fee. Proceed?`
       }
     });
   }
-  async function fetchCollectionContent(collectionId) {
+  async function fetchCollectionContent(collectionId, memberName) {
+    const content = await fetchCollectionRaw(collectionId);
+    if (content == null || memberName == null || memberName === "") return content;
+    const set = parseBmcSet(content.bytes);
+    if (set == null) return content;
+    const mem = bmcMember(set, memberName);
+    if (mem == null) return content;
+    return { mimeType: mem.mimeType, fileName: mem.file, bytes: mem.bytes, verified: content.verified, msg: `\u{1F4E6} BMC set member \u201C${mem.name}\u201D` };
+  }
+  async function fetchCollectionRaw(collectionId) {
     const hit = await cachedContentGet(collectionId);
     if (hit != null) return { mimeType: hit.mimeType, fileName: hit.fileName, bytes: Array.from(hit.bytes), verified: hit.verified, msg: hit.msg };
     const tx1 = await provider.getSourceTransaction(collectionId);
@@ -26072,7 +26262,17 @@ It's posted to your own address and spends a small network fee. Proceed?`
       const t = parseTemplateScript(o.lockingScript);
       if (t) template = t.fields;
     }
-    if (!file) return null;
+    if (!file) {
+      for (const o of tx1.outputs) {
+        const leg = parseLegacyFileScript(o.lockingScript);
+        if (leg == null) continue;
+        const bytes3 = leg.fields.fileBytes;
+        const msg2 = `\u{1F4DC} Legacy ${leg.marker} \u2014 original on-chain provenance mint (plaintext, unencrypted)`;
+        void cachedContentPut(collectionId, { mimeType: leg.fields.mimeType, fileName: leg.fields.fileName, bytes: new Uint8Array(bytes3), verified: true, msg: msg2 });
+        return { mimeType: leg.fields.mimeType, fileName: leg.fields.fileName, bytes: bytes3, verified: true, msg: msg2 };
+      }
+      return null;
+    }
     const rules = template != null ? decodeTokenRules(template.tokenRules) : null;
     const encrypted = rules?.isEncrypted ?? false;
     const ciphertextOk = encrypted && template?.fileHash === utils_exports.toHex(Hash_exports.sha256(file.fileBytes));
@@ -26089,12 +26289,82 @@ It's posted to your own address and spends a small network fee. Proceed?`
     if (verified) void cachedContentPut(collectionId, { mimeType: file.mimeType, fileName: file.fileName, bytes: new Uint8Array(bytes2), verified, msg });
     return { mimeType: file.mimeType, fileName: file.fileName, bytes: bytes2, verified, msg };
   }
+  async function viewBmf(collectionId, name, manifest) {
+    const bmf = parseBmf(manifest.bytes);
+    if (bmf == null) {
+      setStatus("This release is a Block Media manifest, but it is unreadable.", "error");
+      return;
+    }
+    const distinctTx = new Set(bmf.scenes.filter((s2) => s2.tx != null).map((s2) => s2.tx)).size + (bmf.audio?.tx != null ? 1 : 0);
+    setStatus(`Resolving ${distinctTx} on-chain component${distinctTx === 1 ? "" : "s"} for the video\u2026`);
+    const tracks = [];
+    let missing = 0;
+    let audioName = bmf.audio?.name ?? "";
+    if (bmf.audio?.tx != null) {
+      let d = null;
+      try {
+        d = await fetchCollectionContent(bmf.audio.tx);
+      } catch {
+        d = null;
+      }
+      if (d != null) {
+        audioName = bmf.audio.name || d.fileName;
+        tracks.push({ name: audioName, mimeType: d.mimeType, bytes: d.bytes });
+      } else missing++;
+    }
+    const refKey = (s2) => `${s2.tx ?? ""}::${s2.name ?? ""}`;
+    const nameForRef = /* @__PURE__ */ new Map();
+    for (const s2 of bmf.scenes) {
+      if (s2.tx == null) continue;
+      const key2 = refKey(s2);
+      if (nameForRef.has(key2)) continue;
+      let d = null;
+      try {
+        d = await fetchCollectionContent(s2.tx, s2.name);
+      } catch {
+        d = null;
+      }
+      if (d == null) {
+        missing++;
+        nameForRef.set(key2, "");
+        continue;
+      }
+      const nm = s2.name || d.fileName || `scene-${nameForRef.size + 1}.webp`;
+      tracks.push({ name: nm, mimeType: d.mimeType || "image/webp", bytes: d.bytes });
+      nameForRef.set(key2, nm);
+    }
+    const cueLines = [];
+    if (audioName) cueLines.push(`# audio: ${audioName}`);
+    for (const s2 of bmf.scenes) {
+      const nm = s2.tx != null ? nameForRef.get(refKey(s2)) : s2.name;
+      if (nm) cueLines.push(`[${fmtLrcTime(s2.t)}]${nm}`);
+    }
+    tracks.push({ name: "video.cue", mimeType: "text/plain", bytes: Array.from(new TextEncoder().encode(cueLines.join("\n") + "\n")) });
+    if (tracks.every((t) => /\.(cue|lrc)$/i.test(t.name))) {
+      setStatus("None of the video\u2019s components could be resolved on-chain.", "error");
+      return;
+    }
+    let epCover = null;
+    try {
+      epCover = (await loadCollection(collectionId)).cover;
+    } catch {
+    }
+    const lic = bmf.license != null ? `${bmf.license}${bmf.attribution ? ` \u2014 attribute ${bmf.attribution}` : ""}` : "";
+    const msg = (missing === 0 ? `\u2713 Block Media video resolved \u2014 ${nameForRef.size} scene component${nameForRef.size === 1 ? "" : "s"}${audioName ? " + audio" : ""} fetched from chain and sequenced` : `\u26A0 Block Media video: ${missing} component${missing === 1 ? "" : "s"} unavailable on-chain (played without them)`) + (lic ? ` \xB7 Reuse: ${lic}` : "");
+    const subtitle = `Block Media video \xB7 ${bmf.scenes.length} cues${lic ? ` \xB7 ${lic}` : ""}`;
+    showAlbumTracks(name, tracks, missing === 0 && manifest.verified, msg, subtitle, epCover);
+    setStatus(msg, missing === 0 ? "ok" : "error");
+  }
   async function onView(collectionId, collectionName) {
     setStatus("Loading the embedded file from the collection\u2026");
     try {
       const decoded = await fetchCollectionContent(collectionId);
       if (decoded == null) {
         setStatus(`"${collectionName}" has no embedded file.`, "info");
+        return;
+      }
+      if (isBmf(decoded.mimeType, decoded.bytes)) {
+        await viewBmf(collectionId, collectionName, decoded);
         return;
       }
       if (isManifest(decoded.mimeType, decoded.bytes)) {
@@ -26368,12 +26638,16 @@ It's posted to your own address and spends a small network fee. Proceed?`
     };
     const videoToggle = q(".ep-video-toggle");
     const scene = q(".ep-scene");
+    scene.onload = () => {
+      if (scene.naturalWidth > 0 && scene.naturalHeight > 0) player.style.setProperty("--ep-vid-ar", (scene.naturalWidth / scene.naturalHeight).toFixed(4));
+    };
     let timeline = null;
     let lastScene = -1;
     function loadTimeline(tl) {
       timeline = tl;
       lastScene = -1;
       scene.removeAttribute("src");
+      player.style.removeProperty("--ep-vid-ar");
       if (tl == null) {
         videoToggle.hidden = true;
         player.classList.remove("video-view");
@@ -28990,7 +29264,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"8ddbb15"} \xB7 ${"2026-07-10"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"ef1d6e6"} \xB7 ${"2026-07-21"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

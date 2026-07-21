@@ -19,6 +19,8 @@ import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './co
 import { createTransfer, scanIncoming } from './transfer.ts'
 import { packAlbum, parseAlbum, isAlbum, ALBUM_MIME, MAX_ALBUM_TRACKS, type AlbumTrack } from './album.ts'
 import { packManifest, parseManifest, isManifest, MANIFEST_MIME, type ManifestRef } from './refManifest.ts'
+import { isBmf, parseBmf, fmtLrcTime } from './bmf.ts'
+import { parseBmcSet, bmcMember } from './bmc.ts'
 import { parseFlacPictures, parseFlacLyrics } from './flacMeta.ts'
 import { parseId3Pictures, parseId3Lyrics } from './id3.ts'
 import { parseLyrics, type ParsedLyrics } from './lyrics.ts'
@@ -31,7 +33,7 @@ import { qrSvg, bsvPaymentUri } from './qr.ts'
 import type { Part } from './messageCodec.ts'
 import type { StoredToken } from './pharlapStore.ts'
 import { verifyTokenLineage, verifyEditionCovenant } from './verify.ts'
-import { parseTemplateScript, parseFileScript, parseStorefrontScript, decodeTokenRules, type TemplateFields, type StorefrontFields } from './tokenCodec.ts'
+import { parseTemplateScript, parseFileScript, parseStorefrontScript, parseLegacyFileScript, decodeTokenRules, type TemplateFields, type StorefrontFields } from './tokenCodec.ts'
 import { cachedThumb, thumbResolved, cacheNoThumb, makeThumb, cachedMime, cacheMime, downscaleToAvatar } from './thumbs.ts'
 import { publishProfile, resolveProfile } from './profile.ts'
 import { readCorridor, postToNodeFeed, type CorridorNode, type DiscPost } from './discussion.ts'
@@ -1575,7 +1577,18 @@ interface DecodedContent { mimeType: string; fileName: string; bytes: number[]; 
 /** Fetch + decode + hash-verify ONE collection's embedded content (cache-first; persists a verified replica).
  *  Returns null if the collection has no embedded file. Throws on decode failure (caller handles) — kept
  *  status-free so it can be reused per-reference when resolving a manifest. */
-async function fetchCollectionContent(collectionId: string): Promise<DecodedContent | null> {
+// Fetch a component by BMF reference. If the collection is a BMC set and `memberName` is given, return that
+// member; otherwise the collection's single file (the name is then just informational).
+async function fetchCollectionContent(collectionId: string, memberName?: string): Promise<DecodedContent | null> {
+  const content = await fetchCollectionRaw(collectionId)
+  if (content == null || memberName == null || memberName === '') return content
+  const set = parseBmcSet(content.bytes)
+  if (set == null) return content // not a set — the reference name is just informational
+  const mem = bmcMember(set, memberName)
+  if (mem == null) return content
+  return { mimeType: mem.mimeType, fileName: mem.file, bytes: mem.bytes, verified: content.verified, msg: `📦 BMC set member “${mem.name}”` }
+}
+async function fetchCollectionRaw(collectionId: string): Promise<DecodedContent | null> {
   const hit = await cachedContentGet(collectionId)
   if (hit != null) return { mimeType: hit.mimeType, fileName: hit.fileName, bytes: Array.from(hit.bytes), verified: hit.verified, msg: hit.msg }
   const tx1 = await provider.getSourceTransaction(collectionId)
@@ -1585,7 +1598,19 @@ async function fetchCollectionContent(collectionId: string): Promise<DecodedCont
     const f = parseFileScript(o.lockingScript); if (f) file = f.fields
     const t = parseTemplateScript(o.lockingScript); if (t) template = t.fields
   }
-  if (!file) return null
+  if (!file) {
+    // Legacy plaintext provenance mints (MPT-FILE / P-FILE): unencrypted content in an OP_RETURN, authentic
+    // by being the on-chain tx itself. Lets an origin mint be reused/played in a BMF composition.
+    for (const o of tx1.outputs) {
+      const leg = parseLegacyFileScript(o.lockingScript)
+      if (leg == null) continue
+      const bytes = leg.fields.fileBytes
+      const msg = `📜 Legacy ${leg.marker} — original on-chain provenance mint (plaintext, unencrypted)`
+      void cachedContentPut(collectionId, { mimeType: leg.fields.mimeType, fileName: leg.fields.fileName, bytes: new Uint8Array(bytes), verified: true, msg })
+      return { mimeType: leg.fields.mimeType, fileName: leg.fields.fileName, bytes, verified: true, msg }
+    }
+    return null
+  }
   const rules = template != null ? decodeTokenRules(template.tokenRules) : null
   const encrypted = rules?.isEncrypted ?? false
   // fileHash binds the ciphertext for encrypted content (privacy) but the ORIGINAL plaintext for public
@@ -1609,11 +1634,70 @@ async function fetchCollectionContent(collectionId: string): Promise<DecodedCont
   return { mimeType: file.mimeType, fileName: file.fileName, bytes, verified, msg }
 }
 
+/** Resolve a Block Media Format (BMF) manifest: fetch each on-chain component (audio + scene clips) by its
+ *  txid, then hand the lot to the EXISTING scene-timeline player as an in-memory album — audio track + scene
+ *  clips + a synthesized `video.cue`. Each fetched component self-verifies against its own on-chain commitment
+ *  (fetchCollectionContent), so a resolved video is a composition of independently-provenanced, owned parts.
+ *  A clip referenced at several cues is fetched once and reused (store-once, reference-many). */
+async function viewBmf(collectionId: string, name: string, manifest: DecodedContent): Promise<void> {
+  const bmf = parseBmf(manifest.bytes)
+  if (bmf == null) { setStatus('This release is a Block Media manifest, but it is unreadable.', 'error'); return }
+  const distinctTx = new Set(bmf.scenes.filter(s => s.tx != null).map(s => s.tx as string)).size + (bmf.audio?.tx != null ? 1 : 0)
+  setStatus(`Resolving ${distinctTx} on-chain component${distinctTx === 1 ? '' : 's'} for the video…`)
+  const tracks: AlbumTrack[] = []
+  let missing = 0
+  // Audio (referenced by tx → fetch its bytes from chain).
+  let audioName = bmf.audio?.name ?? ''
+  if (bmf.audio?.tx != null) {
+    let d: DecodedContent | null = null
+    try { d = await fetchCollectionContent(bmf.audio.tx) } catch { d = null }
+    if (d != null) { audioName = bmf.audio.name || d.fileName; tracks.push({ name: audioName, mimeType: d.mimeType, bytes: d.bytes }) }
+    else missing++
+  }
+  // Scenes — fetch each DISTINCT reference once. Key by tx + member name, so several members of ONE BMC set
+  // (same tx, different name) each resolve, and a member reused across cues is fetched only once.
+  const refKey = (s: { tx?: string | null; name?: string }): string => `${s.tx ?? ''}::${s.name ?? ''}`
+  const nameForRef = new Map<string, string>()
+  for (const s of bmf.scenes) {
+    if (s.tx == null) continue
+    const key = refKey(s)
+    if (nameForRef.has(key)) continue
+    let d: DecodedContent | null = null
+    try { d = await fetchCollectionContent(s.tx, s.name) } catch { d = null }
+    if (d == null) { missing++; nameForRef.set(key, ''); continue }
+    const nm = s.name || d.fileName || `scene-${nameForRef.size + 1}.webp`
+    tracks.push({ name: nm, mimeType: d.mimeType || 'image/webp', bytes: d.bytes })
+    nameForRef.set(key, nm)
+  }
+  // Synthesized cue mapping each scene time → its resolved track name (skip unresolved refs).
+  const cueLines: string[] = []
+  if (audioName) cueLines.push(`# audio: ${audioName}`)
+  for (const s of bmf.scenes) {
+    const nm = s.tx != null ? nameForRef.get(refKey(s)) : s.name
+    if (nm) cueLines.push(`[${fmtLrcTime(s.t)}]${nm}`)
+  }
+  tracks.push({ name: 'video.cue', mimeType: 'text/plain', bytes: Array.from(new TextEncoder().encode(cueLines.join('\n') + '\n')) })
+  if (tracks.every(t => /\.(cue|lrc)$/i.test(t.name))) { setStatus('None of the video’s components could be resolved on-chain.', 'error'); return }
+  // The manifest mint's own cover → disc fallback (best-effort).
+  let epCover: { mimeType: string; bytes: number[] } | null = null
+  try { epCover = (await loadCollection(collectionId)).cover } catch { /* no cover */ }
+  const lic = bmf.license != null ? `${bmf.license}${bmf.attribution ? ` — attribute ${bmf.attribution}` : ''}` : ''
+  const msg = (missing === 0
+    ? `✓ Block Media video resolved — ${nameForRef.size} scene component${nameForRef.size === 1 ? '' : 's'}${audioName ? ' + audio' : ''} fetched from chain and sequenced`
+    : `⚠ Block Media video: ${missing} component${missing === 1 ? '' : 's'} unavailable on-chain (played without them)`)
+    + (lic ? ` · Reuse: ${lic}` : '')
+  const subtitle = `Block Media video · ${bmf.scenes.length} cues${lic ? ` · ${lic}` : ''}`
+  showAlbumTracks(name, tracks, missing === 0 && manifest.verified, msg, subtitle, epCover)
+  setStatus(msg, missing === 0 ? 'ok' : 'error')
+}
+
 async function onView(collectionId: string, collectionName: string): Promise<void> {
   setStatus('Loading the embedded file from the collection…')
   try {
     const decoded = await fetchCollectionContent(collectionId)
     if (decoded == null) { setStatus(`"${collectionName}" has no embedded file.`, 'info'); return }
+    // A Block Media Format manifest references on-chain components (audio + scene clips) — resolve + play as video.
+    if (isBmf(decoded.mimeType, decoded.bytes)) { await viewBmf(collectionId, collectionName, decoded); return }
     // A reference manifest points at other works instead of embedding bytes — resolve + play them as an album.
     if (isManifest(decoded.mimeType, decoded.bytes)) { await viewReferenceManifest(collectionId, collectionName, decoded); return }
     showFile(collectionName, { mimeType: decoded.mimeType, fileName: decoded.fileName, fileBytes: decoded.bytes }, decoded.verified, decoded.msg)
@@ -1901,10 +1985,15 @@ function renderPlayer(host: HTMLElement, srcTracks: AlbumTrack[], fallbackCover?
   // (lyrics can overlay on top). Same active-index drive as the lyrics.
   const videoToggle = q<HTMLElement>('.ep-video-toggle')
   const scene = q<HTMLImageElement>('.ep-scene')
+  // Size the video view to the clip's real aspect ratio (square, 16:9, whatever) so it uses the largest
+  // available space instead of being centre-cropped into a fixed 1:1 box.
+  scene.onload = (): void => {
+    if (scene.naturalWidth > 0 && scene.naturalHeight > 0) player.style.setProperty('--ep-vid-ar', (scene.naturalWidth / scene.naturalHeight).toFixed(4))
+  }
   let timeline: SceneTimeline | null = null
   let lastScene = -1
   function loadTimeline(tl: SceneTimeline | null): void {
-    timeline = tl; lastScene = -1; scene.removeAttribute('src')
+    timeline = tl; lastScene = -1; scene.removeAttribute('src'); player.style.removeProperty('--ep-vid-ar')
     if (tl == null) { videoToggle.hidden = true; player.classList.remove('video-view'); return }
     videoToggle.hidden = false
   }

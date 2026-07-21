@@ -319,11 +319,15 @@
       align-items:center; justify-content:center; backdrop-filter:blur(6px); line-height:1; display:none; }
     .ep-video-toggle:not([hidden]) { display:flex; }
     .ep-video-toggle:hover { background:rgba(0,0,0,.55); }
-    .ep-scene { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius:16px;
+    .ep-scene { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; border-radius:16px;
       display:none; z-index:1; box-shadow:0 10px 30px rgba(0,0,0,.5); background:#000; }
     .ep-player.video-view .ep-scene { display:block; }
     .ep-player.video-view .ep-disc, .ep-player.video-view .ep-visualizer-container, .ep-player.video-view .ep-art { display:none; }
-    .ep-player.video-view .ep-disc-container { width:100%; max-width:300px; height:auto; aspect-ratio:1; }
+    /* Video view adapts to the clip's own aspect ratio (--ep-vid-ar, read from the scene's natural size) and
+       grows to the largest box that fits the stage — square OR 16:9 — rather than the old fixed 300px 1:1
+       (a Cosmic Conspiracy legacy). The card widens to match so the video uses the available space. */
+    .ep-player.video-view { --ep-vh:min(58vh,480px); max-width:min(92vw, calc(var(--ep-vh) * var(--ep-vid-ar,1) + 44px)); }
+    .ep-player.video-view .ep-disc-container { width:100%; max-width:100%; height:auto; aspect-ratio:var(--ep-vid-ar,1); max-height:var(--ep-vh); }
     .ep-song-list { list-style:none; max-height:160px; overflow-y:auto; margin:0 0 14px; padding:0; scrollbar-width:thin; }
     .ep-song-list li { padding:10px 14px; margin-bottom:6px; background:rgba(255,255,255,.05); border-radius:14px; cursor:pointer;
       transition:all .25s; color:rgba(255,255,255,.7); border:1px solid transparent; font-size:14px; word-break:break-word; }
