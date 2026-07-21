@@ -6,6 +6,10 @@ A PushDrop-based BSV token wallet — a standalone browser app for minting, shar
 tokenized content. Derived from the **MPT v05.24** prototype, rebuilt around PushDrop so token data lives
 in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
 
+It's the **own/mint** corner of the trinity — **Phar Lap** (this app, [smartnfts.com](https://smartnfts.com)) ·
+**[Big Red](https://nft.sale)** (sell) · **[Pole Position](https://github.com/sun-dive/PolePosition)** (create) —
+and the covenant mint engine behind **SMART NFTs**. Owned, not claimed.
+
 > **Status:** experimental, but the core works on BSV mainnet. Collection mint (single + multi),
 > embedded-file binding, transfer, discovery, lightweight verification, and a file viewer are validated.
 > The permissionless **"unlimited mints" edition covenant** is built and **validated on mainnet** —
@@ -74,8 +78,10 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   multi-track **albums/EPs** (a native `magic + header + concatenated bytes` container), played in a built-in
   **player** (spinning "disc," bass-reactive **speaker** mode, audio visualizer, playlist), with **embedded
   cover art by role** (front / back / media disc label, from FLAC `PICTURE` / MP3 `APIC` tags), **time-synced
-  LRC lyrics** (karaoke overlay), and **on-chain scene-timeline music videos** (a cue sheet times reused
-  scene images to playback). Verified content is cached locally (IndexedDB) for instant / offline replay.
+  LRC lyrics** (karaoke overlay), and **Block Media Format (BMF)** compositions — an on-chain "video" expressed
+  as a small manifest that times **reused on-chain loops** referenced by `{tx, name}`, including **BMC sets**
+  whose members are individually addressable (see the [BMF spec](https://github.com/sun-dive/block-media-format),
+  proposed BRC-145). Verified content is cached locally (IndexedDB) for instant / offline replay.
 - **Reference / combination mints.** A mint's content can be a **manifest of pointers** to content already
   on-chain, so you can **bundle existing mints into an EP/compilation without re-uploading** — each referenced
   work is resolved and hash-verified on play, and the bundle is priced independently. Covenant-safe (to the
@@ -111,6 +117,7 @@ in a *spendable* (non-prunable) output rather than a prunable OP_RETURN.
   that opens a **storefront**: cover image, title, description, lock state, and price, served entirely client-side.
   A stranger can **"Get a copy"** in one click: the page resolves the holder's current edition (deterministically,
   by script hash — no indexer), funds-checks, runs the permissionless replicate, and reveals/decrypts the content.
+  Music listings can offer a **🎧 free preview** — a public "listen before you buy" clip, resolved only on demand.
 - **Buy BSV (on-ramp) + referrals.** A **💵 Buy BSV** button (in the wallet and on every storefront) sends a
   would-be buyer to **SimpleSwap** — swap any crypto — including stablecoins (USDT/USDC) — for BSV, no exchange account — so
   newcomers can fund a wallet without leaving the flow. Publishers can save their own **SimpleSwap referral
@@ -176,11 +183,18 @@ src/
   qrcodegen.ts         vendored Nayuki QR-code generator (MIT)
   qr.ts                QR render helpers + BSV (BIP21) payment URI
   thumbs.ts            NFT-card thumbnail cache (in-browser downscale, localStorage)
-  walletProvider.ts    WhatsOnChain client (UTXOs, raw tx, broadcast, headers, script-hash unspent)
+  walletProvider.ts    WhatsOnChain + BananaBlocks (GorillaPool) client — dual-relay broadcast,
+                       UTXOs, raw tx, SPV proofs, headers, script-hash unspent
   pharlapStore.ts      local token store (localStorage cache)
   app.ts               browser wallet UI (incl. the player + IndexedDB content cache)
 test/                  node --test suites
 ```
+
+## Ecosystem
+
+- **[Big Red](https://nft.sale)** — the SMART NFT sales ring / resale catalog ([repo](https://github.com/sun-dive/BigRed)).
+- **[Pole Position](https://github.com/sun-dive/PolePosition)** — the create/authoring studio (ebooks, music, Block Media Format).
+- **[Block Media Format](https://github.com/sun-dive/block-media-format)** — the open BMF/BMC spec (proposed BRC-145) this wallet mints and plays.
 
 ## License
 
