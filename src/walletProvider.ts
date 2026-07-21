@@ -39,6 +39,13 @@ const BANANA_WOC_BASE = (typeof location !== 'undefined' && location.hostname ==
 const CONFIRM_POLL_TRIES = 3
 const CONFIRM_POLL_INTERVAL_MS = 15_000
 
+// Blocking parent-tx gate (before broadcasting a child that spends its output — e.g. edition TX2 spending
+// collection TX1's change). Poll fast: an accepted tx usually shows in a relay mempool within a second or two.
+// Two rounds with a single re-broadcast between them (idempotent). SPV → mempool visibility is enough; a child
+// can safely spend an unconfirmed-but-seen parent, so there's no need to wait for a block.
+const GATE_POLL_TRIES = 10
+const GATE_POLL_INTERVAL_MS = 2_000
+
 // ─── Types ──────────────────────────────────────────────────────────
 
 export interface Utxo {
@@ -264,7 +271,7 @@ export class WalletProvider {
     }))
   }
 
-  async broadcast(rawHex: string): Promise<string> {
+  async broadcast(rawHex: string, opts: { awaitSeen?: boolean } = {}): Promise<string> {
     // The txid is deterministic from the signed tx, so compute it locally instead of trusting a relay's echo —
     // an ARC-style relay can return 200 + a txid for a tx it later orphans (see bitcoin-sv/arc #1006).
     const txId = Transaction.fromHex(rawHex).id('hex')
@@ -286,36 +293,66 @@ export class WalletProvider {
     // burn of a freshly-created edition) can be built immediately, without waiting for a relay to index the tx.
     this.txCache.set(txId, rawHex)
 
-    // ORPHAN-GUARD (non-blocking): a relay can accept a tx (200 + txid) then silently drop it without mining —
-    // arc #1006 saw txs sit in ORPHAN_MEMPOOL until re-broadcast. Verify in the background that the tx actually
-    // becomes visible on a relay; if it vanishes, re-broadcast once (idempotent — same txid). Best-effort.
-    void this.confirmLanded(txId, rawHex).catch(() => {})
+    // A relay can accept a tx (200 + txid) then silently drop it without mining — arc #1006 saw txs sit in
+    // ORPHAN_MEMPOOL until re-broadcast. If a CHILD tx will spend this tx's output in the same mint (edition TX2
+    // over collection TX1's change), the caller passes awaitSeen: we BLOCK until the tx is actually visible in a
+    // relay mempool before returning, so the child can never race ahead of its unconfirmed parent (which the node
+    // rejects as "Missing inputs"). awaitInMempool throws if it never appears, so the caller aborts BEFORE
+    // broadcasting the child — no orphaned child tx. Standalone txs just get the non-blocking background guard.
+    if (opts.awaitSeen) await this.awaitInMempool(txId, rawHex)
+    else void this.confirmLanded(txId, rawHex).catch(() => {})
     return txId
   }
 
+  /** Which relay (if any) currently reports this tx as present (mempool or mined). BananaBlocks is checked first —
+   *  it's independent and non-pruning, so it holds the more complete mempool view. */
+  private async visibleOn(txId: string): Promise<string | null> {
+    const relays: Array<[string, string]> = [
+      ['BananaBlocks', `${BANANA_BASE}/tx/${txId}`],
+      ['WoC', `${WOC_BASE}/tx/${txId}/hex`],
+    ]
+    const seen = await Promise.all(relays.map(async ([name, url]) => {
+      try { return (await fetch(url)).ok ? name : null } catch { return null }
+    }))
+    return seen.find(Boolean) ?? null
+  }
+
   /** Poll the relays until a just-broadcast tx is visible; if neither reports it after a short grace window,
-   *  re-broadcast once. BananaBlocks is checked first (independent + non-pruning → more complete mempool view).
-   *  Non-blocking and best-effort — the caller already holds the deterministic txid. */
+   *  re-broadcast once. Non-blocking and best-effort — the caller already holds the deterministic txid. Used as
+   *  the background orphan-guard for standalone txs (those with no child spending them in the same batch). */
   private async confirmLanded(txId: string, rawHex: string): Promise<void> {
-    const visibleOn = async (): Promise<string | null> => {
-      const relays: Array<[string, string]> = [
-        ['BananaBlocks', `${BANANA_BASE}/tx/${txId}`],
-        ['WoC', `${WOC_BASE}/tx/${txId}/hex`],
-      ]
-      const seen = await Promise.all(relays.map(async ([name, url]) => {
-        try { return (await fetch(url)).ok ? name : null } catch { return null }
-      }))
-      return seen.find(Boolean) ?? null
-    }
     for (let i = 0; i < CONFIRM_POLL_TRIES; i++) {
       await new Promise(r => setTimeout(r, CONFIRM_POLL_INTERVAL_MS))
-      const on = await visibleOn()
+      const on = await this.visibleOn(txId)
       if (on) { console.info(`[broadcast] ${txId} confirmed live in mempool (seen by ${on})`); return }
     }
     const secs = Math.round(CONFIRM_POLL_TRIES * CONFIRM_POLL_INTERVAL_MS / 1000)
     console.warn(`[broadcast] ${txId} not visible on any relay after ~${secs}s — re-broadcasting (possible ARC orphan, arc #1006)`)
     try { const w = await this.relayBroadcast(rawHex); console.info(`[broadcast] ${txId} re-broadcast, accepted by ${w}`) }
     catch { console.error(`[broadcast] ${txId} re-broadcast rejected by all relays`) }
+  }
+
+  /** BLOCKING parent-tx gate: wait until txId is visible in a relay mempool so a child tx can safely spend its
+   *  output. Polls on a fast cadence (a just-accepted tx usually surfaces within a second or two); the first check
+   *  is immediate, so the common case returns near-instantly. If it stalls for a full window, re-broadcast once
+   *  (idempotent — same txid, no double-spend) then poll again — this recovers the ARC-orphan case that first
+   *  bit the suited-up mint. Throws if it never appears, so the caller aborts before broadcasting the child (no
+   *  orphaned child tx). SPV: mempool visibility is all the child needs — no block wait. */
+  private async awaitInMempool(txId: string, rawHex: string): Promise<void> {
+    for (let round = 0; round < 2; round++) {
+      for (let i = 0; i < GATE_POLL_TRIES; i++) {
+        const on = await this.visibleOn(txId)
+        if (on) { console.info(`[broadcast] parent ${txId} in mempool (seen by ${on}) — child tx clear to broadcast`); return }
+        await new Promise(r => setTimeout(r, GATE_POLL_INTERVAL_MS))
+      }
+      if (round === 0) {
+        const secs = Math.round(GATE_POLL_TRIES * GATE_POLL_INTERVAL_MS / 1000)
+        console.warn(`[broadcast] parent ${txId} not in any mempool after ~${secs}s — re-broadcasting (possible ARC orphan, arc #1006)`)
+        try { const w = await this.relayBroadcast(rawHex); console.info(`[broadcast] parent ${txId} re-broadcast, accepted by ${w}`) }
+        catch { /* keep polling — the original acceptance may still surface on a relay */ }
+      }
+    }
+    throw new Error(`Parent tx ${txId} never appeared in a relay mempool — aborting before the dependent tx to avoid "Missing inputs". Please retry the mint.`)
   }
 
   // ── Raw Transactions ──────────────────────────────────────────

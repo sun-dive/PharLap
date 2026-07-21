@@ -298,8 +298,10 @@ export async function createCollection(
     throw new Error(SPEND_CANCELLED)
   }
 
-  // Both built — broadcast TX1 then TX2.
-  await provider.broadcast(t1.tx.toHex())
+  // Both built — broadcast TX1, wait until it's actually visible in a relay mempool, THEN TX2 (which spends TX1's
+  // change). The awaitSeen gate stops TX2 racing ahead of its unconfirmed parent → "Missing inputs"; it throws
+  // (aborting) if TX1 never surfaces, so there's no orphaned TX2. See walletProvider.awaitInMempool.
+  await provider.broadcast(t1.tx.toHex(), { awaitSeen: true })
   provider.registerPendingTx(
     t1.tx1Id,
     selected.map(u => ({ txId: u.txId, outputIndex: u.outputIndex })),
