@@ -28141,15 +28141,15 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     if (aff != null && aff !== "") incomingAff = aff;
     const c = params.get("c");
     if (!c) return null;
-    return { c, h: params.get("h"), g: params.get("g") };
+    return { c, h: params.get("h"), g: params.get("g"), src: params.get("src") };
   }
-  async function loadCollection(tx1Ref, holderPubKeyHint) {
+  async function loadCollection(tx1Ref, holderPubKeyHint, opts = {}) {
     let template;
     let publisherPubKeyHex = null;
     let storefront = null;
     let hasContentFile = false;
     let contentMime = null;
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < (opts.light ? 1 : 6); i++) {
       let hex;
       try {
         hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 8 * 1024 * 1024);
@@ -28180,6 +28180,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       if (template != null && storefront != null) break;
     }
     if (!template) throw new Error("not a SMART NFTs collection (no template output in TX1)");
+    if (opts.light) hasContentFile = template.fileHash != null;
     const rules = decodeTokenRules(template.tokenRules);
     let fees = null;
     let isV2 = false, pBps = 0, v2PriceSats = 0;
@@ -28227,7 +28228,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       bondSats
     };
   }
-  function renderCollectionView(info) {
+  function renderCollectionView(info, opts) {
     $("cvTitle").textContent = info.name || "Untitled collection";
     const coverHost = $("cvCover");
     coverHost.innerHTML = "";
@@ -28264,12 +28265,21 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
         };
         coverHost.append(flip);
       }
+    } else if (opts?.coverUrl) {
+      const img = document.createElement("img");
+      img.className = "cv-cover-img";
+      img.src = opts.coverUrl;
+      img.onerror = () => {
+        img.remove();
+        if (coverHost.childElementCount === 0) coverHost.innerHTML = '<div class="cv-cover-ph">\u{1F3B4}</div>';
+      };
+      coverHost.append(img);
     } else {
       coverHost.innerHTML = '<div class="cv-cover-ph">\u{1F3B4}</div>';
     }
     const prevHost = $("cvPreview");
     prevHost.innerHTML = "";
-    const contentIsAudio = info.contentMime != null ? mimeCategory(info.contentMime) === "audio" : info.hasContentFile;
+    const contentIsAudio = info.contentMime != null ? mimeCategory(info.contentMime) === "audio" : info.contentCategory != null ? info.contentCategory === "audio" : info.hasContentFile;
     const pubForPreview = info.publisherPubKeyHex;
     if (pubForPreview != null && contentIsAudio) {
       const btn = document.createElement("button");
@@ -28349,7 +28359,38 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       vb.style.display = "none";
     }
   }
-  async function openCollectionView(tx1Ref, holderPubKey, giftWif = null) {
+  function cacheHostFrom(srcHost) {
+    let host = (srcHost || "").trim().toLowerCase();
+    if (!host && document.referrer) {
+      try {
+        const r2 = new URL(document.referrer);
+        if (r2.origin !== location.origin) host = r2.hostname.toLowerCase();
+      } catch {
+      }
+    }
+    return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(host) ? host : null;
+  }
+  async function fetchListingCache(host, collectionId) {
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 4e3);
+      const resp = await fetch(`https://${host}/listings.json`, { signal: ctl.signal, mode: "cors" });
+      clearTimeout(timer);
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      const it = (data.listings ?? []).find((l) => String(l.collectionId).toLowerCase() === collectionId.toLowerCase());
+      if (!it || typeof it.cover !== "string") return null;
+      return {
+        title: String(it.title ?? ""),
+        description: String(it.description ?? ""),
+        category: typeof it.category === "string" ? it.category : "other",
+        coverUrl: `https://${host}/${it.cover}`
+      };
+    } catch {
+      return null;
+    }
+  }
+  async function openCollectionView(tx1Ref, holderPubKey, giftWif = null, srcHost = null) {
     cvGiftWif = giftWif;
     $("collectionView").style.display = "flex";
     hideFundPrompt();
@@ -28359,12 +28400,33 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     $("cvPublisher").textContent = "";
     $("cvDesc").textContent = "";
     $("cvPrice").innerHTML = "";
-    setCvStatus("Loading collection from the chain\u2026");
+    const host = cacheHostFrom(srcHost);
+    const cache = host ? await fetchListingCache(host, tx1Ref) : null;
+    if (cache) {
+      $("cvTitle").textContent = cache.title || "Loading\u2026";
+      $("cvDesc").textContent = cache.description || "";
+      const skImg = document.createElement("img");
+      skImg.className = "cv-cover-img";
+      skImg.src = cache.coverUrl;
+      skImg.onerror = () => skImg.remove();
+      $("cvCover").replaceChildren(skImg);
+      $("cvPrice").innerHTML = '<span class="muted">Loading purchase details\u2026</span>';
+      setCvStatus("");
+    } else {
+      setCvStatus("Loading collection from the chain\u2026");
+    }
     try {
-      const info = await loadCollection(tx1Ref, holderPubKey);
+      let info;
+      try {
+        info = cache ? await loadCollection(tx1Ref, holderPubKey, { light: true }) : await loadCollection(tx1Ref, holderPubKey);
+      } catch (lightErr) {
+        if (!cache) throw lightErr;
+        info = await loadCollection(tx1Ref, holderPubKey);
+      }
+      if (cache) info = { ...info, name: info.name || cache.title, description: info.description || cache.description, contentCategory: cache.category };
       currentCollection = { info, holderPubKey };
-      renderCollectionView(info);
-      void registerOgAssets(info);
+      renderCollectionView(info, cache ? { coverUrl: cache.coverUrl } : void 0);
+      if (info.cover != null) void registerOgAssets(info);
       if (cvGiftWif) {
         setCvGetLabel("\u{1F381} Get your free copy");
         $("cvPrice").innerHTML = '\u{1F381} <b>A free gift from the publisher</b> <span class="muted">\u2014 claim your copy, no payment and no funds needed.</span>';
@@ -29348,7 +29410,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"d7a7eca"} \xB7 ${"2026-07-21"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"838447e"} \xB7 ${"2026-07-21"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -29552,7 +29614,7 @@ Buy ANOTHER copy?`)) void onGetCopy();
     $("cvFundDone").onclick = () => void onGetCopy();
     window.addEventListener("hashchange", () => {
       const r2 = parseHashRoute();
-      if (r2) void openCollectionView(r2.c, r2.h, r2.g);
+      if (r2) void openCollectionView(r2.c, r2.h, r2.g, r2.src);
       else closeCollectionView();
     });
     const listParam = new URLSearchParams(location.hash.replace(/^#/, "")).get("list");
@@ -29563,7 +29625,7 @@ Buy ANOTHER copy?`)) void onGetCopy();
       history.replaceState(null, "", location.pathname + location.search);
     }
     const route = parseHashRoute();
-    if (route) void openCollectionView(route.c, route.h, route.g);
+    if (route) void openCollectionView(route.c, route.h, route.g, route.src);
     void refreshBalance();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

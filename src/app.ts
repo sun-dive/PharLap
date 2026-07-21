@@ -3308,6 +3308,9 @@ interface CollectionInfo {
   /** MIME of the embedded content, when small enough to parse under the sales-page fetch cap. null if there's no
    *  content OR it was too big to fetch (oversized — assumed to be large media, e.g. a song). */
   contentMime: string | null
+  /** Content category hint (image/audio/video/…) — only set on the BigRed-cache fast path (a light load skips the
+   *  FILE output, so contentMime is null there). Used by the 🎧 preview gate. Undefined on a full chain load. */
+  contentCategory?: Cat
   /** SHA-256 (hex) of the embedded content, committed in the TX1 template — used to reference this collection
    *  from a combination/EP manifest (and to integrity-check the resolved content). null if no content file. */
   fileHash: string | null
@@ -3365,8 +3368,10 @@ function reflectCvOwnership(info: CollectionInfo): void {
   }
 }
 
-/** Read a `#c=…&h=…` hash route, or null if absent. Also captures a referral `aff` ref-code for this session. */
-function parseHashRoute(): { c: string; h: string | null; g: string | null } | null {
+/** Read a `#c=…&h=…` hash route, or null if absent. Also captures a referral `aff` ref-code for this session.
+ *  `src` = the originating BigRed site's hostname (added by its "Get a copy" link) — used as a display cache to
+ *  paint the cover/title/description instantly instead of waiting on the slow chain load. */
+function parseHashRoute(): { c: string; h: string | null; g: string | null; src: string | null } | null {
   const raw = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
   if (!raw) return null
   const params = new URLSearchParams(raw)
@@ -3374,11 +3379,11 @@ function parseHashRoute(): { c: string; h: string | null; g: string | null } | n
   if (aff != null && aff !== '') incomingAff = aff // a share link's referral overrides the default Buy-BSV code
   const c = params.get('c')
   if (!c) return null
-  return { c, h: params.get('h'), g: params.get('g') }
+  return { c, h: params.get('h'), g: params.get('g'), src: params.get('src') }
 }
 
 /** Fetch TX1 and extract everything the storefront page needs (template + storefront + fees). */
-async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null): Promise<CollectionInfo> {
+async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null, opts: { light?: boolean } = {}): Promise<CollectionInfo> {
   // Read ONLY the small metadata outputs (template + storefront), skipping any large embedded content file,
   // so the sales page renders without pulling the whole (possibly tens-of-MB) TX1. Layout is deterministic:
   // [0]=template, [1]=file (may be huge), [2]=storefront, [last]=change. We scan outputs with a size cap; an
@@ -3391,7 +3396,10 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   // template is [0]; storefront comes after the (possibly huge) file, so once we have both we can stop — that
   // also avoids WoC's 502-on-out-of-range past the last output. Any fetch error on an index is treated as a
   // skip (not a hard failure) so a transient/late hiccup can't break a load that already has what it needs.
-  for (let i = 0; i < 6; i++) {
+  // Light mode (BigRed-cache fast path): fetch ONLY the template output [0] for the covenant — skip the big
+  // storefront/cover + file outputs, since cover/title/description come from the cache. Falls back to a full
+  // load (caller re-invokes without `light`) if the template isn't at [0].
+  for (let i = 0; i < (opts.light ? 1 : 6); i++) {
     let hex: string | 'oversized' | null
     try { hex = await provider.getOutputScriptHexCapped(tx1Ref, i, 8 * 1024 * 1024) } // headroom for a rich animated front+back storefront cover
     catch { hex = null }
@@ -3407,6 +3415,7 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
     if (template != null && storefront != null) break           // have everything the sales page needs
   }
   if (!template) throw new Error('not a SMART NFTs collection (no template output in TX1)')
+  if (opts.light) hasContentFile = template.fileHash != null // light skips the FILE output; infer from the committed hash
   const rules = decodeTokenRules(template.tokenRules)
   let fees: { publisher: number; holder: number } | null = null
   let isV2 = false, pBps = 0, v2PriceSats = 0
@@ -3446,7 +3455,7 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   }
 }
 
-function renderCollectionView(info: CollectionInfo): void {
+function renderCollectionView(info: CollectionInfo, opts?: { coverUrl?: string }): void {
   $('cvTitle').textContent = info.name || 'Untitled collection'
   const coverHost = $('cvCover')
   coverHost.innerHTML = ''
@@ -3470,6 +3479,12 @@ function renderCollectionView(info: CollectionInfo): void {
       }
       coverHost.append(flip)
     }
+  } else if (opts?.coverUrl) {
+    // BigRed-cache fast path: no cover bytes loaded (light load) — render the cached cover by URL. If it 404s
+    // (collection not curated on that site), drop to the placeholder.
+    const img = document.createElement('img'); img.className = 'cv-cover-img'; img.src = opts.coverUrl
+    img.onerror = () => { img.remove(); if (coverHost.childElementCount === 0) coverHost.innerHTML = '<div class="cv-cover-ph">🎴</div>' }
+    coverHost.append(img)
   } else {
     coverHost.innerHTML = '<div class="cv-cover-ph">🎴</div>'
   }
@@ -3480,7 +3495,9 @@ function renderCollectionView(info: CollectionInfo): void {
   // Preview is an audio-sample feature — only offer it for audio releases (an audio file or a packed album), so
   // BMF/BMC/image/agent collections don't show a dead "🎧 Preview". Oversized content (mime skipped at load) is
   // assumed to be large media, e.g. a >8MB song, and keeps the button.
-  const contentIsAudio = info.contentMime != null ? mimeCategory(info.contentMime) === 'audio' : info.hasContentFile
+  const contentIsAudio = info.contentMime != null ? mimeCategory(info.contentMime) === 'audio'
+    : info.contentCategory != null ? info.contentCategory === 'audio' // BigRed-cache light path (no mime fetched)
+    : info.hasContentFile
   const pubForPreview = info.publisherPubKeyHex
   if (pubForPreview != null && contentIsAudio) {
     const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'secondary'
@@ -3555,7 +3572,40 @@ function showViewButton(info: CollectionInfo, show: boolean): void {
   }
 }
 
-async function openCollectionView(tx1Ref: string, holderPubKey: string | null, giftWif: string | null = null): Promise<void> {
+/** Resolve which BigRed site (if any) to use as a display cache. Explicit `&src=<host>` from a "Get a copy" link
+ *  wins; else the referring page's hostname (works for any BigRed niche site, no per-site config). Returns a bare
+ *  hostname or null (→ chain-only, e.g. a Phar Lap share link or direct paste). */
+function cacheHostFrom(srcHost: string | null): string | null {
+  let host = (srcHost || '').trim().toLowerCase()
+  if (!host && document.referrer) {
+    try { const r = new URL(document.referrer); if (r.origin !== location.origin) host = r.hostname.toLowerCase() } catch { /* ignore */ }
+  }
+  return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(host) ? host : null // a bare hostname only — never a path/scheme
+}
+
+interface ListingCache { title: string; description: string; category: Cat; coverUrl: string }
+
+/** Best-effort fetch of a BigRed site's cached listing (title/description/price + cover URL) for an instant
+ *  sales-page paint. Returns null on any miss/timeout/CORS failure so the caller falls back to the chain. */
+async function fetchListingCache(host: string, collectionId: string): Promise<ListingCache | null> {
+  try {
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), 4000)
+    const resp = await fetch(`https://${host}/listings.json`, { signal: ctl.signal, mode: 'cors' })
+    clearTimeout(timer)
+    if (!resp.ok) return null
+    const data = await resp.json() as { listings?: Array<Record<string, unknown>> }
+    const it = (data.listings ?? []).find(l => String(l.collectionId).toLowerCase() === collectionId.toLowerCase())
+    if (!it || typeof it.cover !== 'string') return null
+    return {
+      title: String(it.title ?? ''), description: String(it.description ?? ''),
+      category: (typeof it.category === 'string' ? it.category : 'other') as Cat,
+      coverUrl: `https://${host}/${it.cover}`,
+    }
+  } catch { return null }
+}
+
+async function openCollectionView(tx1Ref: string, holderPubKey: string | null, giftWif: string | null = null, srcHost: string | null = null): Promise<void> {
   cvGiftWif = giftWif
   $('collectionView').style.display = 'flex'
   hideFundPrompt()
@@ -3565,12 +3615,37 @@ async function openCollectionView(tx1Ref: string, holderPubKey: string | null, g
   $('cvPublisher').textContent = ''
   $('cvDesc').textContent = ''
   $('cvPrice').innerHTML = ''
-  setCvStatus('Loading collection from the chain…')
+
+  // Fast path: if the buyer came from a BigRed site, paint its cached cover/title/description INSTANTLY, then a
+  // light chain load (covenant only, no multi-MB cover download) enables the buy. Any cache miss/failure falls
+  // straight through to the full chain load below.
+  const host = cacheHostFrom(srcHost)
+  const cache = host ? await fetchListingCache(host, tx1Ref) : null
+  if (cache) {
+    $('cvTitle').textContent = cache.title || 'Loading…'
+    $('cvDesc').textContent = cache.description || ''
+    const skImg = document.createElement('img'); skImg.className = 'cv-cover-img'; skImg.src = cache.coverUrl
+    skImg.onerror = () => skImg.remove()
+    $('cvCover').replaceChildren(skImg)
+    $('cvPrice').innerHTML = '<span class="muted">Loading purchase details…</span>'
+    setCvStatus('')
+  } else {
+    setCvStatus('Loading collection from the chain…')
+  }
+
   try {
-    const info = await loadCollection(tx1Ref, holderPubKey)
+    let info: CollectionInfo
+    try {
+      info = cache ? await loadCollection(tx1Ref, holderPubKey, { light: true }) : await loadCollection(tx1Ref, holderPubKey)
+    } catch (lightErr) {
+      if (!cache) throw lightErr
+      info = await loadCollection(tx1Ref, holderPubKey) // light failed (odd output layout) → full chain load
+    }
+    // Graft the cache's display fields onto the (light) covenant info so renderCollectionView has everything.
+    if (cache) info = { ...info, name: info.name || cache.title, description: info.description || cache.description, contentCategory: cache.category }
     currentCollection = { info, holderPubKey }
-    renderCollectionView(info)
-    void registerOgAssets(info) // cache this collection's preview assets so its shared links get a rich card
+    renderCollectionView(info, cache ? { coverUrl: cache.coverUrl } : undefined)
+    if (info.cover != null) void registerOgAssets(info) // only when the cover bytes were actually loaded (full load)
     if (cvGiftWif) {
       // Reframe the page as a free gift claim.
       setCvGetLabel('🎁 Get your free copy')
@@ -4641,7 +4716,7 @@ function init(): void {
   $('cvFundDone').onclick = () => void onGetCopy()
   window.addEventListener('hashchange', () => {
     const r = parseHashRoute()
-    if (r) void openCollectionView(r.c, r.h, r.g)
+    if (r) void openCollectionView(r.c, r.h, r.g, r.src)
     else closeCollectionView()
   })
 
@@ -4657,7 +4732,7 @@ function init(): void {
 
   // If the page was opened via a share link, show the storefront over the wallet.
   const route = parseHashRoute()
-  if (route) void openCollectionView(route.c, route.h, route.g)
+  if (route) void openCollectionView(route.c, route.h, route.g, route.src)
 
   void refreshBalance()
 }
