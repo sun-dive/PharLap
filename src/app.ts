@@ -3305,6 +3305,9 @@ interface CollectionInfo {
   encrypted: boolean
   replicable: boolean
   hasContentFile: boolean
+  /** MIME of the embedded content, when small enough to parse under the sales-page fetch cap. null if there's no
+   *  content OR it was too big to fetch (oversized — assumed to be large media, e.g. a song). */
+  contentMime: string | null
   /** SHA-256 (hex) of the embedded content, committed in the TX1 template — used to reference this collection
    *  from a combination/EP manifest (and to integrity-check the resolved content). null if no content file. */
   fileHash: string | null
@@ -3384,6 +3387,7 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
   let publisherPubKeyHex: string | null = null
   let storefront: StorefrontFields | null = null
   let hasContentFile = false
+  let contentMime: string | null = null // captured when the content file is small enough to parse (under the cap)
   // template is [0]; storefront comes after the (possibly huge) file, so once we have both we can stop — that
   // also avoids WoC's 502-on-out-of-range past the last output. Any fetch error on an index is treated as a
   // skip (not a hard failure) so a transient/late hiccup can't break a load that already has what it needs.
@@ -3398,7 +3402,8 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
     if (t) { template = t.fields; publisherPubKeyHex = t.publisherPubKeyHex }
     const s = parseStorefrontScript(script)
     if (s) storefront = s.fields
-    if (parseFileScript(script)) hasContentFile = true          // a SMALL embedded file (fetched under the cap)
+    const ff = parseFileScript(script)
+    if (ff) { hasContentFile = true; contentMime = ff.fields.mimeType } // a SMALL embedded file (fetched under the cap)
     if (template != null && storefront != null) break           // have everything the sales page needs
   }
   if (!template) throw new Error('not a SMART NFTs collection (no template output in TX1)')
@@ -3435,7 +3440,7 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null):
     : null
   return {
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
-    cover, backCover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile,
+    cover, backCover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile, contentMime,
     fileHash: template.fileHash ?? null,
     publisherPubKeyHex, fees, isV2, pBps, v2PriceSats, covenantHex: template.covenantScript, bondSats,
   }
@@ -3472,8 +3477,12 @@ function renderCollectionView(info: CollectionInfo): void {
   // page never fetches the (large) clip unless someone wants to listen. Plaintext/public — no holder gate.
   const prevHost = $('cvPreview')
   prevHost.innerHTML = ''
+  // Preview is an audio-sample feature — only offer it for audio releases (an audio file or a packed album), so
+  // BMF/BMC/image/agent collections don't show a dead "🎧 Preview". Oversized content (mime skipped at load) is
+  // assumed to be large media, e.g. a >8MB song, and keeps the button.
+  const contentIsAudio = info.contentMime != null ? mimeCategory(info.contentMime) === 'audio' : info.hasContentFile
   const pubForPreview = info.publisherPubKeyHex
-  if (pubForPreview != null) {
+  if (pubForPreview != null && contentIsAudio) {
     const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'secondary'
     btn.textContent = '🎧 Preview'
     btn.onclick = async () => {

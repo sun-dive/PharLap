@@ -28148,6 +28148,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     let publisherPubKeyHex = null;
     let storefront = null;
     let hasContentFile = false;
+    let contentMime = null;
     for (let i = 0; i < 6; i++) {
       let hex;
       try {
@@ -28171,7 +28172,11 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       }
       const s2 = parseStorefrontScript(script);
       if (s2) storefront = s2.fields;
-      if (parseFileScript(script)) hasContentFile = true;
+      const ff = parseFileScript(script);
+      if (ff) {
+        hasContentFile = true;
+        contentMime = ff.fields.mimeType;
+      }
       if (template != null && storefront != null) break;
     }
     if (!template) throw new Error("not a SMART NFTs collection (no template output in TX1)");
@@ -28211,6 +28216,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       encrypted: rules.isEncrypted,
       replicable: rules.isReplicable,
       hasContentFile,
+      contentMime,
       fileHash: template.fileHash ?? null,
       publisherPubKeyHex,
       fees,
@@ -28263,8 +28269,9 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     }
     const prevHost = $("cvPreview");
     prevHost.innerHTML = "";
+    const contentIsAudio = info.contentMime != null ? mimeCategory(info.contentMime) === "audio" : info.hasContentFile;
     const pubForPreview = info.publisherPubKeyHex;
-    if (pubForPreview != null) {
+    if (pubForPreview != null && contentIsAudio) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "secondary";
@@ -29341,7 +29348,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"31ab9c8"} \xB7 ${"2026-07-21"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"d7a7eca"} \xB7 ${"2026-07-21"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
