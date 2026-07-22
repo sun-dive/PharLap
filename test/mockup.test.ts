@@ -16,18 +16,27 @@ import {
 const A = 'a'.repeat(64)
 const B = 'b'.repeat(64)
 
-test('cover: minimal (two txids) round-trips and is exactly 66 bytes', () => {
+test('cover: minimal (two txids) round-trips and is exactly 67 bytes', () => {
   const c: MockupCover = { version: 1, prop: { tx: A, index: null }, design: { tx: B, index: null }, place: null, warp: null }
   const packed = packCover(c)
-  assert.equal(packed.length, 66) // TAG + VERFLAGS + 32 + 32
+  assert.equal(packed.length, 67) // TAG + VERSION + FLAGS + 32 + 32
   const back = parseCover(packed)
   assert.deepEqual(back, c)
 })
 
-test('cover: set-index refs collapse to 6 bytes', () => {
+test('cover: an EMBEDDED design (the storefront cover) drops the design ref — prop-txid only = 35 bytes', () => {
+  const c: MockupCover = { version: 1, prop: { tx: A, index: null }, design: null, place: null, warp: null }
+  const packed = packCover(c)
+  assert.equal(packed.length, 35) // TAG + VERSION + FLAGS + prop 32
+  const back = parseCover(packed)
+  assert.deepEqual(back, c)
+  assert.equal(back!.design, null)
+})
+
+test('cover: set-index refs collapse to 7 bytes', () => {
   const c: MockupCover = { version: 1, prop: { tx: null, index: 3 }, design: { tx: null, index: 7 }, place: null, warp: null }
   const packed = packCover(c)
-  assert.equal(packed.length, 6) // TAG + VERFLAGS + u16 + u16
+  assert.equal(packed.length, 7) // TAG + VERSION + FLAGS + u16 + u16
   assert.deepEqual(parseCover(packed), c)
 })
 
@@ -37,7 +46,7 @@ test('cover: place adds 7 bytes and round-trips within quantization tolerance', 
     place: { x: 0.5, y: 0.46, scale: 0.9, rot: 90 }, warp: null,
   }
   const packed = packCover(c)
-  assert.equal(packed.length, 66 + 7)
+  assert.equal(packed.length, 67 + 7)
   const back = parseCover(packed)!
   assert.ok(Math.abs(back.place!.x - 0.5) < 1e-4)
   assert.ok(Math.abs(back.place!.y - 0.46) < 1e-4)
@@ -51,7 +60,7 @@ test('cover: a cyl warp override round-trips (params within quantization toleran
     warp: [{ t: 'cyl', curve: 0.62, bow: 0.16, axis: 0 }],
   }
   const packed = packCover(c)
-  assert.equal(packed.length, 66 + 6) // count(1) + id(1) + plen(1) + 3 params
+  assert.equal(packed.length, 67 + 6) // count(1) + id(1) + plen(1) + 3 params
   const back = parseCover(packed)!
   assert.equal(back.warp!.length, 1)
   const s = back.warp![0]

@@ -14,6 +14,13 @@ export const MOCKUP_MIME = 'application/vnd.bmf-mockup'
 const TAG = 0x4d // 'M'
 const HEX64 = /^[0-9a-f]{64}$/i
 
+// FLAGS byte (see §5). Defaults are omitted via these bits so the common cover is just header + refs.
+const FLAG_PLACE = 0x01           // a place block follows
+const FLAG_WARP = 0x02            // a warp block follows
+const FLAG_PROP_IDX = 0x04        // prop is a u16 set-index, not a 32-byte txid
+const FLAG_DESIGN_IDX = 0x08      // design is a u16 set-index, not a 32-byte txid
+const FLAG_DESIGN_EMBEDDED = 0x10 // no design ref at all — the design IS the product's own storefront cover
+
 // ─── warp registry (frozen ids — see spec §3) ────────────────────────
 // Each stage packs as [typeId:u8, plen:u8, plen param bytes]. Known types have a fixed param schema
 // (name → quantization); unknown/variable types (mesh/fold/ext) round-trip via raw param bytes.
@@ -57,7 +64,9 @@ export interface Ref { tx: string | null; index: number | null }
 export interface MockupCover {
   version: number
   prop: Ref
-  design: Ref
+  /** The design reference — or null when the design is EMBEDDED (it's the product's own storefront cover, so no
+   *  ref is stored). Embedded is the TeeStrip product case; a ref is used when the design is a shared atom. */
+  design: Ref | null
   /** Placement within the prop's print region. null = fill the region (identity). */
   place: { x: number; y: number; scale: number; rot: number } | null
   /** Warp override. null = inherit the prop's default warp. */
@@ -163,17 +172,21 @@ function parseWarp(r: R): WarpStage[] {
 
 // ─── cover manifest: packed bytes ────────────────────────────────────
 export function packCover(c: MockupCover): number[] {
+  const d = c.design
   const propIdx = c.prop.index != null
-  const designIdx = c.design.index != null
+  const designIdx = d != null && d.index != null
   let flags = 0
-  if (c.place) flags |= 0x1
-  if (c.warp) flags |= 0x2
-  if (propIdx) flags |= 0x4
-  if (designIdx) flags |= 0x8
+  if (c.place) flags |= FLAG_PLACE
+  if (c.warp) flags |= FLAG_WARP
+  if (propIdx) flags |= FLAG_PROP_IDX
+  if (designIdx) flags |= FLAG_DESIGN_IDX
+  if (d == null) flags |= FLAG_DESIGN_EMBEDDED
 
-  const w = new W().u8(TAG).u8(((c.version & 0x0f) << 4) | flags)
+  const w = new W().u8(TAG).u8(c.version & 0xff).u8(flags)
   propIdx ? w.u16(c.prop.index as number) : w.bytes(hexToBytes(c.prop.tx as string))
-  designIdx ? w.u16(c.design.index as number) : w.bytes(hexToBytes(c.design.tx as string))
+  if (d != null) {
+    d.index != null ? w.u16(d.index) : w.bytes(hexToBytes(d.tx as string))
+  }
   if (c.place) {
     w.u16(clamp(Math.round(c.place.x * 65535), 0, 65535))
       .u16(clamp(Math.round(c.place.y * 65535), 0, 65535))
@@ -186,19 +199,22 @@ export function packCover(c: MockupCover): number[] {
 
 /** Parse a packed cover record. Returns null if it isn't one. */
 export function parseCover(bytes: number[]): MockupCover | null {
-  if (bytes == null || bytes.length < 2 || bytes[0] !== TAG) return null
+  if (bytes == null || bytes.length < 3 || bytes[0] !== TAG) return null
   const r = new R(bytes)
   r.u8() // TAG
-  const vf = r.u8()
-  const version = (vf >>> 4) & 0x0f, flags = vf & 0x0f
+  const version = r.u8()
+  const flags = r.u8()
   try {
-    const prop: Ref = (flags & 0x4) ? { tx: null, index: r.u16() } : { tx: bytesToHex(r.bytes(32)), index: null }
-    const design: Ref = (flags & 0x8) ? { tx: null, index: r.u16() } : { tx: bytesToHex(r.bytes(32)), index: null }
+    const prop: Ref = (flags & FLAG_PROP_IDX) ? { tx: null, index: r.u16() } : { tx: bytesToHex(r.bytes(32)), index: null }
+    let design: Ref | null = null
+    if (!(flags & FLAG_DESIGN_EMBEDDED)) {
+      design = (flags & FLAG_DESIGN_IDX) ? { tx: null, index: r.u16() } : { tx: bytesToHex(r.bytes(32)), index: null }
+    }
     let place: MockupCover['place'] = null
-    if (flags & 0x1) {
+    if (flags & FLAG_PLACE) {
       place = { x: r.u16() / 65535, y: r.u16() / 65535, scale: r.u16() / 1024, rot: r.u8() / 255 * 360 }
     }
-    const warp = (flags & 0x2) ? parseWarp(r) : null
+    const warp = (flags & FLAG_WARP) ? parseWarp(r) : null
     return { version, prop, design, place, warp }
   } catch {
     return null
@@ -233,13 +249,14 @@ export function coverFromJson(obj: Record<string, unknown>): MockupCover {
   return {
     version: Number(obj.v ?? 1),
     prop: refFromJson(obj.p),
-    design: refFromJson(obj.d),
+    design: obj.d == null ? null : refFromJson(obj.d), // absent/null d = embedded (the storefront cover)
     place: Array.isArray(P) ? { x: P[0] ?? 0.5, y: P[1] ?? 0.5, scale: P[2] ?? 1, rot: P[3] ?? 0 } : null,
     warp: obj.w != null ? warpFromJson(obj.w) : null,
   }
 }
 export function coverToJson(c: MockupCover): Record<string, unknown> {
-  const o: Record<string, unknown> = { v: c.version, p: refToJson(c.prop), d: refToJson(c.design) }
+  const o: Record<string, unknown> = { v: c.version, p: refToJson(c.prop) }
+  if (c.design) o.d = refToJson(c.design)
   if (c.place) o.P = [c.place.x, c.place.y, c.place.scale, c.place.rot]
   if (c.warp) o.w = c.warp
   return o
