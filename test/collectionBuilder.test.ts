@@ -25,11 +25,13 @@ import {
   parseTokenScript,
   parseFileScript,
   parseStorefrontScript,
+  parseMockupScript,
   decodeTokenRules,
   encodeTokenRules,
   RESTRICTION_REPLICABLE,
 } from '../src/tokenCodec.ts'
 import { unwrapContentKey, decryptContent } from '../src/contentCrypto.ts'
+import { packCover } from '../src/mockup.ts'
 
 const KEY = PrivateKey.fromRandom()
 const PUB = KEY.toPublicKey().toString()
@@ -219,6 +221,35 @@ test('createCollection mints ALL editions (multi-edition: 21) and broadcasts TX1
   const tx2 = Transaction.fromHex(broadcasts[1])
   const tokenOuts = tx2.outputs.filter(o => parseTokenScript(o.lockingScript) != null)
   assert.equal(tokenOuts.length, 21) // all 21 editions present in the genesis tx
+})
+
+test('createCollection WITH a mockup manifest carries a MOCKUP output on TX1', async () => {
+  const key = PrivateKey.fromRandom()
+  const prev = new Transaction()
+  prev.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), satoshis: 60_000 })
+  const fb = new Transaction()
+  fb.addInput({ sourceTransaction: prev, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  fb.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), satoshis: 30_000 })
+  fb.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), change: true })
+  await fb.fee(new SatoshisPerKilobyte(100))
+  await fb.sign()
+  const fundingTx = Transaction.fromHex(fb.toHex())
+  const fundingId = fundingTx.id('hex')
+
+  const broadcasts: string[] = []
+  const provider: any = {
+    getUtxos: async () => [{ txId: fundingId, outputIndex: 0, satoshis: 30_000, script: '' }],
+    getSourceTransaction: async (id: string) => { if (id === fundingId) return fundingTx; throw new Error(`unexpected getSourceTransaction(${id})`) },
+    broadcast: async (hex: string) => { broadcasts.push(hex); return 'id' },
+    registerPendingTx: () => {},
+  }
+
+  const manifest = packCover({ version: 1, prop: { tx: 'a'.repeat(64), index: null }, design: null, place: null, warp: [{ t: 'cyl', curve: 0.6, bow: 0.5, axis: 0 }] })
+  await createCollection(provider, key, { tokenName: 'Mockup', supply: 1, mintCount: 1, mockupManifest: manifest })
+  const tx1 = Transaction.fromHex(broadcasts[0])
+  const mk = tx1.outputs.map(o => parseMockupScript(o.lockingScript)).find(Boolean)
+  assert.ok(mk, 'expected a MOCKUP output on TX1')
+  assert.deepEqual(mk!.manifest, manifest) // the exact packed manifest is on chain
 })
 
 test('createCollection: encrypted capped-supply collection carries an encrypted FILE + storefront cover, supply preserved, NOT replicable', async () => {

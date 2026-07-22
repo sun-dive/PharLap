@@ -36,7 +36,10 @@ import {
   encodeTokenRules,
   decodeTokenRules,
   collectionId,
+  buildMockupScript,
+  parseMockupScript,
 } from '../src/tokenCodec.ts'
+import { packCover, parseCover } from '../src/mockup.ts'
 
 const KEY = PrivateKey.fromRandom()
 const PUB = KEY.toPublicKey().toString()
@@ -108,6 +111,18 @@ test('TEMPLATE licence: code round-trips (no file)', () => {
   const parsed = parseTemplateScript(buildTemplateScript(PUB, data))
   assert.ok(parsed)
   assert.deepEqual(parsed.fields, data)
+})
+
+test('MOCKUP: a packed cover manifest round-trips through the PushDrop record', () => {
+  const manifest = packCover({ version: 1, prop: { tx: TX1, index: null }, design: null, place: { x: 0.5, y: 0.46, scale: 0.9, rot: 0 }, warp: [{ t: 'cyl', curve: 0.62, bow: 0.16, axis: 0 }] })
+  const parsed = parseMockupScript(buildMockupScript(PUB, manifest))
+  assert.ok(parsed)
+  assert.equal(parsed.publisherPubKeyHex, PUB)
+  assert.deepEqual(parsed.manifest, manifest)
+  // the unwrapped bytes are a valid mockup cover (embedded design → the storefront cover)
+  const cover = parseCover(parsed.manifest)!
+  assert.equal(cover.prop.tx, TX1)
+  assert.equal(cover.design, null)
 })
 
 test('TEMPLATE licence: code + ref (txid) round-trip after a fileHash (no encryption)', () => {

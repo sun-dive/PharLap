@@ -19890,6 +19890,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var RECORD_PROFILE = 8;
   var RECORD_CONFIG = 9;
   var RECORD_PREVIEW = 10;
+  var RECORD_MOCKUP = 11;
   var RESTRICTION_FUNGIBLE = 1;
   var RESTRICTION_REPLICABLE = 2;
   var RESTRICTION_TRACK_TRANSFERS = 4;
@@ -20145,6 +20146,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const fields = decodeStorefrontFields(d.fields);
     if (fields == null) return null;
     return { publisherPubKeyHex: d.pubKeyHex, fields };
+  }
+  function encodeMockupFields(manifest) {
+    return [P_PREFIX, [P_VERSION], [RECORD_MOCKUP], manifest];
+  }
+  function buildMockupScript(publisherPubKeyHex, manifest) {
+    return lock(publisherPubKeyHex, encodeMockupFields(manifest));
   }
   function encodeProfileFields(data) {
     return [
@@ -20403,6 +20410,11 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       storefrontVout = tx.outputs.length;
       tx.addOutput({ lockingScript: buildStorefrontScript(publisherPub, opts.storefront), satoshis: sats });
     }
+    let mockupVout = null;
+    if (opts.mockup != null && opts.mockup.length > 0) {
+      mockupVout = tx.outputs.length;
+      tx.addOutput({ lockingScript: buildMockupScript(publisherPub, opts.mockup), satoshis: sats });
+    }
     const changeVout = tx.outputs.length;
     tx.addOutput({ lockingScript: new P2PKH().lock(address2), change: true });
     await tx.fee(new SatoshisPerKilobyte(opts.feePerKb ?? DEFAULT_FEE_PER_KB));
@@ -20414,6 +20426,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       templateVout,
       fileVout,
       storefrontVout,
+      mockupVout,
       changeVout: changeSats > 0 ? changeVout : null,
       changeSats
     };
@@ -20503,7 +20516,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       backCoverFileName: params.cover != null ? params.backCover?.fileName : void 0,
       backCoverBytes: params.cover != null ? params.backCover?.bytes : void 0
     } : void 0;
-    const numOutputs = 1 + (file ? 1 : 0) + (storefront ? 1 : 0) + mintCount;
+    const numOutputs = 1 + (file ? 1 : 0) + (storefront ? 1 : 0) + (params.mockupManifest?.length ? 1 : 0) + mintCount;
     const tx1Bytes = 400 + (file ? file.fileBytes.length : 0) + (params.cover ? params.cover.bytes.length : 0) + (params.backCover ? params.backCover.bytes.length : 0);
     const tx2Bytes = 300 + mintCount * 80;
     const estFee = Math.ceil((tx1Bytes + tx2Bytes) * feePerKb / 1e3);
@@ -20512,7 +20525,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const funding = await Promise.all(
       selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) }))
     );
-    const t1 = await buildTemplateTx({ key: key2, funding, template, file, storefront, outputSats: sats, feePerKb });
+    const t1 = await buildTemplateTx({ key: key2, funding, template, file, storefront, mockup: params.mockupManifest, outputSats: sats, feePerKb });
     if (t1.changeVout == null) {
       throw new Error("Insufficient funding: the template tx left no change to fund the genesis mint. Add more funds.");
     }
@@ -21491,7 +21504,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const target = (1 + mintCount) * tokenSats + estFee + Math.max(1e3, Math.ceil(estFee * 0.2));
     const selected = selectFunding(await getSafeUtxos(provider2), target);
     const funding = await toFundingInputs(provider2, selected);
-    const t1 = await buildTemplateTx({ key: key2, funding, template, file, storefront, outputSats: tokenSats, feePerKb });
+    const t1 = await buildTemplateTx({ key: key2, funding, template, file, storefront, mockup: params.mockupManifest, outputSats: tokenSats, feePerKb });
     if (t1.changeVout == null) throw new Error("Insufficient funding: template tx left no change to fund the edition mint.");
     const t2Funding = [{
       utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: "" },
@@ -29535,7 +29548,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"65631b2"} \xB7 ${"2026-07-22"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"3799ee2"} \xB7 ${"2026-07-22"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

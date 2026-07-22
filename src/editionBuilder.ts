@@ -502,6 +502,9 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   license?: string
   /** Optional 64-hex txid pointing at the full licence text minted on-chain. */
   licenseRef?: string
+  /** Optional packed mockup-cover manifest (mockup.ts packCover) — a TX1 output; the curator composites the
+   *  public cover onto the referenced prop. */
+  mockupManifest?: number[]
   feePerKb?: number
   /** Spend gate: called with the EXACT total sats to spend, after build and before broadcast. False aborts. */
   confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
@@ -583,7 +586,7 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   const funding = await toFundingInputs(provider, selected)
 
   // Build both offline, broadcast only if both succeed (no orphaned template).
-  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, outputSats: tokenSats, feePerKb })
+  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, mockup: params.mockupManifest, outputSats: tokenSats, feePerKb })
   if (t1.changeVout == null) throw new Error('Insufficient funding: template tx left no change to fund the edition mint.')
   const t2Funding: FundingInput[] = [{
     utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' },
@@ -671,6 +674,8 @@ export async function createEditionV2(provider: WalletProvider, key: PrivateKey,
   encrypt?: boolean
   description?: string
   cover?: { mimeType: string; fileName: string; bytes: number[] }
+  /** Optional packed mockup-cover manifest (mockup.ts packCover) — a TX1 output. */
+  mockupManifest?: number[]
   feePerKb?: number
 }): Promise<CreateEditionResult & { tx2: Transaction }> {
   const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB
@@ -727,7 +732,7 @@ export async function createEditionV2(provider: WalletProvider, key: PrivateKey,
   const selected = selectFunding(await getSafeUtxos(provider), target)
   const funding = await toFundingInputs(provider, selected)
 
-  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, outputSats: tokenSats, feePerKb })
+  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, mockup: params.mockupManifest, outputSats: tokenSats, feePerKb })
   if (t1.changeVout == null) throw new Error('Insufficient funding: template tx left no change to fund the v2 mint.')
   const t2Funding: FundingInput[] = [{
     utxo: { txId: t1.tx1Id, outputIndex: t1.changeVout, satoshis: t1.changeSats, script: '' }, sourceTx: t1.tx,

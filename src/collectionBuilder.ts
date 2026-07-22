@@ -28,6 +28,7 @@ import {
   classifyRecord,
   RESTRICTION_ENCRYPTED,
   RESTRICTION_COMPRESSED,
+  buildMockupScript,
 } from './tokenCodec.ts'
 import type { TemplateFields, FileFields, StorefrontFields } from './tokenCodec.ts'
 import { compressIfSmaller } from './compress.ts'
@@ -85,6 +86,7 @@ export interface TemplateTxResult {
   templateVout: number
   fileVout: number | null
   storefrontVout: number | null
+  mockupVout: number | null
   changeVout: number | null
   changeSats: number
 }
@@ -96,6 +98,8 @@ export async function buildTemplateTx(opts: {
   file?: FileFields
   /** Optional immutable storefront record (description + optional cover image), TX1-resident. */
   storefront?: StorefrontFields
+  /** Optional packed mockup-cover manifest (mockup.ts packCover) — carried as its own TX1 output. */
+  mockup?: number[]
   outputSats?: number
   feePerKb?: number
 }): Promise<TemplateTxResult> {
@@ -124,6 +128,11 @@ export async function buildTemplateTx(opts: {
     storefrontVout = tx.outputs.length
     tx.addOutput({ lockingScript: buildStorefrontScript(publisherPub, opts.storefront), satoshis: sats })
   }
+  let mockupVout: number | null = null
+  if (opts.mockup != null && opts.mockup.length > 0) {
+    mockupVout = tx.outputs.length
+    tx.addOutput({ lockingScript: buildMockupScript(publisherPub, opts.mockup), satoshis: sats })
+  }
 
   const changeVout = tx.outputs.length
   tx.addOutput({ lockingScript: new P2PKH().lock(address), change: true })
@@ -138,6 +147,7 @@ export async function buildTemplateTx(opts: {
     templateVout,
     fileVout,
     storefrontVout,
+    mockupVout,
     changeVout: changeSats > 0 ? changeVout : null,
     changeSats,
   }
@@ -230,6 +240,9 @@ export interface CollectionParams {
   license?: string
   /** Optional 64-hex txid pointing at the full licence text minted on-chain. */
   licenseRef?: string
+  /** Optional packed mockup-cover manifest (mockup.ts packCover) — a TX1 output; the curator composites the
+   *  public cover onto the referenced prop. */
+  mockupManifest?: number[]
   /** How many token outputs to mint in TX2. Default: supply if > 0, else 1. */
   mintCount?: number
   /** Initial per-token stateData (hex). */
@@ -325,7 +338,7 @@ export async function createCollection(
   // selection just needs to pick enough UTXOs, and TX1 must leave enough change to fund TX2).
   // TX1 carries any embedded file, so its fee scales with file size — keep a healthy margin so a
   // large file never eats all the funding and starves the genesis mint.
-  const numOutputs = 1 + (file ? 1 : 0) + (storefront ? 1 : 0) + mintCount
+  const numOutputs = 1 + (file ? 1 : 0) + (storefront ? 1 : 0) + (params.mockupManifest?.length ? 1 : 0) + mintCount
   const tx1Bytes = 400 + (file ? file.fileBytes.length : 0)
     + (params.cover ? params.cover.bytes.length : 0)
     + (params.backCover ? params.backCover.bytes.length : 0)
@@ -340,7 +353,7 @@ export async function createCollection(
 
   // Build BOTH transactions offline first. Only broadcast once both succeed, so a failure (e.g.
   // insufficient change for the genesis mint) never leaves an orphaned template tx on-chain.
-  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, outputSats: sats, feePerKb })
+  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, mockup: params.mockupManifest, outputSats: sats, feePerKb })
   if (t1.changeVout == null) {
     throw new Error('Insufficient funding: the template tx left no change to fund the genesis mint. Add more funds.')
   }

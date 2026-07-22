@@ -56,6 +56,9 @@ export const RECORD_CONFIG = 0x09
  *  it lives in its own record instead of bloating the 3 KB note. Plaintext/public: any prospective buyer (and
  *  the nft.sale curator, which holds no key) plays it with no decryption. See preview.ts. */
 export const RECORD_PREVIEW = 0x0A
+/** TX1 output carrying a packed mockup-cover manifest ({prop-txid, place, warp}; see mockup.ts). Optional, tiny
+ *  (~34 B). Tells a renderer to composite this collection's own storefront cover onto the referenced prop. */
+export const RECORD_MOCKUP = 0x0B
 
 /** tokenRules restrictions bitfield. */
 export const RESTRICTION_FUNGIBLE = 0x0001 // interchangeable amounts (satoshis = units)
@@ -470,6 +473,33 @@ export function parseStorefrontScript(
   const fields = decodeStorefrontFields(d.fields)
   if (fields == null) return null
   return { publisherPubKeyHex: d.pubKeyHex, fields }
+}
+
+// ─── MOCKUP record (TX1, optional) ──────────────────────────────────
+//   [ P, version, RECORD_MOCKUP, manifestBytes ]
+// The manifestBytes are a packed mockup-cover manifest (mockup.ts packCover). A renderer that finds this output
+// composites the collection's storefront cover (the preview design) onto the referenced prop. Its own output so
+// it never interleaves with the storefront's optional back-cover fields.
+
+export function encodeMockupFields(manifest: number[]): number[][] {
+  return [P_PREFIX, [P_VERSION], [RECORD_MOCKUP], manifest]
+}
+export function decodeMockupFields(fields: number[][]): number[] | null {
+  if (fields.length < 4) return null
+  if (fields[0].length !== 1 || fields[0][0] !== P_PREFIX[0]) return null
+  if (fields[1].length !== 1 || fields[1][0] !== P_VERSION) return null
+  if (fields[2].length !== 1 || fields[2][0] !== RECORD_MOCKUP) return null
+  return fields[3] // the packed manifest bytes (pass to mockup.parseCover)
+}
+export function buildMockupScript(publisherPubKeyHex: string, manifest: number[]): LockingScript {
+  return pushDropLock(publisherPubKeyHex, encodeMockupFields(manifest))
+}
+export function parseMockupScript(script: LockingScript): { publisherPubKeyHex: string; manifest: number[] } | null {
+  const d = pushDropDecode(script)
+  if (d == null) return null
+  const manifest = decodeMockupFields(d.fields)
+  if (manifest == null) return null
+  return { publisherPubKeyHex: d.pubKeyHex, manifest }
 }
 
 // ─── PROFILE record (a key's self-published identity) ───────────────
