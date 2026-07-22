@@ -4,7 +4,8 @@
 // Only the store-only (no-deflate) ZIP that the BMC tool produces is supported — which is all that's minted.
 import { Utils } from '@bsv/sdk'
 
-function readStoreZip(bytes: number[]): Record<string, number[]> | null {
+/** Read a store-only (no-deflate) ZIP → { filename: bytes }. Used by BMC sets and the mockup-bundle ingest. */
+export function readStoreZip(bytes: number[]): Record<string, number[]> | null {
   const u16 = (o: number): number => bytes[o] | (bytes[o + 1] << 8)
   const u32 = (o: number): number => bytes[o] + bytes[o + 1] * 0x100 + bytes[o + 2] * 0x10000 + bytes[o + 3] * 0x1000000
   const out: Record<string, number[]> = {}

@@ -68,7 +68,9 @@ export interface MockupCover {
    *  ref is stored). Embedded is the TeeStrip product case; a ref is used when the design is a shared atom. */
   design: Ref | null
   /** Placement within the prop's print region. null = fill the region (identity). */
-  place: { x: number; y: number; scale: number; rot: number } | null
+  /** Placement of the design within the base: centre x,y and scale (all normalized to the base), rotation°, and
+   *  an affine skew (parallelogram tilt for an angled surface). null = fill the print region. */
+  place: { x: number; y: number; scale: number; rot: number; skewX: number; skewY: number } | null
   /** Warp override. null = inherit the prop's default warp. */
   warp: WarpStage[] | null
 }
@@ -192,6 +194,8 @@ export function packCover(c: MockupCover): number[] {
       .u16(clamp(Math.round(c.place.y * 65535), 0, 65535))
       .u16(clamp(Math.round(c.place.scale * 1024), 0, 65535))
       .u8(clamp(Math.round((((c.place.rot % 360) + 360) % 360) / 360 * 255), 0, 255))
+      .i8(clamp(Math.round(c.place.skewX * 127), -127, 127))
+      .i8(clamp(Math.round(c.place.skewY * 127), -127, 127))
   }
   if (c.warp) w.bytes(packWarp(c.warp))
   return w.out()
@@ -212,7 +216,7 @@ export function parseCover(bytes: number[]): MockupCover | null {
     }
     let place: MockupCover['place'] = null
     if (flags & FLAG_PLACE) {
-      place = { x: r.u16() / 65535, y: r.u16() / 65535, scale: r.u16() / 1024, rot: r.u8() / 255 * 360 }
+      place = { x: r.u16() / 65535, y: r.u16() / 65535, scale: r.u16() / 1024, rot: r.u8() / 255 * 360, skewX: r.i8() / 127, skewY: r.i8() / 127 }
     }
     const warp = (flags & FLAG_WARP) ? parseWarp(r) : null
     return { version, prop, design, place, warp }
@@ -250,14 +254,14 @@ export function coverFromJson(obj: Record<string, unknown>): MockupCover {
     version: Number(obj.v ?? 1),
     prop: refFromJson(obj.p),
     design: obj.d == null ? null : refFromJson(obj.d), // absent/null d = embedded (the storefront cover)
-    place: Array.isArray(P) ? { x: P[0] ?? 0.5, y: P[1] ?? 0.5, scale: P[2] ?? 1, rot: P[3] ?? 0 } : null,
+    place: Array.isArray(P) ? { x: P[0] ?? 0.5, y: P[1] ?? 0.5, scale: P[2] ?? 1, rot: P[3] ?? 0, skewX: P[4] ?? 0, skewY: P[5] ?? 0 } : null,
     warp: obj.w != null ? warpFromJson(obj.w) : null,
   }
 }
 export function coverToJson(c: MockupCover): Record<string, unknown> {
   const o: Record<string, unknown> = { v: c.version, p: refToJson(c.prop) }
   if (c.design) o.d = refToJson(c.design)
-  if (c.place) o.P = [c.place.x, c.place.y, c.place.scale, c.place.rot]
+  if (c.place) o.P = [c.place.x, c.place.y, c.place.scale, c.place.rot, c.place.skewX, c.place.skewY]
   if (c.warp) o.w = c.warp
   return o
 }
