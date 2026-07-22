@@ -58,7 +58,7 @@ export function bundleToManifest(recipe: MockupRecipe, propTxid: string): number
     version: 1,
     prop: { tx: propTxid, index: null },
     design: null, // embedded — the storefront cover
-    place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY },
+    place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY, fabric: recipe.fabric ?? 0.8 },
     warp: recipe.prop?.warp ?? null,
   }
   return packCover(cover)

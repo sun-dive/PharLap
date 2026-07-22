@@ -43,10 +43,10 @@ test('cover: set-index refs collapse to 7 bytes', () => {
 test('cover: place adds 9 bytes and round-trips (incl. skew) within quantization tolerance', () => {
   const c: MockupCover = {
     version: 1, prop: { tx: A, index: null }, design: { tx: B, index: null },
-    place: { x: 0.5, y: 0.46, scale: 0.9, rot: 90, skewX: -0.3, skewY: 0.2 }, warp: null,
+    place: { x: 0.5, y: 0.46, scale: 0.9, rot: 90, skewX: -0.3, skewY: 0.2, fabric: 1 }, warp: null,
   }
   const packed = packCover(c)
-  assert.equal(packed.length, 67 + 9) // x,y,scale u16 + rot u8 + skewX,skewY i8
+  assert.equal(packed.length, 67 + 10) // x,y,scale u16 + rot u8 + skewX,skewY i8 + fabric u8
   const back = parseCover(packed)!
   assert.ok(Math.abs(back.place!.x - 0.5) < 1e-4)
   assert.ok(Math.abs(back.place!.y - 0.46) < 1e-4)
@@ -54,6 +54,7 @@ test('cover: place adds 9 bytes and round-trips (incl. skew) within quantization
   assert.ok(Math.abs(back.place!.rot - 90) < 1.5) // u8 over 360°
   assert.ok(Math.abs(back.place!.skewX - (-0.3)) < 0.008) // i8/127
   assert.ok(Math.abs(back.place!.skewY - 0.2) < 0.008)
+  assert.ok(Math.abs(back.place!.fabric - 1) < 0.004) // u8/255
 })
 
 test('cover: a cyl warp override round-trips (params within quantization tolerance), adds 6 bytes', () => {
@@ -100,7 +101,7 @@ test('cover: JSON shorthand ⇄ packed', () => {
   const json = coverToJson(back)
   assert.equal(json.p, A)
   assert.equal(json.d, B)
-  assert.equal((json.P as number[]).length, 6) // x, y, scale, rot, skewX, skewY
+  assert.equal((json.P as number[]).length, 7) // x, y, scale, rot, skewX, skewY
   assert.equal((json.w as any[])[0].t, 'cyl')
 })
 
