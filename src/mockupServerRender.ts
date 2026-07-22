@@ -9,9 +9,16 @@
 // build-curator.sh marks @napi-rs/canvas --external so esbuild leaves the dynamic import intact.
 // This file is imported ONLY by the curator, never by the browser app bundle.
 import { parseCover } from './mockup.ts'
+import { decompress } from './compress.ts'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — UMD CJS module, no types; esbuild resolves module.exports
 import Renderer from './mockupRenderShared.cjs'
+
+/** On-chain FILE bytes may be gzip-compressed (compress-if-smaller at mint). Inflate a gzip payload before it
+ *  reaches loadImage; leave a raw image untouched. */
+async function inflate(b: number[]): Promise<number[]> {
+  return (b.length > 2 && b[0] === 0x1f && b[1] === 0x8b) ? decompress(b) : b
+}
 
 interface CanvasLib { createCanvas: (w: number, h: number) => any; loadImage: (b: Buffer) => Promise<any> }
 let _lib: CanvasLib | null = null
@@ -39,8 +46,8 @@ export async function renderMockupCover(base: number[], cover: number[], manifes
   if (lib == null) return null
   const mc = parseCover(manifest)
   if (mc == null) return null
-  const baseImg = await lib.loadImage(Buffer.from(base))
-  const design = await lib.loadImage(Buffer.from(cover))
+  const baseImg = await lib.loadImage(Buffer.from(await inflate(base)))
+  const design = await lib.loadImage(Buffer.from(await inflate(cover)))
   const W = baseImg.width, H = baseImg.height
   const p = mc.place
   // place is normalized to the base; box height comes from the design's aspect (only the width is stored).
