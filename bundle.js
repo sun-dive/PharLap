@@ -3747,25 +3747,25 @@
       this.W = new Array(80);
     }
     _update(msg, start) {
-      const W = this.W;
+      const W2 = this.W;
       if (start === void 0) {
         start = 0;
       }
       let i;
       for (i = 0; i < 16; i++) {
-        W[i] = msg[start + i];
+        W2[i] = msg[start + i];
       }
-      for (; i < W.length; i++) {
-        W[i] = rotl32(W[i - 3] ^ W[i - 8] ^ W[i - 14] ^ W[i - 16], 1);
+      for (; i < W2.length; i++) {
+        W2[i] = rotl32(W2[i - 3] ^ W2[i - 8] ^ W2[i - 14] ^ W2[i - 16], 1);
       }
       let a = this.h[0];
       let b = this.h[1];
       let c = this.h[2];
       let d = this.h[3];
       let e = this.h[4];
-      for (i = 0; i < W.length; i++) {
+      for (i = 0; i < W2.length; i++) {
         const s2 = Math.trunc(i / 20);
-        const t = SUM32_5(rotl32(a, 5), FT_1(s2, b, c, d), e, W[i], this.k[s2]);
+        const t = SUM32_5(rotl32(a, 5), FT_1(s2, b, c, d), e, W2[i], this.k[s2]);
         e = d;
         d = c;
         c = rotl32(b, 30);
@@ -20567,6 +20567,235 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     };
   }
 
+  // src/bmc.ts
+  function readStoreZip(bytes2) {
+    const u16 = (o) => bytes2[o] | bytes2[o + 1] << 8;
+    const u323 = (o) => bytes2[o] + bytes2[o + 1] * 256 + bytes2[o + 2] * 65536 + bytes2[o + 3] * 16777216;
+    const out = {};
+    let i = 0;
+    while (i + 30 <= bytes2.length && u323(i) === 67324752) {
+      const method = u16(i + 8);
+      const size = u323(i + 18);
+      const nameLen = u16(i + 26);
+      const extraLen = u16(i + 28);
+      if (method !== 0) return null;
+      const nameStart = i + 30;
+      let name = "";
+      for (let j = 0; j < nameLen; j++) name += String.fromCharCode(bytes2[nameStart + j]);
+      const dataStart = nameStart + nameLen + extraLen;
+      out[name] = bytes2.slice(dataStart, dataStart + size);
+      i = dataStart + size;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+  var isBmc = (b) => b.length > 4 && b[0] === 80 && b[1] === 75 && b[2] === 3 && b[3] === 4;
+  function parseBmcSet(bytes2) {
+    if (!isBmc(bytes2)) return null;
+    const files = readStoreZip(bytes2);
+    if (files == null || files["bmc.json"] == null) return null;
+    try {
+      const manifest = JSON.parse(utils_exports.toUTF8(files["bmc.json"]));
+      const members = (manifest.members ?? []).map((m) => ({ name: m.name, file: m.file, mimeType: m.mime ?? "application/octet-stream", bytes: files[m.file] })).filter((m) => Boolean(m.name) && m.bytes != null && m.bytes.length > 0);
+      return members.length > 0 ? { name: manifest.name ?? "set", members } : null;
+    } catch {
+      return null;
+    }
+  }
+  function bmcMember(set, name) {
+    return set.members.find((m) => m.name === name) ?? set.members.find((m) => m.file === name) ?? null;
+  }
+
+  // src/mockup.ts
+  var TAG = 77;
+  var FLAG_PLACE = 1;
+  var FLAG_WARP = 2;
+  var FLAG_PROP_IDX = 4;
+  var FLAG_DESIGN_IDX = 8;
+  var FLAG_DESIGN_EMBEDDED = 16;
+  var SIGNED = { u8: false, i8: true, unit: false, sunit: true, deg: false, q4: false };
+  var WARP_TYPES = [
+    "flat",
+    "cyl",
+    "disp",
+    "persp",
+    "bulge",
+    "sphere",
+    "cone",
+    "mesh",
+    "ripple",
+    "wave",
+    "curl",
+    "emboss",
+    "fold",
+    "skew",
+    "_r14",
+    "ext"
+  ];
+  var WARP_ID = Object.fromEntries(WARP_TYPES.map((t, i) => [t, i]));
+  var WARP_SCHEMA = {
+    flat: [],
+    cyl: [["curve", "unit"], ["bow", "sunit"], ["axis", "u8"]],
+    disp: [["str", "q4"], ["map", "u8"]],
+    persp: [["kx", "sunit"], ["ky", "sunit"]],
+    bulge: [["amt", "sunit"]],
+    sphere: [["curve", "unit"]],
+    cone: [["taper", "unit"], ["curve", "unit"]],
+    ripple: [["amp", "u8"], ["freq", "u8"], ["phase", "u8"], ["axis", "u8"]],
+    wave: [["amp", "u8"], ["len", "u8"], ["angle", "deg"]],
+    curl: [["amt", "u8"], ["corner", "u8"]],
+    emboss: [["depth", "sunit"]],
+    skew: [["sx", "sunit"], ["sy", "sunit"]]
+    // mesh, fold, ext: variable-length → carried as `raw` bytes on the stage.
+  };
+  var W = class {
+    constructor() {
+      this.b = [];
+    }
+    u8(v) {
+      this.b.push(v & 255);
+      return this;
+    }
+    i8(v) {
+      this.b.push((v | 0) & 255);
+      return this;
+    }
+    u16(v) {
+      this.b.push(v & 255, v >>> 8 & 255);
+      return this;
+    }
+    bytes(a) {
+      for (const x of a) this.b.push(x & 255);
+      return this;
+    }
+    out() {
+      return this.b;
+    }
+  };
+  var clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+  function hexToBytes2(hex) {
+    const o = [];
+    for (let i = 0; i < hex.length; i += 2) o.push(parseInt(hex.slice(i, i + 2), 16));
+    return o;
+  }
+  function encParam(enc, v) {
+    switch (enc) {
+      case "u8":
+        return clamp(Math.round(v), 0, 255);
+      case "i8":
+        return clamp(Math.round(v), -128, 127);
+      case "unit":
+        return clamp(Math.round(v * 255), 0, 255);
+      case "sunit":
+        return clamp(Math.round(v * 127), -127, 127);
+      case "deg":
+        return clamp(Math.round((v % 360 + 360) % 360 / 360 * 255), 0, 255);
+      case "q4":
+        return clamp(Math.round(v * 4), 0, 255);
+    }
+  }
+  function packWarp(stages) {
+    const w = new W().u8(stages.length);
+    for (const st of stages) {
+      const id = WARP_ID[st.t] ?? WARP_ID.ext;
+      const schema = WARP_SCHEMA[st.t];
+      const pw = new W();
+      if (schema != null) {
+        for (const [name, enc] of schema) {
+          const q = encParam(enc, Number(st[name] ?? 0));
+          SIGNED[enc] ? pw.i8(q) : pw.u8(q);
+        }
+      } else if (Array.isArray(st.raw)) {
+        pw.bytes(st.raw);
+      }
+      const pb = pw.out();
+      w.u8(id).u8(pb.length).bytes(pb);
+    }
+    return w.out();
+  }
+  function packCover(c) {
+    const d = c.design;
+    const propIdx = c.prop.index != null;
+    const designIdx = d != null && d.index != null;
+    let flags = 0;
+    if (c.place) flags |= FLAG_PLACE;
+    if (c.warp) flags |= FLAG_WARP;
+    if (propIdx) flags |= FLAG_PROP_IDX;
+    if (designIdx) flags |= FLAG_DESIGN_IDX;
+    if (d == null) flags |= FLAG_DESIGN_EMBEDDED;
+    const w = new W().u8(TAG).u8(c.version & 255).u8(flags);
+    propIdx ? w.u16(c.prop.index) : w.bytes(hexToBytes2(c.prop.tx));
+    if (d != null) {
+      d.index != null ? w.u16(d.index) : w.bytes(hexToBytes2(d.tx));
+    }
+    if (c.place) {
+      w.u16(clamp(Math.round(c.place.x * 65535), 0, 65535)).u16(clamp(Math.round(c.place.y * 65535), 0, 65535)).u16(clamp(Math.round(c.place.scale * 1024), 0, 65535)).u8(clamp(Math.round((c.place.rot % 360 + 360) % 360 / 360 * 255), 0, 255)).i8(clamp(Math.round(c.place.skewX * 127), -127, 127)).i8(clamp(Math.round(c.place.skewY * 127), -127, 127)).u8(clamp(Math.round(c.place.fabric * 255), 0, 255));
+    }
+    if (c.warp) w.bytes(packWarp(c.warp));
+    return w.out();
+  }
+
+  // src/mockupIngest.ts
+  function readMockupBundle(zipBytes) {
+    const files = readStoreZip(zipBytes);
+    if (files == null || files["mockup.json"] == null) return null;
+    let recipe;
+    try {
+      recipe = JSON.parse(utils_exports.toUTF8(files["mockup.json"]));
+    } catch {
+      return null;
+    }
+    const roles = recipe.prop?.roles ?? {};
+    const base = files[roles.base ?? "base.webp"];
+    const design = files[recipe.design ?? "design.webp"];
+    if (base == null || design == null) return null;
+    const maps = {};
+    for (const role of ["mask", "shade", "disp"]) {
+      const file = roles[role];
+      if (file != null && files[file] != null) maps[role] = files[file];
+    }
+    return { base, design, maps, recipe };
+  }
+  function bundleToManifest(recipe, propTxid) {
+    const p = recipe.place;
+    const cover = {
+      version: 1,
+      prop: { tx: propTxid, index: null },
+      design: null,
+      // embedded — the storefront cover
+      place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY, fabric: recipe.fabric ?? 0.8 },
+      warp: recipe.prop?.warp ?? null
+    };
+    return packCover(cover);
+  }
+  async function mintMockupProduct(provider2, key2, opts) {
+    let propTxid = opts.propTxid;
+    if (propTxid == null) {
+      const prop = await createCollection(provider2, key2, {
+        tokenName: opts.propName ?? opts.recipe.prop?.name ?? "prop",
+        supply: 1,
+        mintCount: 1,
+        file: { mimeType: "image/webp", fileName: "base.webp", bytes: opts.base }
+      });
+      propTxid = prop.collectionId;
+    }
+    const manifest = bundleToManifest(opts.recipe, propTxid);
+    const supply = opts.supply ?? 1;
+    const product = await createCollection(provider2, key2, {
+      tokenName: opts.productName,
+      supply,
+      mintCount: supply,
+      file: { mimeType: opts.cleanDesign.mimeType, fileName: "design", bytes: opts.cleanDesign.bytes },
+      encrypt: opts.encrypt,
+      description: opts.description,
+      cover: { mimeType: opts.previewDesign.mimeType, fileName: "preview", bytes: opts.previewDesign.bytes },
+      license: opts.license,
+      mockupManifest: manifest,
+      feePerKb: opts.feePerKb,
+      confirmSpend: opts.confirmSpend
+    });
+    return { propTxid, productTxid: product.collectionId };
+  }
+
   // src/pushtx.ts
   var SIGHASH_ALL_FORKID = 65;
   var A_HEX = "11".repeat(32);
@@ -22586,44 +22815,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     if (scenes.length === 0) return null;
     return { audio: audioName != null ? { tx: null, name: audioName } : null, tempo, license, attribution, scenes: scenes.sort((a, b) => a.t - b.t) };
-  }
-
-  // src/bmc.ts
-  function readStoreZip(bytes2) {
-    const u16 = (o) => bytes2[o] | bytes2[o + 1] << 8;
-    const u323 = (o) => bytes2[o] + bytes2[o + 1] * 256 + bytes2[o + 2] * 65536 + bytes2[o + 3] * 16777216;
-    const out = {};
-    let i = 0;
-    while (i + 30 <= bytes2.length && u323(i) === 67324752) {
-      const method = u16(i + 8);
-      const size = u323(i + 18);
-      const nameLen = u16(i + 26);
-      const extraLen = u16(i + 28);
-      if (method !== 0) return null;
-      const nameStart = i + 30;
-      let name = "";
-      for (let j = 0; j < nameLen; j++) name += String.fromCharCode(bytes2[nameStart + j]);
-      const dataStart = nameStart + nameLen + extraLen;
-      out[name] = bytes2.slice(dataStart, dataStart + size);
-      i = dataStart + size;
-    }
-    return Object.keys(out).length > 0 ? out : null;
-  }
-  var isBmc = (b) => b.length > 4 && b[0] === 80 && b[1] === 75 && b[2] === 3 && b[3] === 4;
-  function parseBmcSet(bytes2) {
-    if (!isBmc(bytes2)) return null;
-    const files = readStoreZip(bytes2);
-    if (files == null || files["bmc.json"] == null) return null;
-    try {
-      const manifest = JSON.parse(utils_exports.toUTF8(files["bmc.json"]));
-      const members = (manifest.members ?? []).map((m) => ({ name: m.name, file: m.file, mimeType: m.mime ?? "application/octet-stream", bytes: files[m.file] })).filter((m) => Boolean(m.name) && m.bytes != null && m.bytes.length > 0);
-      return members.length > 0 ? { name: manifest.name ?? "set", members } : null;
-    } catch {
-      return null;
-    }
-  }
-  function bmcMember(set, name) {
-    return set.members.find((m) => m.name === name) ?? set.members.find((m) => m.file === name) ?? null;
   }
 
   // src/flacMeta.ts
@@ -25406,7 +25597,7 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
         const base = Math.max(VIEW / img.width, VIEW / img.height);
         let z = 1, ox = 0, oy = 0;
         const dims = () => ({ w: img.width * base * z, h: img.height * base * z });
-        const clamp = () => {
+        const clamp2 = () => {
           const { w, h } = dims();
           ox = Math.min(0, Math.max(VIEW - w, ox));
           oy = Math.min(0, Math.max(VIEW - h, oy));
@@ -25438,7 +25629,7 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
           oy += (e.clientY - ly) * k;
           lx = e.clientX;
           ly = e.clientY;
-          clamp();
+          clamp2();
           draw();
         });
         const endDrag = () => {
@@ -25454,7 +25645,7 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
           ox = c - (c - ox) * r2;
           oy = c - (c - oy) * r2;
           z = nz;
-          clamp();
+          clamp2();
           draw();
         });
         const close = (b) => {
@@ -25484,6 +25675,79 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
     if (sel == null) return "";
     if (sel.value === "__custom") return ($("edLicenseCustom")?.value ?? "").trim();
     return sel.value;
+  }
+  async function downscaleWebp(bytes2, mimeType, maxDim) {
+    const bmp = await createImageBitmap(new Blob([new Uint8Array(bytes2)], { type: mimeType }));
+    const s2 = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * s2)), h = Math.max(1, Math.round(bmp.height * s2));
+    const cv = document.createElement("canvas");
+    cv.width = w;
+    cv.height = h;
+    const c = cv.getContext("2d");
+    c.imageSmoothingQuality = "high";
+    c.drawImage(bmp, 0, 0, w, h);
+    if (bmp.close) bmp.close();
+    const blob = await new Promise((res) => cv.toBlob(res, "image/webp", 0.85));
+    if (blob == null) throw new Error("preview encode failed");
+    return Array.from(new Uint8Array(await blob.arrayBuffer()));
+  }
+  async function onMintMockup() {
+    const k = requireKey();
+    if (k == null) return;
+    const f2 = $("mkbFile").files?.[0];
+    const status = $("mkbStatus");
+    const setS = (t) => {
+      if (status) status.textContent = t;
+    };
+    if (f2 == null) {
+      setS("Pick a mockup .bmc bundle first.");
+      return;
+    }
+    const name = val("mkbName");
+    if (!name) {
+      setS("Enter a product name.");
+      return;
+    }
+    setS("Reading bundle\u2026");
+    try {
+      const bundle = readMockupBundle(Array.from(new Uint8Array(await f2.arrayBuffer())));
+      if (bundle == null) {
+        setS("That isn\u2019t a mockup bundle (no mockup.json inside).");
+        return;
+      }
+      const encrypt = $("mkbEncrypt").checked;
+      const supply = Math.max(1, parseInt(val("mkbSupply") || "1", 10));
+      const propTxid = val("mkbProp").trim() || void 0;
+      if (!confirm(
+        `Mint \u201C${name}\u201D as a mockup product?
+
+${propTxid ? "Reusing prop " + short(propTxid) : "Minting a NEW prop"} + the product (supply ${supply}${encrypt ? ", encrypted clean design" : ""}).
+
+This spends network fees + token outputs from your wallet. Proceed?`
+      )) {
+        setS("Cancelled \u2014 nothing spent.");
+        return;
+      }
+      setS("Deriving preview\u2026");
+      const preview = await downscaleWebp(bundle.design, "image/webp", 640);
+      setS(propTxid ? "Minting product\u2026" : "Minting prop, then product\u2026");
+      const res = await mintMockupProduct(provider, k, {
+        base: bundle.base,
+        cleanDesign: { mimeType: "image/webp", bytes: bundle.design },
+        previewDesign: { mimeType: "image/webp", bytes: preview },
+        recipe: bundle.recipe,
+        propTxid,
+        productName: name,
+        description: val("mkbDesc") || void 0,
+        encrypt,
+        license: chosenLicense() || void 0,
+        supply
+      });
+      if (status) status.innerHTML = `\u2705 Minted! Prop ${idChip(res.propTxid)} \xB7 Product ${idChip(res.productTxid)}. It appears on Big Red after the curator\u2019s next run.`;
+      renderTokens();
+    } catch (e) {
+      setS(`Mint failed: ${e.message}`);
+    }
   }
   var publishTier = "unlimited";
   function setPublishTier(t) {
@@ -29548,7 +29812,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"3cf9523"} \xB7 ${"2026-07-22"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"a2d198d"} \xB7 ${"2026-07-22"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -29604,6 +29868,10 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     wireScanButtons();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
+    {
+      const b = $("btnMintMockup");
+      if (b) b.onclick = () => void onMintMockup();
+    }
     $("btnTierUnlimited").onclick = () => setPublishTier("unlimited");
     $("btnTierLimited").onclick = () => setPublishTier("limited");
     $("btnTierExclusive").onclick = () => setPublishTier("exclusive");

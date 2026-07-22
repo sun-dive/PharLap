@@ -773,6 +773,25 @@
         Any buyer can later <b>Replicate</b> an edition (returns the NFT to the holder, mints their own copy,
         pays both fees). <b>Transfer</b> moves it owner-signed, re-creating the covenant.
       </p>
+
+      <details style="margin-top:16px; border-top:1px solid var(--line,#2a2f3a); padding-top:12px">
+        <summary style="cursor:pointer; font-weight:600">🖼️ Mint a product mockup <span class="muted" style="font-weight:400">— advanced</span></summary>
+        <p class="muted" style="font-size:12px; margin:8px 0 10px">Mint a design as a product whose cover is a <b>mockup</b> (your design on a mug, tee, tote…), from a Pole Position <b>.bmc</b> bundle. The prop is minted once and reused by txid; Big Red renders the composited cover.</p>
+        <label>Mockup bundle (.bmc from Pole Position)</label>
+        <input id="mkbFile" type="file" accept=".bmc,application/zip,application/octet-stream" />
+        <label>Product name</label>
+        <input id="mkbName" placeholder="e.g. Neon Tiger — 11oz mug" />
+        <label>Description (public, immutable)</label>
+        <textarea id="mkbDesc" placeholder="What the buyer gets."></textarea>
+        <div class="grid2" style="grid-template-columns:1fr 1fr; gap:8px">
+          <div><label>Supply</label><input id="mkbSupply" type="number" min="1" value="10" /><small class="muted" style="font-size:11px">1 = exclusive · N = limited</small></div>
+          <div><label>Reuse a prop (txid, optional)</label><input id="mkbProp" placeholder="blank = mint a new prop" /></div>
+        </div>
+        <label class="check" style="margin-top:8px"><input id="mkbEncrypt" type="checkbox" /> Encrypt the clean design (the buyer decrypts on purchase)</label>
+        <small class="muted" style="display:block;font-size:12px;margin:4px 0 0">Licence uses the selector above. The public preview cover is auto-downscaled from your design.</small>
+        <div class="row" style="margin-top:10px"><button id="btnMintMockup">🖼️ Mint mockup product</button></div>
+        <p id="mkbStatus" class="muted" style="font-size:12px;margin:8px 0 0"></p>
+      </details>
     </div>
     </section>
 

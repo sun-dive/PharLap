@@ -12,6 +12,7 @@ import { PrivateKey, PublicKey, Utils, Hash, LockingScript, Mnemonic, HD } from 
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, selectFunding, PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, SPEND_CANCELLED } from './collectionBuilder.ts'
+import { readMockupBundle, mintMockupProduct } from './mockupIngest.ts'
 import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, scanVoucherHashes, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type UnifiedSale } from './editionBuilder.ts'
 import { buildAirgapRequest, buildAirgapPaymentRequest, signAirgapRequest, encodeAirgapRequest, decodeAirgapRequest, type AirgapAction, type AirgapRequest } from './airgap.ts'
 import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress } from './payment.ts'
@@ -838,6 +839,60 @@ function chosenLicense(): string {
   if (sel == null) return ''
   if (sel.value === '__custom') return (($('edLicenseCustom') as HTMLInputElement | null)?.value ?? '').trim()
   return sel.value
+}
+
+/** Downscale image bytes to WebP at maxDim (longest side) — used to derive the public preview cover. */
+async function downscaleWebp(bytes: number[], mimeType: string, maxDim: number): Promise<number[]> {
+  const bmp = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: mimeType }))
+  const s = Math.min(1, maxDim / Math.max(bmp.width, bmp.height))
+  const w = Math.max(1, Math.round(bmp.width * s)), h = Math.max(1, Math.round(bmp.height * s))
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h
+  const c = cv.getContext('2d')!; c.imageSmoothingQuality = 'high'; c.drawImage(bmp, 0, 0, w, h); if (bmp.close) bmp.close()
+  const blob = await new Promise<Blob | null>(res => cv.toBlob(res, 'image/webp', 0.85))
+  if (blob == null) throw new Error('preview encode failed')
+  return Array.from(new Uint8Array(await blob.arrayBuffer()))
+}
+
+/** Advanced Publish: mint a product from a Pole Position mockup .bmc bundle (prop once + product with a mockup cover). */
+async function onMintMockup(): Promise<void> {
+  const k = requireKey(); if (k == null) return
+  const f = ($('mkbFile') as HTMLInputElement).files?.[0]
+  const status = $('mkbStatus')
+  const setS = (t: string) => { if (status) status.textContent = t }
+  if (f == null) { setS('Pick a mockup .bmc bundle first.'); return }
+  const name = val('mkbName')
+  if (!name) { setS('Enter a product name.'); return }
+  setS('Reading bundle…')
+  try {
+    const bundle = readMockupBundle(Array.from(new Uint8Array(await f.arrayBuffer())))
+    if (bundle == null) { setS('That isn’t a mockup bundle (no mockup.json inside).'); return }
+    const encrypt = ($('mkbEncrypt') as HTMLInputElement).checked
+    const supply = Math.max(1, parseInt(val('mkbSupply') || '1', 10))
+    const propTxid = val('mkbProp').trim() || undefined
+    if (!confirm(
+      `Mint “${name}” as a mockup product?\n\n` +
+      `${propTxid ? 'Reusing prop ' + short(propTxid) : 'Minting a NEW prop'} + the product (supply ${supply}${encrypt ? ', encrypted clean design' : ''}).\n\n` +
+      `This spends network fees + token outputs from your wallet. Proceed?`)) { setS('Cancelled — nothing spent.'); return }
+    setS('Deriving preview…')
+    const preview = await downscaleWebp(bundle.design, 'image/webp', 640)
+    setS(propTxid ? 'Minting product…' : 'Minting prop, then product…')
+    const res = await mintMockupProduct(provider, k, {
+      base: bundle.base,
+      cleanDesign: { mimeType: 'image/webp', bytes: bundle.design },
+      previewDesign: { mimeType: 'image/webp', bytes: preview },
+      recipe: bundle.recipe,
+      propTxid,
+      productName: name,
+      description: val('mkbDesc') || undefined,
+      encrypt,
+      license: chosenLicense() || undefined,
+      supply,
+    })
+    if (status) status.innerHTML = `✅ Minted! Prop ${idChip(res.propTxid)} · Product ${idChip(res.productTxid)}. It appears on Big Red after the curator’s next run.`
+    renderTokens()
+  } catch (e) {
+    setS(`Mint failed: ${(e as Error).message}`)
+  }
 }
 
 // ── Publish tier: Unlimited (covenant) / Limited (plain capped-N) / Exclusive (plain 1-of-1) ──
@@ -4663,6 +4718,7 @@ function init(): void {
   wireScanButtons() // inject 📷 scan buttons beside [data-scan] inputs
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
+  { const b = $('btnMintMockup'); if (b) b.onclick = () => void onMintMockup() }
   $('btnTierUnlimited').onclick = () => setPublishTier('unlimited')
   $('btnTierLimited').onclick = () => setPublishTier('limited')
   $('btnTierExclusive').onclick = () => setPublishTier('exclusive')
