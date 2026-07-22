@@ -210,6 +210,14 @@ export function parseMessageScript(
 
 // ─── TEMPLATE record (TX1) ──────────────────────────────────────────
 
+// Tagged-trailer field tags (leading byte of an optional template field appended after the positional core +
+// encryption block). Tagging keeps a trailer field from ever colliding with the bare 32-byte fileHash.
+export const TEMPLATE_TAG_LICENSE = 0x01     // payload = utf8 licence CODE (e.g. "TS-COM-1", "CC-BY-4.0", "ARR")
+export const TEMPLATE_TAG_LICENSE_REF = 0x02 // payload = raw bytes of a 32-byte txid pointing at the full licence text
+/** Max licence-code length (bytes). Kept < 31 so a [tag,...code] trailer is never exactly 32 bytes (which would
+ *  be indistinguishable from a bare fileHash). Codes are short identifiers, so this is comfortable. */
+export const TEMPLATE_LICENSE_MAX = 30
+
 export interface TemplateFields {
   tokenName: string
   /** 8-byte hex: supply, divisibility, restrictions, version (see encodeTokenRules). */
@@ -223,6 +231,11 @@ export interface TemplateFields {
    *  when fileHash is too. Raw bytes (see contentCrypto). */
   wrappedKey?: number[]
   keySalt?: number[]
+  /** Optional IMMUTABLE licence code (fixed at mint, travels with the coin) — a short identifier naming the
+   *  canonical terms (drives resale/commercial-use logic). See TEMPLATE_TAG_LICENSE. */
+  license?: string
+  /** Optional 64-hex txid pointing at the full licence text minted on-chain. See TEMPLATE_TAG_LICENSE_REF. */
+  licenseRef?: string
 }
 
 export function encodeTemplateFields(data: TemplateFields): number[][] {
@@ -241,6 +254,17 @@ export function encodeTemplateFields(data: TemplateFields): number[][] {
       fields.push(data.wrappedKey, data.keySalt)
     }
   }
+  // Tagged licence trailer (backward-compatible): appended AFTER the positional core + encryption block. Each
+  // entry leads with a tag byte, so it can never be read as the bare 32-byte fileHash, and the encryption pair is
+  // located on decode via the isEncrypted rules-flag (not field count).
+  if (data.license != null && data.license.length > 0) {
+    const code = utf8ToBytes(data.license)
+    if (code.length > TEMPLATE_LICENSE_MAX) throw new Error(`license code too long (${code.length} > ${TEMPLATE_LICENSE_MAX} bytes)`)
+    fields.push([TEMPLATE_TAG_LICENSE, ...code])
+  }
+  if (data.licenseRef != null && data.licenseRef.length > 0) {
+    fields.push([TEMPLATE_TAG_LICENSE_REF, ...hexToBytes(data.licenseRef)])
+  }
   return fields
 }
 
@@ -255,12 +279,25 @@ export function decodeTemplateFields(fields: number[][]): TemplateFields | null 
     // Empty covenant normalizes to "00" via OP_0; treat that as "no covenant".
     covenantScript: isEmptyOrZero(fields[5]) ? '' : bytesToHex(fields[5]),
   }
-  if (fields.length >= 7 && fields[6].length === 32) {
-    result.fileHash = bytesToHex(fields[6])
+  let i = 6
+  // fileHash is the ONLY bare 32-byte field — trailer entries are tag-prefixed (≥33 bytes for a 32-byte payload,
+  // and licence codes are capped < 31), so a 32-byte field here is unambiguously the file hash.
+  if (fields.length > i && fields[i].length === 32) {
+    result.fileHash = bytesToHex(fields[i]); i++
+    // The encryption pair (wrappedKey, keySalt) is present exactly when the rules flag says so — a definitive
+    // signal that survives the licence trailer (the old count-based rule would misread trailer fields as keys).
+    if (decodeTokenRules(result.tokenRules).isEncrypted && fields.length >= i + 2) {
+      result.wrappedKey = fields[i]
+      result.keySalt = fields[i + 1]
+      i += 2
+    }
   }
-  if (fields.length >= 9) {
-    result.wrappedKey = fields[7]
-    result.keySalt = fields[8]
+  // Tagged licence trailer (optional, any order): each remaining field is [tag, ...payload].
+  for (; i < fields.length; i++) {
+    const f = fields[i]
+    if (f.length < 1) continue
+    if (f[0] === TEMPLATE_TAG_LICENSE) result.license = bytesToUtf8(f.slice(1))
+    else if (f[0] === TEMPLATE_TAG_LICENSE_REF) result.licenseRef = bytesToHex(f.slice(1))
   }
   return result
 }

@@ -695,6 +695,13 @@
       <p class="muted" style="font-size:12px;margin:0 0 8px">
         Publish content people can buy their own copy of. Every copy automatically pays you a publisher fee and pays the seller a royalty — enforced on-chain, with no marketplace in the middle. Fill in the details below to mint your collection.
       </p>
+      <label>Type</label>
+      <div class="view-toggle" id="tierToggle" style="margin-bottom:6px">
+        <button id="btnTierUnlimited" type="button" class="active">Unlimited</button>
+        <button id="btnTierLimited" type="button">Limited</button>
+        <button id="btnTierExclusive" type="button">Exclusive</button>
+      </div>
+      <p id="tierHint" class="muted" style="font-size:12px;margin:0 0 10px">Unlimited: a covenant edition anyone can replicate — every copy pays you + the reseller on-chain, no marketplace needed.</p>
       <label>Edition collection name</label>
       <input id="edName" placeholder="e.g. My eBook (unlimited editions)" />
       <label>Description (shown on the sales page — public, immutable)</label>
@@ -706,36 +713,52 @@
       <label>Back cover image (optional — buyers can flip to it on the sales page)</label>
       <input id="edBackCover" type="file" accept="image/*" />
       <small class="muted" style="display:block;margin:3px 0 0;font-size:12px">A second storefront image (front + back). Separate from the audio's embedded art — this is the art that sells the NFT.</small>
-      <label>Bond per edition (sats) — refundable, reclaimed by burning a copy</label>
-      <input id="edBond" type="number" min="1" value="2100" />
-      <p class="muted" style="font-size:12px;margin:2px 0 0">Each edition rides on this many sats; the owner reclaims them by burning. Higher = stronger price floor (and pricier gifts); set low (e.g. 1) for free-content drops.</p>
+      <div class="covenant-only">
+        <label>Bond per edition (sats) — refundable, reclaimed by burning a copy</label>
+        <input id="edBond" type="number" min="1" value="2100" />
+        <p class="muted" style="font-size:12px;margin:2px 0 0">Each edition rides on this many sats; the owner reclaims them by burning. Higher = stronger price floor (and pricier gifts); set low (e.g. 1) for free-content drops.</p>
+      </div>
       <!-- Pricing is always v1 fixed-fee on-chain. "Percentage" is a UI calculator: enter a price + publisher
            share and we compute the fixed publisher/holder fees that get minted. (Covenant v2 ranged pricing
            stays in the codebase + tests, hidden, for a future build.) -->
-      <label>Pricing</label>
-      <div class="view-toggle" style="margin-bottom:8px">
-        <button id="btnFeeFixed" type="button" class="active">Fixed fees</button>
-        <button id="btnFeePct" type="button">Percentage</button>
-      </div>
-      <div id="feeFixed" class="grid2" style="grid-template-columns:1fr 1fr">
-        <div><label>Publisher fee (sats)</label><input id="edPublisherFee" type="number" min="1" value="5000" /></div>
-        <div><label>Holder fee (sats)</label><input id="edHolderFee" type="number" min="1" value="1000" /></div>
-      </div>
-      <div id="feePct" hidden>
-        <div class="grid2" style="grid-template-columns:1fr 1fr">
-          <div><label>Final price a buyer pays (sats, incl. bond)</label><input id="edPrice" type="number" min="3" value="8000" /></div>
-          <div><label>Reseller's net share (%)</label><input id="edResellerPct" type="number" min="0" max="100" value="20" /></div>
+      <div class="covenant-only">
+        <label>Pricing</label>
+        <div class="view-toggle" style="margin-bottom:8px">
+          <button id="btnFeeFixed" type="button" class="active">Fixed fees</button>
+          <button id="btnFeePct" type="button">Percentage</button>
         </div>
-        <p id="edPctPreview" class="muted" style="font-size:12px;margin:4px 0 0"></p>
-        <p class="muted" style="font-size:11px;margin:2px 0 0">A convenience: from the final price minus the bond, the <b>reseller (holder)</b> keeps the share you set and the <b>publisher</b> keeps the rest — minted as the <b>fixed</b> publisher + holder fees. (The bond is the buyer's own refundable deposit, not part of the split.)</p>
+        <div id="feeFixed" class="grid2" style="grid-template-columns:1fr 1fr">
+          <div><label>Publisher fee (sats)</label><input id="edPublisherFee" type="number" min="1" value="5000" /></div>
+          <div><label>Holder fee (sats)</label><input id="edHolderFee" type="number" min="1" value="1000" /></div>
+        </div>
+        <div id="feePct" hidden>
+          <div class="grid2" style="grid-template-columns:1fr 1fr">
+            <div><label>Final price a buyer pays (sats, incl. bond)</label><input id="edPrice" type="number" min="3" value="8000" /></div>
+            <div><label>Reseller's net share (%)</label><input id="edResellerPct" type="number" min="0" max="100" value="20" /></div>
+          </div>
+          <p id="edPctPreview" class="muted" style="font-size:12px;margin:4px 0 0"></p>
+          <p class="muted" style="font-size:11px;margin:2px 0 0">A convenience: from the final price minus the bond, the <b>reseller (holder)</b> keeps the share you set and the <b>publisher</b> keeps the rest — minted as the <b>fixed</b> publisher + holder fees. (The bond is the buyer's own refundable deposit, not part of the split.)</p>
+        </div>
       </div>
-      <label>Editions to mint now</label>
+      <label id="edCountLabel">Editions to mint now</label>
       <input id="edCount" type="number" min="1" value="1" />
       <label>Embed a file (optional — viewable by holders)</label>
       <input id="edFile" type="file" multiple />
       <small class="muted" style="display:block;margin:3px 0 0;font-size:12px">Pick several files to publish a multi-track <b>album/EP</b> as one NFT — they play inline in the viewer. Number them 01…, 02… to set the track order.</small>
       <label class="check"><input id="edEncrypt" type="checkbox" /> Encrypt the file (Tier 1 — holders decrypt; an inconvenience, not DRM)</label>
-      <div class="combine-box">
+      <label>Licence <span class="muted" style="font-weight:400">— immutable, fixed at mint, travels with the coin</span></label>
+      <select id="edLicense">
+        <option value="">— none —</option>
+        <option value="ARR">All Rights Reserved (ARR)</option>
+        <option value="TS-COM-1">Commercial use — single end product (TS-COM-1)</option>
+        <option value="CC-BY-4.0">CC BY 4.0 — credit required</option>
+        <option value="CC-BY-NC-4.0">CC BY-NC 4.0 — non-commercial</option>
+        <option value="CC0-1.0">CC0 — public domain</option>
+        <option value="__custom">Custom code…</option>
+      </select>
+      <input id="edLicenseCustom" placeholder="e.g. MY-LIC-1 (max 30 chars)" maxlength="30" hidden style="margin-top:6px" />
+      <small class="muted" style="display:block;margin:3px 0 0;font-size:12px">The licence is baked into the mint and cannot change later. To loosen terms, re-mint. (Optional.)</small>
+      <div class="combine-box covenant-only">
         <label class="check"><input id="edCombine" type="checkbox" /> 📀 Combine existing mints into an EP <span class="muted">(reference — no re-upload)</span></label>
         <div id="edCombineWrap" hidden>
           <small class="muted" style="display:block;margin:2px 0 8px;font-size:12px">Pick 2+ of your collections — the EP <b>references</b> their on-chain audio (each stored once) and plays them as one release. Set the EP's own price above; an album usually costs less than the singles combined.</small>

@@ -19,6 +19,7 @@ import {
   RECORD_FILE,
   RESTRICTION_FUNGIBLE,
   RESTRICTION_REPLICABLE,
+  RESTRICTION_ENCRYPTED,
   encodeTokenFields,
   decodeTokenFields,
   buildTokenScript,
@@ -100,6 +101,52 @@ test('TEMPLATE: round-trip with no covenant and no file', () => {
   assert.equal(parsed.fields.tokenName, 'Plain')
   assert.equal(parsed.fields.covenantScript, '') // empty covenant normalizes back to ''
   assert.equal(parsed.fields.fileHash, undefined)
+})
+
+test('TEMPLATE licence: code round-trips (no file)', () => {
+  const data = { tokenName: 'Ltd', tokenRules: encodeTokenRules(10, 0, 0, 1), covenantScript: '', license: 'TS-COM-1' }
+  const parsed = parseTemplateScript(buildTemplateScript(PUB, data))
+  assert.ok(parsed)
+  assert.deepEqual(parsed.fields, data)
+})
+
+test('TEMPLATE licence: code + ref (txid) round-trip after a fileHash (no encryption)', () => {
+  const data = {
+    tokenName: 'Ltd+File', tokenRules: encodeTokenRules(10, 0, 0, 1), covenantScript: '',
+    fileHash: 'b'.repeat(64), license: 'CC-BY-4.0', licenseRef: 'd'.repeat(64),
+  }
+  const parsed = parseTemplateScript(buildTemplateScript(PUB, data))
+  assert.ok(parsed)
+  assert.deepEqual(parsed.fields, data)
+})
+
+test('TEMPLATE licence: rides AFTER the encryption pair — isEncrypted flag separates keys from the trailer', () => {
+  const data = {
+    tokenName: 'Enc+Lic', tokenRules: encodeTokenRules(10, 0, RESTRICTION_ENCRYPTED, 1), covenantScript: '',
+    fileHash: 'c'.repeat(64), wrappedKey: new Array(48).fill(7), keySalt: new Array(16).fill(9),
+    license: 'TS-COM-1', licenseRef: 'e'.repeat(64),
+  }
+  const parsed = parseTemplateScript(buildTemplateScript(PUB, data))
+  assert.ok(parsed)
+  assert.deepEqual(parsed.fields, data) // both the enc pair AND the licence trailer decode correctly
+})
+
+test('TEMPLATE licence: backward-compat — a legacy encrypted template with NO licence still decodes its keys', () => {
+  const data = {
+    tokenName: 'LegacyEnc', tokenRules: encodeTokenRules(0, 0, RESTRICTION_REPLICABLE | RESTRICTION_ENCRYPTED, 1),
+    covenantScript: '51', fileHash: 'a'.repeat(64), wrappedKey: new Array(48).fill(1), keySalt: new Array(16).fill(2),
+  }
+  const parsed = parseTemplateScript(buildTemplateScript(PUB, data))
+  assert.ok(parsed)
+  assert.deepEqual(parsed.fields, data)
+  assert.equal(parsed.fields.license, undefined)
+})
+
+test('TEMPLATE licence: an over-long code is rejected (protects the bare-32-byte fileHash invariant)', () => {
+  assert.throws(
+    () => encodeTemplateFields({ tokenName: 'x', tokenRules: encodeTokenRules(1, 0, 0, 1), covenantScript: '', license: 'x'.repeat(31) }),
+    /license code too long/,
+  )
 })
 
 // ─── FILE ───────────────────────────────────────────────────────────

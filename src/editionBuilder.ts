@@ -497,6 +497,11 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
   cover?: { mimeType: string; fileName: string; bytes: number[] }
   /** Optional public BACK cover image (flippable on the sales page). Requires a front `cover`. */
   backCover?: { mimeType: string; fileName: string; bytes: number[] }
+  /** Optional IMMUTABLE licence code (fixed at mint, travels with the coin) — template metadata only; the covenant
+   *  script is unaffected. e.g. "TS-COM-1", "CC-BY-4.0", "ARR". */
+  license?: string
+  /** Optional 64-hex txid pointing at the full licence text minted on-chain. */
+  licenseRef?: string
   feePerKb?: number
   /** Spend gate: called with the EXACT total sats to spend, after build and before broadcast. False aborts. */
   confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
@@ -544,6 +549,8 @@ export async function createEdition(provider: WalletProvider, key: PrivateKey, p
     fileHash: params.file == null ? undefined : encrypt ? sha256Hex(storedBytes!) : sha256Hex(params.file.bytes),
     wrappedKey,
     keySalt,
+    license: params.license,
+    licenseRef: params.licenseRef,
   }
   const file = params.file != null
     ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes! }

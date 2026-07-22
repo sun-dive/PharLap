@@ -24,10 +24,12 @@ import {
   parseTemplateScript,
   parseTokenScript,
   parseFileScript,
+  parseStorefrontScript,
   decodeTokenRules,
   encodeTokenRules,
   RESTRICTION_REPLICABLE,
 } from '../src/tokenCodec.ts'
+import { unwrapContentKey, decryptContent } from '../src/contentCrypto.ts'
 
 const KEY = PrivateKey.fromRandom()
 const PUB = KEY.toPublicKey().toString()
@@ -217,4 +219,58 @@ test('createCollection mints ALL editions (multi-edition: 21) and broadcasts TX1
   const tx2 = Transaction.fromHex(broadcasts[1])
   const tokenOuts = tx2.outputs.filter(o => parseTokenScript(o.lockingScript) != null)
   assert.equal(tokenOuts.length, 21) // all 21 editions present in the genesis tx
+})
+
+test('createCollection: encrypted capped-supply collection carries an encrypted FILE + storefront cover, supply preserved, NOT replicable', async () => {
+  const key = PrivateKey.fromRandom()
+  const prev = new Transaction()
+  prev.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), satoshis: 100_000 })
+  const fb = new Transaction()
+  fb.addInput({ sourceTransaction: prev, sourceOutputIndex: 0, unlockingScriptTemplate: new P2PKH().unlock(key) })
+  fb.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), satoshis: 60_000 })
+  fb.addOutput({ lockingScript: new P2PKH().lock(key.toAddress()), change: true })
+  await fb.fee(new SatoshisPerKilobyte(100))
+  await fb.sign()
+  const fundingTx = Transaction.fromHex(fb.toHex())
+  const fundingId = fundingTx.id('hex')
+
+  const broadcasts: string[] = []
+  const provider: any = {
+    getUtxos: async () => [{ txId: fundingId, outputIndex: 0, satoshis: 60_000, script: '' }],
+    getSourceTransaction: async (id: string) => { if (id === fundingId) return fundingTx; throw new Error(`unexpected getSourceTransaction(${id})`) },
+    broadcast: async (hex: string) => { broadcasts.push(hex); return 'id' },
+    registerPendingTx: () => {},
+  }
+
+  const plaintext = [5, 9, 2, 250, 7, 199, 42, 13] // tiny + incompressible → the smart-compressor keeps it as-is
+  const cover = { mimeType: 'image/webp', fileName: 'preview.webp', bytes: [1, 2, 3, 4, 5, 6] }
+  const r = await createCollection(provider, key, {
+    tokenName: 'Limited Ten', supply: 10, mintCount: 10, encrypt: true,
+    file: { mimeType: 'application/pdf', fileName: 'design.pdf', bytes: plaintext },
+    description: 'Only ten will ever exist.', cover,
+  })
+  assert.equal(r.tokenOutpoints.length, 10)
+
+  const tx1 = Transaction.fromHex(broadcasts[0])
+  // Template: supply preserved, capped (NOT unlimited/replicable), encrypted flag set, wrapped key present.
+  const tmpl = tx1.outputs.map(o => parseTemplateScript(o.lockingScript)).find(Boolean)!
+  const rules = decodeTokenRules(tmpl.fields.tokenRules)
+  assert.equal(rules.supply, 10)
+  assert.equal(rules.isUnlimited, false)
+  assert.equal(rules.isReplicable, false) // a capped/limited mint is NOT the replication covenant
+  assert.equal(rules.isEncrypted, true)
+  assert.ok(tmpl.fields.wrappedKey != null && tmpl.fields.keySalt != null, 'template must carry the wrapped content key')
+
+  // Storefront output present with description + cover (the public "what you're buying" face).
+  const sf = tx1.outputs.map(o => parseStorefrontScript(o.lockingScript)).find(Boolean)!
+  assert.ok(sf, 'expected a storefront output')
+  assert.equal(sf.fields.description, 'Only ten will ever exist.')
+  assert.deepEqual(sf.fields.coverBytes, cover.bytes)
+
+  // FILE output holds CIPHERTEXT (not the clean product); it decrypts back with the wrapped key.
+  const file = tx1.outputs.map(o => parseFileScript(o.lockingScript)).find(Boolean)!
+  assert.notDeepEqual(file.fields.fileBytes, plaintext)
+  const K = unwrapContentKey(tmpl.fields.wrappedKey!, tmpl.fields.keySalt!)
+  assert.ok(K != null)
+  assert.deepEqual(decryptContent(file.fields.fileBytes, K!), plaintext)
 })

@@ -26,8 +26,12 @@ import {
   buildTokenScript,
   encodeTokenRules,
   classifyRecord,
+  RESTRICTION_ENCRYPTED,
+  RESTRICTION_COMPRESSED,
 } from './tokenCodec.ts'
 import type { TemplateFields, FileFields, StorefrontFields } from './tokenCodec.ts'
+import { compressIfSmaller } from './compress.ts'
+import { newContentKey, newKeySalt, encryptContent, wrapContentKey } from './contentCrypto.ts'
 
 /** Satoshi value of each PushDrop record output (token / template / file). */
 export const PHARLAP_OUTPUT_SATS = 1
@@ -210,6 +214,22 @@ export interface CollectionParams {
   /** Covenant script bytes (hex). Empty = no covenant. */
   covenantScript?: string
   file?: { mimeType: string; fileName: string; bytes: number[] }
+  /** Tier-1 encrypt the embedded file (Addendum F). Requires `file`. The FILE output holds ciphertext; the
+   *  wrapped content key rides in the template so only the publisher's key (and buyers it's shared with) can
+   *  decrypt. This is the "encrypted product atom" — never mint a paid design in the clear. */
+  encrypt?: boolean
+  /** Immutable storefront blurb shown on the collection / sales page (the public "what you're buying" face,
+   *  visible even when the content is encrypted). */
+  description?: string
+  /** Optional public (unencrypted) cover image — the storefront's face. For paid designs this should be the
+   *  WATERMARKED PREVIEW, not the clean product (which lives encrypted in the FILE output). */
+  cover?: { mimeType: string; fileName: string; bytes: number[] }
+  /** Optional public BACK cover image (flippable on the sales page). Requires a front `cover`. */
+  backCover?: { mimeType: string; fileName: string; bytes: number[] }
+  /** Optional IMMUTABLE licence code (fixed at mint, travels with the coin) — e.g. "TS-COM-1", "CC-BY-4.0", "ARR". */
+  license?: string
+  /** Optional 64-hex txid pointing at the full licence text minted on-chain. */
+  licenseRef?: string
   /** How many token outputs to mint in TX2. Default: supply if > 0, else 1. */
   mintCount?: number
   /** Initial per-token stateData (hex). */
@@ -246,22 +266,69 @@ export async function createCollection(
   const supply = params.supply ?? 1
   const mintCount = params.mintCount ?? (supply > 0 ? supply : 1)
 
+  // Smart-compress (keep only if smaller), then optionally Tier-1 encrypt. Order matters: compress BEFORE
+  // encrypt (ciphertext is incompressible). The FILE output stores the final bytes; fileHash binds them.
+  // Unlike the covenant edition path this does NOT set RESTRICTION_REPLICABLE — a capped/limited mint has a
+  // fixed supply, not unlimited replication.
+  const encrypt = params.encrypt === true && params.file != null
+  let storedBytes = params.file?.bytes
+  let compressed = false
+  let wrappedKey: number[] | undefined
+  let keySalt: number[] | undefined
+  if (params.file != null) {
+    const z = await compressIfSmaller(params.file.bytes)
+    storedBytes = z.bytes
+    compressed = z.compressed
+    if (encrypt) {
+      const K = newContentKey()
+      keySalt = newKeySalt()
+      storedBytes = encryptContent(storedBytes, K)
+      wrappedKey = wrapContentKey(K, keySalt)
+    }
+  }
+  const restrictions = (params.restrictions ?? 0) | (encrypt ? RESTRICTION_ENCRYPTED : 0) | (compressed ? RESTRICTION_COMPRESSED : 0)
+
   const template: TemplateFields = {
     tokenName: params.tokenName,
-    tokenRules: encodeTokenRules(supply, params.divisibility ?? 0, params.restrictions ?? 0, params.rulesVersion ?? 1),
+    tokenRules: encodeTokenRules(supply, params.divisibility ?? 0, restrictions, params.rulesVersion ?? 1),
     covenantScript: params.covenantScript ?? '',
-    fileHash: params.file ? sha256Hex(params.file.bytes) : undefined,
+    // PUBLIC content binds the plaintext hash (provenance); ENCRYPTED content binds the ciphertext hash (privacy —
+    // a public plaintext hash would be a confirmation oracle). Mirrors the edition path.
+    fileHash: params.file == null ? undefined : encrypt ? sha256Hex(storedBytes!) : sha256Hex(params.file.bytes),
+    wrappedKey,
+    keySalt,
+    license: params.license,
+    licenseRef: params.licenseRef,
   }
   const file: FileFields | undefined = params.file
-    ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: params.file.bytes }
+    ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes! }
+    : undefined
+
+  // Immutable storefront record (description + optional public cover/back-cover), carried as a TX1 output — the
+  // public "what you're buying" face, shown even when the content is encrypted. For paid designs the cover is the
+  // WATERMARKED PREVIEW (the clean product stays encrypted in the FILE output).
+  const hasStorefront = (params.description != null && params.description.length > 0) || params.cover != null
+  const storefront: StorefrontFields | undefined = hasStorefront
+    ? {
+        description: params.description ?? '',
+        coverMimeType: params.cover?.mimeType,
+        coverFileName: params.cover?.fileName,
+        coverBytes: params.cover?.bytes,
+        // A back cover only makes sense alongside a front cover (the codec keys "has back" off the bytes).
+        backCoverMimeType: params.cover != null ? params.backCover?.mimeType : undefined,
+        backCoverFileName: params.cover != null ? params.backCover?.fileName : undefined,
+        backCoverBytes: params.cover != null ? params.backCover?.bytes : undefined,
+      }
     : undefined
 
   // Select funding to cover BOTH txs' outputs + fees (tx.fee() computes exact fees afterwards;
   // selection just needs to pick enough UTXOs, and TX1 must leave enough change to fund TX2).
   // TX1 carries any embedded file, so its fee scales with file size — keep a healthy margin so a
   // large file never eats all the funding and starves the genesis mint.
-  const numOutputs = 1 + (file ? 1 : 0) + mintCount
+  const numOutputs = 1 + (file ? 1 : 0) + (storefront ? 1 : 0) + mintCount
   const tx1Bytes = 400 + (file ? file.fileBytes.length : 0)
+    + (params.cover ? params.cover.bytes.length : 0)
+    + (params.backCover ? params.backCover.bytes.length : 0)
   const tx2Bytes = 300 + mintCount * 80
   const estFee = Math.ceil(((tx1Bytes + tx2Bytes) * feePerKb) / 1000)
   // Margin: 10% of the estimate (absorbs file-encoding overhead on big files) or 1000 sat, whichever larger.
@@ -273,7 +340,7 @@ export async function createCollection(
 
   // Build BOTH transactions offline first. Only broadcast once both succeed, so a failure (e.g.
   // insufficient change for the genesis mint) never leaves an orphaned template tx on-chain.
-  const t1 = await buildTemplateTx({ key, funding, template, file, outputSats: sats, feePerKb })
+  const t1 = await buildTemplateTx({ key, funding, template, file, storefront, outputSats: sats, feePerKb })
   if (t1.changeVout == null) {
     throw new Error('Insufficient funding: the template tx left no change to fund the genesis mint. Add more funds.')
   }

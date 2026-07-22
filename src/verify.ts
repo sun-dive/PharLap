@@ -67,6 +67,13 @@ export async function verifyTokenLineage(
   } catch {
     return { valid: false, reason: `cannot fetch collection TX1 ${collectionId.slice(0, 12)}…`, collectionId }
   }
+  // Pin the anchor to its txid: the provider is NOT trusted, so the returned TX1 must actually hash to the
+  // collection id the token commits to. This is what makes the immutable template fields (tokenName, rules,
+  // covenant, fileHash, licence) tamper-evident — altering any of them changes TX1's txid, which no token
+  // references. (The MPT immutability guarantee, enforced by Bitcoin's own hash rather than a re-derived chunk.)
+  if (tx1.id('hex') !== collectionId) {
+    return { valid: false, reason: 'fetched TX1 does not hash to the collection id — tampered collection anchor', collectionId }
+  }
   const hasTemplate = tx1.outputs.some(o => parseTemplateScript(o.lockingScript) != null)
   if (!hasTemplate) {
     return { valid: false, reason: 'TX1 has no TEMPLATE output — invalid collection anchor', collectionId }

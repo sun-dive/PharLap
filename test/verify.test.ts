@@ -54,6 +54,29 @@ test('genesis token verifies as a genesis of its collection', async () => {
   assert.equal(r.collectionId, tx1.tx1Id)
 })
 
+test('immutability: an altered licence changes TX1s txid, and the verifier rejects a tampered anchor', async () => {
+  // Genuine collection: TX1 with licence TS-COM-1 + a genesis token bound to TX1's txid. Reuse ONE funding input
+  // for both builds so the ONLY difference is the licence — isolating that the licence is inside the commitment.
+  const f = makeFunding(200_000)
+  const genuine = await buildTemplateTx({ key: KEY, funding: [f], template: { ...TEMPLATE, license: 'TS-COM-1' } })
+  const tampered = await buildTemplateTx({ key: KEY, funding: [f], template: { ...TEMPLATE, license: 'CC0-1.0' } })
+  assert.notEqual(tampered.tx1Id, genuine.tx1Id, 'changing the licence must change TX1s txid')
+
+  const t2 = await buildGenesisTx({ key: KEY, funding: [makeFunding(200_000)], tx1Id: genuine.tx1Id, mintCount: 1 })
+
+  // A lying provider serves the TAMPERED TX1 bytes under the genuine collection id the token references.
+  const deps: VerifyDeps = {
+    getRawTransaction: async (id: string) => {
+      if (id === genuine.tx1Id) return tampered.tx // wrong content under the right id
+      if (id === t2.tx.id('hex')) return t2.tx
+      throw new Error(`not found: ${id}`)
+    },
+  }
+  const r = await verifyTokenLineage(t2.tx, t2.tokenVouts[0], deps)
+  assert.equal(r.valid, false)
+  assert.match(r.reason, /does not hash to the collection id|tampered/)
+})
+
 test('transferred token verifies as a descendant', async () => {
   const tx1 = await buildTemplateTx({ key: KEY, funding: [makeFunding(200_000)], template: TEMPLATE })
   const t2 = await buildGenesisTx({ key: KEY, funding: [makeFunding(200_000)], tx1Id: tx1.tx1Id, mintCount: 1 })

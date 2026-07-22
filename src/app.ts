@@ -832,6 +832,43 @@ function openCropModal(file: File): Promise<Blob | null> {
   })
 }
 
+/** The licence code chosen in the Publish form ('' = none). "Custom code…" reveals a free-text input. */
+function chosenLicense(): string {
+  const sel = $('edLicense') as HTMLSelectElement | null
+  if (sel == null) return ''
+  if (sel.value === '__custom') return (($('edLicenseCustom') as HTMLInputElement | null)?.value ?? '').trim()
+  return sel.value
+}
+
+// ── Publish tier: Unlimited (covenant) / Limited (plain capped-N) / Exclusive (plain 1-of-1) ──
+type PublishTier = 'unlimited' | 'limited' | 'exclusive'
+let publishTier: PublishTier = 'unlimited'
+/** Switch the Publish form between the covenant edition path and the plain capped-supply tiers: toggle the
+ *  covenant-only fields (bond / pricing / combine), adapt the quantity control, and relabel the mint button. */
+function setPublishTier(t: PublishTier): void {
+  publishTier = t
+  const btnIds: Record<PublishTier, string> = { unlimited: 'btnTierUnlimited', limited: 'btnTierLimited', exclusive: 'btnTierExclusive' }
+  for (const [tier, id] of Object.entries(btnIds)) $(id)?.classList.toggle('active', tier === t)
+  const covenant = t === 'unlimited'
+  document.querySelectorAll('.covenant-only').forEach(el => { (el as HTMLElement).hidden = !covenant })
+  const countInput = $('edCount') as HTMLInputElement | null
+  if (countInput != null) {
+    if (t === 'exclusive') { countInput.value = '1'; countInput.disabled = true }
+    else countInput.disabled = false
+  }
+  const countLabel = $('edCountLabel')
+  if (countLabel != null) countLabel.textContent = t === 'exclusive' ? 'Only one exists (1-of-1)'
+    : t === 'limited' ? 'How many exist (the whole run)' : 'Editions to mint now'
+  const hint = $('tierHint')
+  if (hint != null) hint.textContent = covenant
+    ? 'Unlimited: a covenant edition anyone can replicate — every copy pays you + the reseller on-chain, no marketplace needed.'
+    : t === 'limited' ? 'Limited: a fixed run (e.g. “only 10”). Provable scarcity — you hold them and transfer one per sale.'
+    : 'Exclusive: a single 1-of-1. Top-tier scarcity — transferred to the one buyer.'
+  const btn = $('btnMintEdition')
+  if (btn != null) btn.textContent = covenant ? 'Mint edition collection'
+    : t === 'exclusive' ? 'Mint exclusive 1-of-1' : 'Mint limited collection'
+}
+
 async function onMintEdition(): Promise<void> {
   const k = requireKey(); if (k == null) return
   const name = val('edName')
@@ -839,6 +876,7 @@ async function onMintEdition(): Promise<void> {
   const count = Math.max(1, parseInt(val('edCount') || '1', 10))
   const encrypt = ($('edEncrypt') as HTMLInputElement).checked
   const description = val('edDescription')
+  const license = chosenLicense()
   const combineMode = ($('edCombine') as HTMLInputElement)?.checked ?? false
   try {
     // Combine mode mints an EP whose content is a REFERENCE manifest (pointers to existing mints, no re-upload);
@@ -855,12 +893,33 @@ async function onMintEdition(): Promise<void> {
       : trackCount > 0 ? ` (embedding a ${trackCount}-track album, ${kb(file.bytes.length)})`
       : ` (embedding a ${kb(file.bytes.length)} file)`
     if (file != null && !confirmAudioFidelity(file)) { setStatus('Mint cancelled — compress the file first, or proceed as-is when you’re ready.'); return }
+
+    // Plain capped-supply tiers (Limited / Exclusive): no covenant, fixed supply. The publisher holds the run and
+    // transfers one token per sale. Encrypted product + storefront cover ride the same shared pipeline as editions.
+    if (publishTier !== 'unlimited') {
+      const exclusive = publishTier === 'exclusive'
+      const supply = exclusive ? 1 : count
+      setStatus('Preparing the mint…')
+      const result = await createCollection(provider, k, {
+        tokenName: name, supply, mintCount: supply, file, encrypt, description, cover, backCover, license,
+        confirmSpend: total => confirm(
+          `Mint ${exclusive ? 'an exclusive 1-of-1' : `a limited run of ${supply}`} — “${name}”${encrypt ? ' (encrypted)' : ''}${fileLabel}?\n\n` +
+          `This spends ${total.toLocaleString()} sats from your wallet (network fee + ${supply} × 1-sat token${supply > 1 ? 's' : ''}).\n\nProceed?`),
+      })
+      for (const op of result.tokenOutpoints) {
+        store.add({ txId: op.txId, outputIndex: op.outputIndex, collectionId: result.collectionId, stateData: '', collectionName: name })
+      }
+      renderTokens()
+      setStatusHtml(`Minted ${result.tokenOutpoints.length} ${exclusive ? 'exclusive' : 'limited'} edition(s). Collection ${idChip(result.collectionId)} (TX1 ${idChip(result.tx1Id)}, TX2 ${idChip(result.tx2Id)}).`, 'ok')
+      return
+    }
+
     // v1 fixed-fee editions only. Covenant v2 (percentage/ranged pricing) stays in the codebase
     // (createEditionV2 / replicateEditionV2 / parseEditionScriptV2) but is hidden from the UI until built out.
     const terms = ownTerms()
     setStatus('Preparing the edition mint…')
     const result = await createEdition(provider, k, {
-      tokenName: name, terms, mintCount: count, file, encrypt, description, cover, backCover,
+      tokenName: name, terms, mintCount: count, file, encrypt, description, cover, backCover, license,
       confirmSpend: total => confirm(
         `Mint ${count} edition${count > 1 ? 's' : ''} of “${name}”${encrypt ? ' (encrypted)' : ''}${fileLabel}?\n\n` +
         `This spends ${total.toLocaleString()} sats from your wallet — including a refundable ${(terms.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond per edition (reclaimable by burning), plus the network fee.\n\n` +
@@ -3314,6 +3373,10 @@ interface CollectionInfo {
   /** SHA-256 (hex) of the embedded content, committed in the TX1 template — used to reference this collection
    *  from a combination/EP manifest (and to integrity-check the resolved content). null if no content file. */
   fileHash: string | null
+  /** Immutable licence code committed at mint (e.g. "TS-COM-1"), or null. Travels with the coin. */
+  license: string | null
+  /** Optional txid → full licence text minted on-chain, or null. */
+  licenseRef: string | null
   publisherPubKeyHex: string | null
   fees: { publisher: number; holder: number } | null
   /** v2 (percentage pricing): publisher basis points + the genesis/reference price (the seller's live price is
@@ -3451,6 +3514,7 @@ async function loadCollection(tx1Ref: string, holderPubKeyHint?: string | null, 
     tx1Ref, name: template.tokenName, description: storefront?.description ?? '',
     cover, backCover, encrypted: rules.isEncrypted, replicable: rules.isReplicable, hasContentFile, contentMime,
     fileHash: template.fileHash ?? null,
+    license: template.license ?? null, licenseRef: template.licenseRef ?? null,
     publisherPubKeyHex, fees, isV2, pBps, v2PriceSats, covenantHex: template.covenantScript, bondSats,
   }
 }
@@ -3531,6 +3595,10 @@ function renderCollectionView(info: CollectionInfo, opts?: { coverUrl?: string }
   if (info.replicable) badges.push('<span class="badge">♾ Unlimited editions</span>')
   if (info.encrypted) badges.push('<span class="badge" style="background:#9e6a03;color:#1a1206">🔒 Holders only</span>')
   else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">📎 Embedded file</span>')
+  if (info.license) {
+    const ref = info.licenseRef ? ` title="Full terms: ${escapeHtml(info.licenseRef)}"` : ' title="Immutable licence — fixed at mint, travels with the coin"'
+    badges.push(`<span class="badge" style="background:#1f6feb;color:#fff"${ref}>📜 ${escapeHtml(info.license)}</span>`)
+  }
   $('cvBadges').innerHTML = badges.join('')
   $('cvPublisher').innerHTML = info.publisherPubKeyHex ? `by ${nameChip(info.publisherPubKeyHex)}` : ''
   if (info.publisherPubKeyHex != null) {
@@ -4595,6 +4663,14 @@ function init(): void {
   wireScanButtons() // inject 📷 scan buttons beside [data-scan] inputs
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
+  $('btnTierUnlimited').onclick = () => setPublishTier('unlimited')
+  $('btnTierLimited').onclick = () => setPublishTier('limited')
+  $('btnTierExclusive').onclick = () => setPublishTier('exclusive')
+  {
+    const lic = $('edLicense') as HTMLSelectElement | null
+    const custom = $('edLicenseCustom') as HTMLInputElement | null
+    if (lic != null && custom != null) lic.onchange = () => { custom.hidden = lic.value !== '__custom' }
+  }
   ;($('edCombine') as HTMLInputElement).onchange = () => {
     const on = ($('edCombine') as HTMLInputElement).checked
     $('edCombineWrap').hidden = !on

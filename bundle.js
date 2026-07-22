@@ -19970,6 +19970,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (fields == null) return null;
     return { recipientPubKeyHex: d.pubKeyHex, fields };
   }
+  var TEMPLATE_TAG_LICENSE = 1;
+  var TEMPLATE_TAG_LICENSE_REF = 2;
+  var TEMPLATE_LICENSE_MAX = 30;
   function encodeTemplateFields(data) {
     const fields = [
       P_PREFIX,
@@ -19985,6 +19988,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         fields.push(data.wrappedKey, data.keySalt);
       }
     }
+    if (data.license != null && data.license.length > 0) {
+      const code = utf8ToBytes2(data.license);
+      if (code.length > TEMPLATE_LICENSE_MAX) throw new Error(`license code too long (${code.length} > ${TEMPLATE_LICENSE_MAX} bytes)`);
+      fields.push([TEMPLATE_TAG_LICENSE, ...code]);
+    }
+    if (data.licenseRef != null && data.licenseRef.length > 0) {
+      fields.push([TEMPLATE_TAG_LICENSE_REF, ...hexToBytes(data.licenseRef)]);
+    }
     return fields;
   }
   function decodeTemplateFields(fields) {
@@ -19998,12 +20009,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       // Empty covenant normalizes to "00" via OP_0; treat that as "no covenant".
       covenantScript: isEmptyOrZero(fields[5]) ? "" : bytesToHex2(fields[5])
     };
-    if (fields.length >= 7 && fields[6].length === 32) {
-      result.fileHash = bytesToHex2(fields[6]);
+    let i = 6;
+    if (fields.length > i && fields[i].length === 32) {
+      result.fileHash = bytesToHex2(fields[i]);
+      i++;
+      if (decodeTokenRules(result.tokenRules).isEncrypted && fields.length >= i + 2) {
+        result.wrappedKey = fields[i];
+        result.keySalt = fields[i + 1];
+        i += 2;
+      }
     }
-    if (fields.length >= 9) {
-      result.wrappedKey = fields[7];
-      result.keySalt = fields[8];
+    for (; i < fields.length; i++) {
+      const f2 = fields[i];
+      if (f2.length < 1) continue;
+      if (f2[0] === TEMPLATE_TAG_LICENSE) result.license = bytesToUtf8(f2.slice(1));
+      else if (f2[0] === TEMPLATE_TAG_LICENSE_REF) result.licenseRef = bytesToHex2(f2.slice(1));
     }
     return result;
   }
@@ -20292,6 +20312,52 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     };
   }
 
+  // src/compress.ts
+  var MIN_COMPRESS = 64;
+  async function run(bytes2, stream) {
+    const writer = stream.writable.getWriter();
+    void writer.write(new Uint8Array(bytes2));
+    void writer.close();
+    const buf = await new Response(stream.readable).arrayBuffer();
+    return Array.from(new Uint8Array(buf));
+  }
+  async function compressIfSmaller(bytes2) {
+    if (bytes2.length < MIN_COMPRESS || typeof CompressionStream === "undefined") return { bytes: bytes2, compressed: false };
+    const z = await run(bytes2, new CompressionStream("gzip"));
+    return z.length < bytes2.length ? { bytes: z, compressed: true } : { bytes: bytes2, compressed: false };
+  }
+  async function decompress(bytes2) {
+    return run(bytes2, new DecompressionStream("gzip"));
+  }
+
+  // src/contentCrypto.ts
+  var OBFUSCATION_SALT = utils_exports.toArray("PHARLAP/tier1/content-key/v1", "utf8");
+  function newContentKey() {
+    return Random_default(32);
+  }
+  function newKeySalt() {
+    return Random_default(16);
+  }
+  function encryptContent(fileBytes, K2) {
+    return new SymmetricKey(K2).encrypt(fileBytes);
+  }
+  function decryptContent(ciphertext, K2) {
+    return new SymmetricKey(K2).decrypt(ciphertext);
+  }
+  function obfuscationKey(keySalt) {
+    return Hash_exports.sha256([...OBFUSCATION_SALT, ...keySalt]);
+  }
+  function wrapContentKey(K2, keySalt) {
+    return new SymmetricKey(obfuscationKey(keySalt)).encrypt(K2);
+  }
+  function unwrapContentKey(wrappedK, keySalt) {
+    try {
+      return new SymmetricKey(obfuscationKey(keySalt)).decrypt(wrappedK);
+    } catch {
+      return null;
+    }
+  }
+
   // src/collectionBuilder.ts
   var PHARLAP_OUTPUT_SATS = 1;
   var DEFAULT_FEE_PER_KB = 101;
@@ -20396,15 +20462,49 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const feePerKb = params.feePerKb ?? DEFAULT_FEE_PER_KB;
     const supply = params.supply ?? 1;
     const mintCount = params.mintCount ?? (supply > 0 ? supply : 1);
+    const encrypt = params.encrypt === true && params.file != null;
+    let storedBytes = params.file?.bytes;
+    let compressed = false;
+    let wrappedKey;
+    let keySalt;
+    if (params.file != null) {
+      const z = await compressIfSmaller(params.file.bytes);
+      storedBytes = z.bytes;
+      compressed = z.compressed;
+      if (encrypt) {
+        const K2 = newContentKey();
+        keySalt = newKeySalt();
+        storedBytes = encryptContent(storedBytes, K2);
+        wrappedKey = wrapContentKey(K2, keySalt);
+      }
+    }
+    const restrictions = (params.restrictions ?? 0) | (encrypt ? RESTRICTION_ENCRYPTED : 0) | (compressed ? RESTRICTION_COMPRESSED : 0);
     const template = {
       tokenName: params.tokenName,
-      tokenRules: encodeTokenRules(supply, params.divisibility ?? 0, params.restrictions ?? 0, params.rulesVersion ?? 1),
+      tokenRules: encodeTokenRules(supply, params.divisibility ?? 0, restrictions, params.rulesVersion ?? 1),
       covenantScript: params.covenantScript ?? "",
-      fileHash: params.file ? sha256Hex(params.file.bytes) : void 0
+      // PUBLIC content binds the plaintext hash (provenance); ENCRYPTED content binds the ciphertext hash (privacy —
+      // a public plaintext hash would be a confirmation oracle). Mirrors the edition path.
+      fileHash: params.file == null ? void 0 : encrypt ? sha256Hex(storedBytes) : sha256Hex(params.file.bytes),
+      wrappedKey,
+      keySalt,
+      license: params.license,
+      licenseRef: params.licenseRef
     };
-    const file = params.file ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: params.file.bytes } : void 0;
-    const numOutputs = 1 + (file ? 1 : 0) + mintCount;
-    const tx1Bytes = 400 + (file ? file.fileBytes.length : 0);
+    const file = params.file ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes } : void 0;
+    const hasStorefront = params.description != null && params.description.length > 0 || params.cover != null;
+    const storefront = hasStorefront ? {
+      description: params.description ?? "",
+      coverMimeType: params.cover?.mimeType,
+      coverFileName: params.cover?.fileName,
+      coverBytes: params.cover?.bytes,
+      // A back cover only makes sense alongside a front cover (the codec keys "has back" off the bytes).
+      backCoverMimeType: params.cover != null ? params.backCover?.mimeType : void 0,
+      backCoverFileName: params.cover != null ? params.backCover?.fileName : void 0,
+      backCoverBytes: params.cover != null ? params.backCover?.bytes : void 0
+    } : void 0;
+    const numOutputs = 1 + (file ? 1 : 0) + (storefront ? 1 : 0) + mintCount;
+    const tx1Bytes = 400 + (file ? file.fileBytes.length : 0) + (params.cover ? params.cover.bytes.length : 0) + (params.backCover ? params.backCover.bytes.length : 0);
     const tx2Bytes = 300 + mintCount * 80;
     const estFee = Math.ceil((tx1Bytes + tx2Bytes) * feePerKb / 1e3);
     const target = numOutputs * sats + estFee + Math.max(1e3, Math.ceil(estFee * 0.1));
@@ -20412,7 +20512,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const funding = await Promise.all(
       selected.map(async (u) => ({ utxo: u, sourceTx: await provider2.getSourceTransaction(u.txId) }))
     );
-    const t1 = await buildTemplateTx({ key: key2, funding, template, file, outputSats: sats, feePerKb });
+    const t1 = await buildTemplateTx({ key: key2, funding, template, file, storefront, outputSats: sats, feePerKb });
     if (t1.changeVout == null) {
       throw new Error("Insufficient funding: the template tx left no change to fund the genesis mint. Add more funds.");
     }
@@ -20961,24 +21061,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return [pushData(p.ownerSig), op2(OP_default.OP_2), pushData(p.preimage)];
   }
 
-  // src/compress.ts
-  var MIN_COMPRESS = 64;
-  async function run(bytes2, stream) {
-    const writer = stream.writable.getWriter();
-    void writer.write(new Uint8Array(bytes2));
-    void writer.close();
-    const buf = await new Response(stream.readable).arrayBuffer();
-    return Array.from(new Uint8Array(buf));
-  }
-  async function compressIfSmaller(bytes2) {
-    if (bytes2.length < MIN_COMPRESS || typeof CompressionStream === "undefined") return { bytes: bytes2, compressed: false };
-    const z = await run(bytes2, new CompressionStream("gzip"));
-    return z.length < bytes2.length ? { bytes: z, compressed: true } : { bytes: bytes2, compressed: false };
-  }
-  async function decompress(bytes2) {
-    return run(bytes2, new DecompressionStream("gzip"));
-  }
-
   // src/sellerNote.ts
   var MAX_NOTE_BYTES = 3072;
   var MAX_HISTORY_SCAN = 30;
@@ -21077,34 +21159,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       }
     }
     return null;
-  }
-
-  // src/contentCrypto.ts
-  var OBFUSCATION_SALT = utils_exports.toArray("PHARLAP/tier1/content-key/v1", "utf8");
-  function newContentKey() {
-    return Random_default(32);
-  }
-  function newKeySalt() {
-    return Random_default(16);
-  }
-  function encryptContent(fileBytes, K2) {
-    return new SymmetricKey(K2).encrypt(fileBytes);
-  }
-  function decryptContent(ciphertext, K2) {
-    return new SymmetricKey(K2).decrypt(ciphertext);
-  }
-  function obfuscationKey(keySalt) {
-    return Hash_exports.sha256([...OBFUSCATION_SALT, ...keySalt]);
-  }
-  function wrapContentKey(K2, keySalt) {
-    return new SymmetricKey(obfuscationKey(keySalt)).encrypt(K2);
-  }
-  function unwrapContentKey(wrappedK, keySalt) {
-    try {
-      return new SymmetricKey(obfuscationKey(keySalt)).decrypt(wrappedK);
-    } catch {
-      return null;
-    }
   }
 
   // src/editionBuilder.ts
@@ -21414,7 +21468,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       // a public plaintext hash would be a confirmation oracle).
       fileHash: params.file == null ? void 0 : encrypt ? sha256Hex(storedBytes) : sha256Hex(params.file.bytes),
       wrappedKey,
-      keySalt
+      keySalt,
+      license: params.license,
+      licenseRef: params.licenseRef
     };
     const file = params.file != null ? { mimeType: params.file.mimeType, fileName: params.file.fileName, fileBytes: storedBytes } : void 0;
     const hasStorefront = params.description != null && params.description.length > 0 || params.cover != null;
@@ -24049,6 +24105,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     } catch {
       return { valid: false, reason: `cannot fetch collection TX1 ${collectionId.slice(0, 12)}\u2026`, collectionId };
     }
+    if (tx1.id("hex") !== collectionId) {
+      return { valid: false, reason: "fetched TX1 does not hash to the collection id \u2014 tampered collection anchor", collectionId };
+    }
     const hasTemplate = tx1.outputs.some((o) => parseTemplateScript(o.lockingScript) != null);
     if (!hasTemplate) {
       return { valid: false, reason: "TX1 has no TEMPLATE output \u2014 invalid collection anchor", collectionId };
@@ -25407,6 +25466,35 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
       img.src = url;
     });
   }
+  function chosenLicense() {
+    const sel = $("edLicense");
+    if (sel == null) return "";
+    if (sel.value === "__custom") return ($("edLicenseCustom")?.value ?? "").trim();
+    return sel.value;
+  }
+  var publishTier = "unlimited";
+  function setPublishTier(t) {
+    publishTier = t;
+    const btnIds = { unlimited: "btnTierUnlimited", limited: "btnTierLimited", exclusive: "btnTierExclusive" };
+    for (const [tier, id] of Object.entries(btnIds)) $(id)?.classList.toggle("active", tier === t);
+    const covenant = t === "unlimited";
+    document.querySelectorAll(".covenant-only").forEach((el) => {
+      el.hidden = !covenant;
+    });
+    const countInput = $("edCount");
+    if (countInput != null) {
+      if (t === "exclusive") {
+        countInput.value = "1";
+        countInput.disabled = true;
+      } else countInput.disabled = false;
+    }
+    const countLabel = $("edCountLabel");
+    if (countLabel != null) countLabel.textContent = t === "exclusive" ? "Only one exists (1-of-1)" : t === "limited" ? "How many exist (the whole run)" : "Editions to mint now";
+    const hint = $("tierHint");
+    if (hint != null) hint.textContent = covenant ? "Unlimited: a covenant edition anyone can replicate \u2014 every copy pays you + the reseller on-chain, no marketplace needed." : t === "limited" ? "Limited: a fixed run (e.g. \u201Conly 10\u201D). Provable scarcity \u2014 you hold them and transfer one per sale." : "Exclusive: a single 1-of-1. Top-tier scarcity \u2014 transferred to the one buyer.";
+    const btn = $("btnMintEdition");
+    if (btn != null) btn.textContent = covenant ? "Mint edition collection" : t === "exclusive" ? "Mint exclusive 1-of-1" : "Mint limited collection";
+  }
   async function onMintEdition() {
     const k = requireKey();
     if (k == null) return;
@@ -25418,6 +25506,7 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
     const count = Math.max(1, parseInt(val("edCount") || "1", 10));
     const encrypt = $("edEncrypt").checked;
     const description = val("edDescription");
+    const license = chosenLicense();
     const combineMode = $("edCombine")?.checked ?? false;
     try {
       const file = combineMode ? await buildCombinedManifest(name) : await readContent($("edFile"), name);
@@ -25438,6 +25527,35 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
         setStatus("Mint cancelled \u2014 compress the file first, or proceed as-is when you\u2019re ready.");
         return;
       }
+      if (publishTier !== "unlimited") {
+        const exclusive = publishTier === "exclusive";
+        const supply = exclusive ? 1 : count;
+        setStatus("Preparing the mint\u2026");
+        const result2 = await createCollection(provider, k, {
+          tokenName: name,
+          supply,
+          mintCount: supply,
+          file,
+          encrypt,
+          description,
+          cover,
+          backCover,
+          license,
+          confirmSpend: (total) => confirm(
+            `Mint ${exclusive ? "an exclusive 1-of-1" : `a limited run of ${supply}`} \u2014 \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${fileLabel}?
+
+This spends ${total.toLocaleString()} sats from your wallet (network fee + ${supply} \xD7 1-sat token${supply > 1 ? "s" : ""}).
+
+Proceed?`
+          )
+        });
+        for (const op3 of result2.tokenOutpoints) {
+          store2.add({ txId: op3.txId, outputIndex: op3.outputIndex, collectionId: result2.collectionId, stateData: "", collectionName: name });
+        }
+        renderTokens();
+        setStatusHtml(`Minted ${result2.tokenOutpoints.length} ${exclusive ? "exclusive" : "limited"} edition(s). Collection ${idChip(result2.collectionId)} (TX1 ${idChip(result2.tx1Id)}, TX2 ${idChip(result2.tx2Id)}).`, "ok");
+        return;
+      }
       const terms = ownTerms();
       setStatus("Preparing the edition mint\u2026");
       const result = await createEdition(provider, k, {
@@ -25449,6 +25567,7 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
         description,
         cover,
         backCover,
+        license,
         confirmSpend: (total) => confirm(
           `Mint ${count} edition${count > 1 ? "s" : ""} of \u201C${name}\u201D${encrypt ? " (encrypted)" : ""}${fileLabel}?
 
@@ -28219,6 +28338,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       hasContentFile,
       contentMime,
       fileHash: template.fileHash ?? null,
+      license: template.license ?? null,
+      licenseRef: template.licenseRef ?? null,
       publisherPubKeyHex,
       fees,
       isV2,
@@ -28324,6 +28445,10 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     if (info.replicable) badges.push('<span class="badge">\u267E Unlimited editions</span>');
     if (info.encrypted) badges.push('<span class="badge" style="background:#9e6a03;color:#1a1206">\u{1F512} Holders only</span>');
     else if (info.hasContentFile) badges.push('<span class="badge" style="background:#21262d;color:var(--fg)">\u{1F4CE} Embedded file</span>');
+    if (info.license) {
+      const ref = info.licenseRef ? ` title="Full terms: ${escapeHtml(info.licenseRef)}"` : ' title="Immutable licence \u2014 fixed at mint, travels with the coin"';
+      badges.push(`<span class="badge" style="background:#1f6feb;color:#fff"${ref}>\u{1F4DC} ${escapeHtml(info.license)}</span>`);
+    }
     $("cvBadges").innerHTML = badges.join("");
     $("cvPublisher").innerHTML = info.publisherPubKeyHex ? `by ${nameChip(info.publisherPubKeyHex)}` : "";
     if (info.publisherPubKeyHex != null) {
@@ -29410,7 +29535,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"838447e"} \xB7 ${"2026-07-21"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"0b2fb71"} \xB7 ${"2026-07-22"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -29466,6 +29591,17 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     wireScanButtons();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
+    $("btnTierUnlimited").onclick = () => setPublishTier("unlimited");
+    $("btnTierLimited").onclick = () => setPublishTier("limited");
+    $("btnTierExclusive").onclick = () => setPublishTier("exclusive");
+    {
+      const lic = $("edLicense");
+      const custom = $("edLicenseCustom");
+      if (lic != null && custom != null) lic.onchange = () => {
+        custom.hidden = lic.value !== "__custom";
+      };
+    }
+    ;
     $("edCombine").onchange = () => {
       const on = $("edCombine").checked;
       $("edCombineWrap").hidden = !on;
