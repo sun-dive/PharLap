@@ -36,7 +36,17 @@ async function canvasLib(): Promise<CanvasLib | null> {
     _lib = (await import('@napi-rs/canvas')) as unknown as CanvasLib
     const g = globalThis as unknown as { document?: unknown }
     if (g.document == null) g.document = { createElement: (t: string) => (t === 'canvas' ? _lib!.createCanvas(1, 1) : {}) }
-  } catch { _lib = null }
+  } catch (err) {
+    _lib = null
+    // TEMP DIAGNOSTIC — surface WHY @napi-rs/canvas won't load on the server (module-not-found vs a native
+    // dlopen/glibc failure), instead of silently falling back to the raw preview. Remove once resolved.
+    const e = err as NodeJS.ErrnoException
+    console.error(`  ! @napi-rs/canvas load FAILED — mockups fall back to the raw preview cover.`)
+    console.error(`      code=${e.code ?? '-'}  name=${e.name ?? '-'}`)
+    console.error(`      message: ${e.message ?? String(err)}`)
+    if (e.stack) console.error(`      stack: ${e.stack.split('\n').slice(0, 4).join(' | ')}`)
+    try { console.error(`      node=${process.version} platform=${process.platform}/${process.arch} cwd=${process.cwd()}`) } catch { /* noop */ }
+  }
   return _lib
 }
 
