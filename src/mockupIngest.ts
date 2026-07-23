@@ -9,6 +9,7 @@ import type { PrivateKey } from '@bsv/sdk'
 import { readStoreZip } from './bmc.ts'
 import { packCover, type MockupCover, type WarpStage } from './mockup.ts'
 import { createCollection } from './collectionBuilder.ts'
+import { createEdition, type EditionTerms } from './editionBuilder.ts'
 import type { WalletProvider } from './walletProvider.ts'
 
 /** The recipe emitted by Pole Position's mockup export (mockup.json). */
@@ -90,9 +91,19 @@ export async function mintMockupProduct(provider: WalletProvider, key: PrivateKe
   license?: string
   /** Capped supply / tier: 1 = exclusive, N = limited. */
   supply?: number
+  /** Covenant tier: when set, the PRODUCT mints as a covenant edition (trustless permissionless resale +
+   *  publisher/holder fees), instead of a plain capped token. The prop stays a plain referenced asset. */
+  covenant?: { terms: EditionTerms }
   feePerKb?: number
   confirmSpend?: (totalSats: number) => boolean | Promise<boolean>
-}): Promise<{ propTxid: string; productTxid: string }> {
+}): Promise<{
+  propTxid: string
+  productTxid: string
+  /** Covenant tier: the minted editions (with lockHex) — store via storeEdition for the onboard flow. */
+  editions?: Array<{ txId: string; outputIndex: number; lockHex: string }>
+  /** Plain tier: the minted token outpoints — store via the plain token index. */
+  tokenOutpoints?: Array<{ txId: string; outputIndex: number }>
+}> {
   let propTxid = opts.propTxid
   if (propTxid == null) {
     const prop = await createCollection(provider, key, {
@@ -104,17 +115,39 @@ export async function mintMockupProduct(provider: WalletProvider, key: PrivateKe
   }
   const manifest = bundleToManifest(opts.recipe, propTxid)
   const supply = opts.supply ?? 1
+  const file = { mimeType: opts.cleanDesign.mimeType, fileName: 'design', bytes: opts.cleanDesign.bytes }
+  const cover = { mimeType: opts.previewDesign.mimeType, fileName: 'preview', bytes: opts.previewDesign.bytes }
+
+  // Covenant tier: the product is a covenant edition (permissionless resale enforced on-chain, publisher/holder
+  // fees), carrying the mockup manifest + preview cover in TX1 exactly like a plain product — so the existing
+  // Big Red curator lists AND composites it with no changes. Else a plain capped token (Limited/Exclusive).
+  if (opts.covenant) {
+    const product = await createEdition(provider, key, {
+      tokenName: opts.productName,
+      terms: opts.covenant.terms,
+      mintCount: supply,
+      file, cover,
+      encrypt: opts.encrypt,
+      description: opts.description,
+      license: opts.license,
+      mockupManifest: manifest,
+      feePerKb: opts.feePerKb,
+      confirmSpend: opts.confirmSpend,
+    })
+    return { propTxid, productTxid: product.collectionId, editions: product.editions }
+  }
+
   const product = await createCollection(provider, key, {
     tokenName: opts.productName,
     supply, mintCount: supply,
-    file: { mimeType: opts.cleanDesign.mimeType, fileName: 'design', bytes: opts.cleanDesign.bytes },
+    file,
     encrypt: opts.encrypt,
     description: opts.description,
-    cover: { mimeType: opts.previewDesign.mimeType, fileName: 'preview', bytes: opts.previewDesign.bytes },
+    cover,
     license: opts.license,
     mockupManifest: manifest,
     feePerKb: opts.feePerKb,
     confirmSpend: opts.confirmSpend,
   })
-  return { propTxid, productTxid: product.collectionId }
+  return { propTxid, productTxid: product.collectionId, tokenOutpoints: product.tokenOutpoints }
 }

@@ -20734,68 +20734,6 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return w.out();
   }
 
-  // src/mockupIngest.ts
-  function readMockupBundle(zipBytes) {
-    const files = readStoreZip(zipBytes);
-    if (files == null || files["mockup.json"] == null) return null;
-    let recipe;
-    try {
-      recipe = JSON.parse(utils_exports.toUTF8(files["mockup.json"]));
-    } catch {
-      return null;
-    }
-    const roles = recipe.prop?.roles ?? {};
-    const base = files[roles.base ?? "base.webp"];
-    const design = files[recipe.design ?? "design.webp"];
-    if (base == null || design == null) return null;
-    const maps = {};
-    for (const role of ["mask", "shade", "disp"]) {
-      const file = roles[role];
-      if (file != null && files[file] != null) maps[role] = files[file];
-    }
-    return { base, design, maps, recipe };
-  }
-  function bundleToManifest(recipe, propTxid) {
-    const p = recipe.place;
-    const cover = {
-      version: 1,
-      prop: { tx: propTxid, index: null },
-      design: null,
-      // embedded — the storefront cover
-      place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY, fabric: recipe.fabric ?? 0.8 },
-      warp: recipe.prop?.warp ?? null
-    };
-    return packCover(cover);
-  }
-  async function mintMockupProduct(provider2, key2, opts) {
-    let propTxid = opts.propTxid;
-    if (propTxid == null) {
-      const prop = await createCollection(provider2, key2, {
-        tokenName: opts.propName ?? opts.recipe.prop?.name ?? "prop",
-        supply: 1,
-        mintCount: 1,
-        file: { mimeType: "image/webp", fileName: "base.webp", bytes: opts.base }
-      });
-      propTxid = prop.collectionId;
-    }
-    const manifest = bundleToManifest(opts.recipe, propTxid);
-    const supply = opts.supply ?? 1;
-    const product = await createCollection(provider2, key2, {
-      tokenName: opts.productName,
-      supply,
-      mintCount: supply,
-      file: { mimeType: opts.cleanDesign.mimeType, fileName: "design", bytes: opts.cleanDesign.bytes },
-      encrypt: opts.encrypt,
-      description: opts.description,
-      cover: { mimeType: opts.previewDesign.mimeType, fileName: "preview", bytes: opts.previewDesign.bytes },
-      license: opts.license,
-      mockupManifest: manifest,
-      feePerKb: opts.feePerKb,
-      confirmSpend: opts.confirmSpend
-    });
-    return { propTxid, productTxid: product.collectionId };
-  }
-
   // src/pushtx.ts
   var SIGHASH_ALL_FORKID = 65;
   var A_HEX = "11".repeat(32);
@@ -22353,6 +22291,86 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       return { collectionId, sales: buyers.reduce((s2, b) => s2 + b.count, 0), earnings: earn.get(collectionId) ?? 0, buyers };
     }).sort((a, b) => b.sales - a.sales);
     return { sales, asCreator: toGroups(creator, creatorEarn), asReseller: toGroups(reseller, resellerEarn), events, scanned: entries.length, capped };
+  }
+
+  // src/mockupIngest.ts
+  function readMockupBundle(zipBytes) {
+    const files = readStoreZip(zipBytes);
+    if (files == null || files["mockup.json"] == null) return null;
+    let recipe;
+    try {
+      recipe = JSON.parse(utils_exports.toUTF8(files["mockup.json"]));
+    } catch {
+      return null;
+    }
+    const roles = recipe.prop?.roles ?? {};
+    const base = files[roles.base ?? "base.webp"];
+    const design = files[recipe.design ?? "design.webp"];
+    if (base == null || design == null) return null;
+    const maps = {};
+    for (const role of ["mask", "shade", "disp"]) {
+      const file = roles[role];
+      if (file != null && files[file] != null) maps[role] = files[file];
+    }
+    return { base, design, maps, recipe };
+  }
+  function bundleToManifest(recipe, propTxid) {
+    const p = recipe.place;
+    const cover = {
+      version: 1,
+      prop: { tx: propTxid, index: null },
+      design: null,
+      // embedded — the storefront cover
+      place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY, fabric: recipe.fabric ?? 0.8 },
+      warp: recipe.prop?.warp ?? null
+    };
+    return packCover(cover);
+  }
+  async function mintMockupProduct(provider2, key2, opts) {
+    let propTxid = opts.propTxid;
+    if (propTxid == null) {
+      const prop = await createCollection(provider2, key2, {
+        tokenName: opts.propName ?? opts.recipe.prop?.name ?? "prop",
+        supply: 1,
+        mintCount: 1,
+        file: { mimeType: "image/webp", fileName: "base.webp", bytes: opts.base }
+      });
+      propTxid = prop.collectionId;
+    }
+    const manifest = bundleToManifest(opts.recipe, propTxid);
+    const supply = opts.supply ?? 1;
+    const file = { mimeType: opts.cleanDesign.mimeType, fileName: "design", bytes: opts.cleanDesign.bytes };
+    const cover = { mimeType: opts.previewDesign.mimeType, fileName: "preview", bytes: opts.previewDesign.bytes };
+    if (opts.covenant) {
+      const product2 = await createEdition(provider2, key2, {
+        tokenName: opts.productName,
+        terms: opts.covenant.terms,
+        mintCount: supply,
+        file,
+        cover,
+        encrypt: opts.encrypt,
+        description: opts.description,
+        license: opts.license,
+        mockupManifest: manifest,
+        feePerKb: opts.feePerKb,
+        confirmSpend: opts.confirmSpend
+      });
+      return { propTxid, productTxid: product2.collectionId, editions: product2.editions };
+    }
+    const product = await createCollection(provider2, key2, {
+      tokenName: opts.productName,
+      supply,
+      mintCount: supply,
+      file,
+      encrypt: opts.encrypt,
+      description: opts.description,
+      cover,
+      license: opts.license,
+      mockupManifest: manifest,
+      feePerKb: opts.feePerKb,
+      confirmSpend: opts.confirmSpend
+    });
+    return { propTxid, productTxid: product.collectionId, tokenOutpoints: product.tokenOutpoints };
   }
 
   // src/payment.ts
@@ -25691,64 +25709,6 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
     if (blob == null) throw new Error("preview encode failed");
     return Array.from(new Uint8Array(await blob.arrayBuffer()));
   }
-  async function onMintMockup() {
-    const k = requireKey();
-    if (k == null) return;
-    const f2 = $("mkbFile").files?.[0];
-    const status = $("mkbStatus");
-    const setS = (t) => {
-      if (status) status.textContent = t;
-    };
-    if (f2 == null) {
-      setS("Pick a mockup .bmc bundle first.");
-      return;
-    }
-    const name = val("mkbName");
-    if (!name) {
-      setS("Enter a product name.");
-      return;
-    }
-    setS("Reading bundle\u2026");
-    try {
-      const bundle = readMockupBundle(Array.from(new Uint8Array(await f2.arrayBuffer())));
-      if (bundle == null) {
-        setS("That isn\u2019t a mockup bundle (no mockup.json inside).");
-        return;
-      }
-      const encrypt = $("mkbEncrypt").checked;
-      const supply = Math.max(1, parseInt(val("mkbSupply") || "1", 10));
-      const propTxid = val("mkbProp").trim() || void 0;
-      if (!confirm(
-        `Mint \u201C${name}\u201D as a mockup product?
-
-${propTxid ? "Reusing prop " + short(propTxid) : "Minting a NEW prop"} + the product (supply ${supply}${encrypt ? ", encrypted clean design" : ""}).
-
-This spends network fees + token outputs from your wallet. Proceed?`
-      )) {
-        setS("Cancelled \u2014 nothing spent.");
-        return;
-      }
-      setS("Deriving preview\u2026");
-      const preview = await downscaleWebp(bundle.design, "image/webp", 640);
-      setS(propTxid ? "Minting product\u2026" : "Minting prop, then product\u2026");
-      const res = await mintMockupProduct(provider, k, {
-        base: bundle.base,
-        cleanDesign: { mimeType: "image/webp", bytes: bundle.design },
-        previewDesign: { mimeType: "image/webp", bytes: preview },
-        recipe: bundle.recipe,
-        propTxid,
-        productName: name,
-        description: val("mkbDesc") || void 0,
-        encrypt,
-        license: chosenLicense() || void 0,
-        supply
-      });
-      if (status) status.innerHTML = `\u2705 Minted! Prop ${idChip(res.propTxid)} \xB7 Product ${idChip(res.productTxid)}. It appears on Big Red after the curator\u2019s next run.`;
-      renderTokens();
-    } catch (e) {
-      setS(`Mint failed: ${e.message}`);
-    }
-  }
   var publishTier = "unlimited";
   function setPublishTier(t) {
     publishTier = t;
@@ -25786,6 +25746,47 @@ This spends network fees + token outputs from your wallet. Proceed?`
     const license = chosenLicense();
     const combineMode = $("edCombine")?.checked ?? false;
     try {
+      const mockupF = $("edMockupFile")?.files?.[0];
+      if (mockupF) {
+        const bundle = readMockupBundle(Array.from(new Uint8Array(await mockupF.arrayBuffer())));
+        if (bundle == null) {
+          setStatus("That isn\u2019t a mockup .bmc bundle (no mockup.json inside).", "error");
+          return;
+        }
+        const isCov = publishTier === "unlimited";
+        const terms2 = isCov ? ownTerms() : null;
+        const supply = publishTier === "exclusive" ? 1 : count;
+        const propTxid = val("edMockupProp").trim() || void 0;
+        setStatus("Deriving preview\u2026");
+        const preview = await downscaleWebp(bundle.design, "image/webp", 640);
+        setStatus(propTxid ? "Minting mockup product\u2026" : "Minting prop, then product\u2026");
+        const res = await mintMockupProduct(provider, k, {
+          base: bundle.base,
+          cleanDesign: { mimeType: "image/webp", bytes: bundle.design },
+          previewDesign: { mimeType: "image/webp", bytes: preview },
+          recipe: bundle.recipe,
+          propTxid,
+          productName: name,
+          description: description || void 0,
+          encrypt,
+          license: license || void 0,
+          supply,
+          ...terms2 ? { covenant: { terms: terms2 } } : {},
+          confirmSpend: (total) => confirm(
+            `Mint \u201C${name}\u201D as a ${isCov ? "covenant-edition" : publishTier === "exclusive" ? "exclusive 1-of-1" : `limited \xD7${supply}`} product mockup?
+
+${propTxid ? "Reusing prop " + short(propTxid) : "Minting a NEW prop"} + the product${encrypt ? " (encrypted design)" : ""}.
+` + (isCov ? `Buyers later pay publisher ${terms2.publisherFeeSats} + holder ${terms2.holderFeeSats} sats/copy (refundable ${(terms2.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond each).
+` : "") + `
+This spends ${total.toLocaleString()} sats from your wallet. Proceed?`
+          )
+        });
+        if (terms2 && res.editions) for (const e of res.editions) storeEdition(e, res.productTxid, name, terms2);
+        else if (res.tokenOutpoints) for (const op3 of res.tokenOutpoints) store2.add({ txId: op3.txId, outputIndex: op3.outputIndex, collectionId: res.productTxid, stateData: "", collectionName: name });
+        renderTokens();
+        setStatusHtml(`\u2705 Minted mockup product ${idChip(res.productTxid)} \xB7 prop ${idChip(res.propTxid)}. ${isCov ? "Covenant edition \u2014 o" : "O"}nboard a copy to the site wallet, then it appears on Big Red next curator run.`, "ok");
+        return;
+      }
       const file = combineMode ? await buildCombinedManifest(name) : await readContent($("edFile"), name);
       if (combineMode && file == null) {
         setStatus("Combine mode: pick at least 2 of your collections to bundle.", "error");
@@ -29812,7 +29813,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"ab99689"} \xB7 ${"2026-07-22"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"63a823e"} \xB7 ${"2026-07-23"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -29868,10 +29869,6 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     wireScanButtons();
     $("btnMint").onclick = () => void onMint();
     $("btnMintEdition").onclick = () => void onMintEdition();
-    {
-      const b = $("btnMintMockup");
-      if (b) b.onclick = () => void onMintMockup();
-    }
     $("btnTierUnlimited").onclick = () => setPublishTier("unlimited");
     $("btnTierLimited").onclick = () => setPublishTier("limited");
     $("btnTierExclusive").onclick = () => setPublishTier("exclusive");

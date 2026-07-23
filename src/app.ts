@@ -853,48 +853,6 @@ async function downscaleWebp(bytes: number[], mimeType: string, maxDim: number):
   return Array.from(new Uint8Array(await blob.arrayBuffer()))
 }
 
-/** Advanced Publish: mint a product from a Pole Position mockup .bmc bundle (prop once + product with a mockup cover). */
-async function onMintMockup(): Promise<void> {
-  const k = requireKey(); if (k == null) return
-  const f = ($('mkbFile') as HTMLInputElement).files?.[0]
-  const status = $('mkbStatus')
-  const setS = (t: string) => { if (status) status.textContent = t }
-  if (f == null) { setS('Pick a mockup .bmc bundle first.'); return }
-  const name = val('mkbName')
-  if (!name) { setS('Enter a product name.'); return }
-  setS('Reading bundle…')
-  try {
-    const bundle = readMockupBundle(Array.from(new Uint8Array(await f.arrayBuffer())))
-    if (bundle == null) { setS('That isn’t a mockup bundle (no mockup.json inside).'); return }
-    const encrypt = ($('mkbEncrypt') as HTMLInputElement).checked
-    const supply = Math.max(1, parseInt(val('mkbSupply') || '1', 10))
-    const propTxid = val('mkbProp').trim() || undefined
-    if (!confirm(
-      `Mint “${name}” as a mockup product?\n\n` +
-      `${propTxid ? 'Reusing prop ' + short(propTxid) : 'Minting a NEW prop'} + the product (supply ${supply}${encrypt ? ', encrypted clean design' : ''}).\n\n` +
-      `This spends network fees + token outputs from your wallet. Proceed?`)) { setS('Cancelled — nothing spent.'); return }
-    setS('Deriving preview…')
-    const preview = await downscaleWebp(bundle.design, 'image/webp', 640)
-    setS(propTxid ? 'Minting product…' : 'Minting prop, then product…')
-    const res = await mintMockupProduct(provider, k, {
-      base: bundle.base,
-      cleanDesign: { mimeType: 'image/webp', bytes: bundle.design },
-      previewDesign: { mimeType: 'image/webp', bytes: preview },
-      recipe: bundle.recipe,
-      propTxid,
-      productName: name,
-      description: val('mkbDesc') || undefined,
-      encrypt,
-      license: chosenLicense() || undefined,
-      supply,
-    })
-    if (status) status.innerHTML = `✅ Minted! Prop ${idChip(res.propTxid)} · Product ${idChip(res.productTxid)}. It appears on Big Red after the curator’s next run.`
-    renderTokens()
-  } catch (e) {
-    setS(`Mint failed: ${(e as Error).message}`)
-  }
-}
-
 // ── Publish tier: Unlimited (covenant) / Limited (plain capped-N) / Exclusive (plain 1-of-1) ──
 type PublishTier = 'unlimited' | 'limited' | 'exclusive'
 let publishTier: PublishTier = 'unlimited'
@@ -934,6 +892,45 @@ async function onMintEdition(): Promise<void> {
   const license = chosenLicense()
   const combineMode = ($('edCombine') as HTMLInputElement)?.checked ?? false
   try {
+    // Mockup attachment: if a .bmc bundle is attached, mint this as a PRODUCT mockup (design composited on a prop).
+    // Reuses the form's Type toggle (Unlimited = covenant / Limited / Exclusive), fees, bond, licence and encrypt —
+    // the bundle supplies the content (clean design) + preview cover. Delegates to mintMockupProduct.
+    const mockupF = ($('edMockupFile') as HTMLInputElement)?.files?.[0]
+    if (mockupF) {
+      const bundle = readMockupBundle(Array.from(new Uint8Array(await mockupF.arrayBuffer())))
+      if (bundle == null) { setStatus('That isn’t a mockup .bmc bundle (no mockup.json inside).', 'error'); return }
+      const isCov = publishTier === 'unlimited'
+      const terms = isCov ? ownTerms() : null
+      const supply = publishTier === 'exclusive' ? 1 : count
+      const propTxid = val('edMockupProp').trim() || undefined
+      setStatus('Deriving preview…')
+      const preview = await downscaleWebp(bundle.design, 'image/webp', 640)
+      setStatus(propTxid ? 'Minting mockup product…' : 'Minting prop, then product…')
+      const res = await mintMockupProduct(provider, k, {
+        base: bundle.base,
+        cleanDesign: { mimeType: 'image/webp', bytes: bundle.design },
+        previewDesign: { mimeType: 'image/webp', bytes: preview },
+        recipe: bundle.recipe,
+        propTxid,
+        productName: name,
+        description: description || undefined,
+        encrypt,
+        license: license || undefined,
+        supply,
+        ...(terms ? { covenant: { terms } } : {}),
+        confirmSpend: total => confirm(
+          `Mint “${name}” as a ${isCov ? 'covenant-edition' : publishTier === 'exclusive' ? 'exclusive 1-of-1' : `limited ×${supply}`} product mockup?\n\n` +
+          `${propTxid ? 'Reusing prop ' + short(propTxid) : 'Minting a NEW prop'} + the product${encrypt ? ' (encrypted design)' : ''}.\n` +
+          (isCov ? `Buyers later pay publisher ${terms!.publisherFeeSats} + holder ${terms!.holderFeeSats} sats/copy (refundable ${(terms!.tokenSats ?? EDITION_BOND_SATS).toLocaleString()}-sat bond each).\n` : '') +
+          `\nThis spends ${total.toLocaleString()} sats from your wallet. Proceed?`),
+      })
+      if (terms && res.editions) for (const e of res.editions) storeEdition(e, res.productTxid, name, terms)
+      else if (res.tokenOutpoints) for (const op of res.tokenOutpoints) store.add({ txId: op.txId, outputIndex: op.outputIndex, collectionId: res.productTxid, stateData: '', collectionName: name })
+      renderTokens()
+      setStatusHtml(`✅ Minted mockup product ${idChip(res.productTxid)} · prop ${idChip(res.propTxid)}. ${isCov ? 'Covenant edition — o' : 'O'}nboard a copy to the site wallet, then it appears on Big Red next curator run.`, 'ok')
+      return
+    }
+
     // Combine mode mints an EP whose content is a REFERENCE manifest (pointers to existing mints, no re-upload);
     // otherwise embed the picked file(s) as usual.
     const file = combineMode ? await buildCombinedManifest(name) : await readContent($('edFile') as HTMLInputElement, name)
@@ -4718,7 +4715,6 @@ function init(): void {
   wireScanButtons() // inject 📷 scan buttons beside [data-scan] inputs
   $('btnMint').onclick = () => void onMint()
   $('btnMintEdition').onclick = () => void onMintEdition()
-  { const b = $('btnMintMockup'); if (b) b.onclick = () => void onMintMockup() }
   $('btnTierUnlimited').onclick = () => setPublishTier('unlimited')
   $('btnTierLimited').onclick = () => setPublishTier('limited')
   $('btnTierExclusive').onclick = () => setPublishTier('exclusive')
