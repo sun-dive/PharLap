@@ -20612,6 +20612,31 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var FLAG_PROP_IDX = 4;
   var FLAG_DESIGN_IDX = 8;
   var FLAG_DESIGN_EMBEDDED = 16;
+  var RATIOS = [
+    { id: 0, name: "1:1", w: 1, h: 1 },
+    // square — tote, sticker, mug (centred), matted poster, phone (centred)
+    { id: 1, name: "4:5", w: 4, h: 5 },
+    // portrait — apparel fronts, posters
+    { id: 2, name: "2:3", w: 2, h: 3 },
+    // tall portrait — art prints, posters
+    { id: 3, name: "16:9", w: 16, h: 9 },
+    // wide landscape — banners, laptop skins, mug wraps
+    { id: 4, name: "9:16", w: 9, h: 16 }
+    // tall — phone cases, story format
+  ];
+  function ratioOf(width, height) {
+    if (!(width > 0) || !(height > 0)) return 0;
+    const target = Math.log(width / height);
+    let best = 0, bestD = Infinity;
+    for (const r2 of RATIOS) {
+      const d = Math.abs(Math.log(r2.w / r2.h) - target);
+      if (d < bestD) {
+        bestD = d;
+        best = r2.id;
+      }
+    }
+    return best;
+  }
   var SIGNED = { u8: false, i8: true, unit: false, sunit: true, deg: false, q4: false };
   var WARP_TYPES = [
     "flat",
@@ -20647,6 +20672,19 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     skew: [["sx", "sunit"], ["sy", "sunit"]]
     // mesh, fold, ext: variable-length → carried as `raw` bytes on the stage.
   };
+  var TAG_PROP = 80;
+  var PROP_FIELD = {
+    RATIO: 1,
+    FABRIC: 2,
+    PLACE: 3,
+    WARP: 4,
+    QUAD: 5,
+    DISP: 6,
+    MASK: 7,
+    SHADE: 8,
+    DIMS: 9,
+    NAME: 10
+  };
   var W = class {
     constructor() {
       this.b = [];
@@ -20676,6 +20714,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const o = [];
     for (let i = 0; i < hex.length; i += 2) o.push(parseInt(hex.slice(i, i + 2), 16));
     return o;
+  }
+  function utf8ToBytes3(s2) {
+    return Array.from(new TextEncoder().encode(s2));
   }
   function encParam(enc, v) {
     switch (enc) {
@@ -20731,6 +20772,33 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       w.u16(clamp(Math.round(c.place.x * 65535), 0, 65535)).u16(clamp(Math.round(c.place.y * 65535), 0, 65535)).u16(clamp(Math.round(c.place.scale * 1024), 0, 65535)).u8(clamp(Math.round((c.place.rot % 360 + 360) % 360 / 360 * 255), 0, 255)).i8(clamp(Math.round(c.place.skewX * 127), -127, 127)).i8(clamp(Math.round(c.place.skewY * 127), -127, 127)).u8(clamp(Math.round(c.place.fabric * 255), 0, 255));
     }
     if (c.warp) w.bytes(packWarp(c.warp));
+    return w.out();
+  }
+  function putBlock(w, id, val2) {
+    w.u8(id);
+    if (val2.length < 255) w.u8(val2.length);
+    else w.u8(255).u16(val2.length);
+    w.bytes(val2);
+  }
+  function packProp(p) {
+    const w = new W().u8(TAG_PROP).u8(p.version & 255);
+    putBlock(w, PROP_FIELD.RATIO, [p.ratio & 255]);
+    putBlock(w, PROP_FIELD.FABRIC, [clamp(Math.round(p.fabric * 255), 0, 255)]);
+    if (p.place) {
+      putBlock(w, PROP_FIELD.PLACE, new W().u16(clamp(Math.round(p.place.x * 65535), 0, 65535)).u16(clamp(Math.round(p.place.y * 65535), 0, 65535)).u16(clamp(Math.round(p.place.scale * 1024), 0, 65535)).u8(clamp(Math.round((p.place.rot % 360 + 360) % 360 / 360 * 255), 0, 255)).i8(clamp(Math.round(p.place.skewX * 127), -127, 127)).i8(clamp(Math.round(p.place.skewY * 127), -127, 127)).out());
+    }
+    if (p.quad && p.quad.length === 4) {
+      const qw = new W();
+      for (const [x, y] of p.quad) qw.u16(clamp(Math.round(x * 65535), 0, 65535)).u16(clamp(Math.round(y * 65535), 0, 65535));
+      putBlock(w, PROP_FIELD.QUAD, qw.out());
+    }
+    if (p.warp && p.warp.length) putBlock(w, PROP_FIELD.WARP, packWarp(p.warp));
+    if (p.disp) putBlock(w, PROP_FIELD.DISP, [...hexToBytes2(p.disp.tx), clamp(Math.round(p.disp.str * 255), 0, 255)]);
+    if (p.mask) putBlock(w, PROP_FIELD.MASK, hexToBytes2(p.mask));
+    if (p.shade) putBlock(w, PROP_FIELD.SHADE, hexToBytes2(p.shade));
+    if (p.dims) putBlock(w, PROP_FIELD.DIMS, new W().u16(p.dims.wmm).u16(p.dims.hmm).out());
+    if (p.name) putBlock(w, PROP_FIELD.NAME, utf8ToBytes3(p.name));
+    for (const e of p.ext ?? []) putBlock(w, e.id, e.data);
     return w.out();
   }
 
@@ -22314,15 +22382,31 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     return { base, design, maps, recipe };
   }
-  function bundleToManifest(recipe, propTxid) {
+  function bundleToPropManifest(recipe, ratio) {
     const p = recipe.place;
+    return {
+      version: 1,
+      ratio,
+      fabric: recipe.fabric ?? 0.8,
+      place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY },
+      quad: null,
+      warp: recipe.prop?.warp ?? null,
+      disp: null,
+      mask: null,
+      shade: null,
+      dims: null,
+      name: recipe.prop?.name ?? null
+    };
+  }
+  function productCoverPointer(propTxid) {
     const cover = {
       version: 1,
       prop: { tx: propTxid, index: null },
       design: null,
-      // embedded — the storefront cover
-      place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY, fabric: recipe.fabric ?? 0.8 },
-      warp: recipe.prop?.warp ?? null
+      // embedded — the product's storefront preview cover
+      place: null,
+      // geometry lives on the prop now
+      warp: null
     };
     return packCover(cover);
   }
@@ -22333,11 +22417,12 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         tokenName: opts.propName ?? opts.recipe.prop?.name ?? "prop",
         supply: 1,
         mintCount: 1,
-        file: { mimeType: "image/webp", fileName: "base.webp", bytes: opts.base }
+        file: { mimeType: "image/webp", fileName: "base.webp", bytes: opts.base },
+        mockupManifest: packProp(bundleToPropManifest(opts.recipe, opts.ratio ?? 0))
       });
       propTxid = prop.collectionId;
     }
-    const manifest = bundleToManifest(opts.recipe, propTxid);
+    const manifest = productCoverPointer(propTxid);
     const supply = opts.supply ?? 1;
     const file = { mimeType: opts.cleanDesign.mimeType, fileName: "design", bytes: opts.cleanDesign.bytes };
     const cover = { mimeType: opts.previewDesign.mimeType, fileName: "preview", bytes: opts.previewDesign.bytes };
@@ -25759,13 +25844,17 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
         const propTxid = val("edMockupProp").trim() || void 0;
         setStatus("Deriving preview\u2026");
         const preview = await downscaleWebp(bundle.design, "image/webp", 640);
-        setStatus(propTxid ? "Minting mockup product\u2026" : "Minting prop, then product\u2026");
+        const dbmp = await createImageBitmap(new Blob([new Uint8Array(bundle.design)], { type: "image/webp" }));
+        const ratio = ratioOf(dbmp.width, dbmp.height);
+        dbmp.close?.();
+        setStatus(propTxid ? "Minting mockup product\u2026" : `Minting prop (${RATIOS[ratio].name}), then product\u2026`);
         const res = await mintMockupProduct(provider, k, {
           base: bundle.base,
           cleanDesign: { mimeType: "image/webp", bytes: bundle.design },
           previewDesign: { mimeType: "image/webp", bytes: preview },
           recipe: bundle.recipe,
           propTxid,
+          ratio,
           productName: name,
           description: description || void 0,
           encrypt,
@@ -29813,7 +29902,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"660a347"} \xB7 ${"2026-07-23"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"0cf14ff"} \xB7 ${"2026-07-23"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

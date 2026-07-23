@@ -7,7 +7,7 @@
 import { Utils } from '@bsv/sdk'
 import type { PrivateKey } from '@bsv/sdk'
 import { readStoreZip } from './bmc.ts'
-import { packCover, type MockupCover, type WarpStage } from './mockup.ts'
+import { packCover, packProp, type MockupCover, type PropManifest, type WarpStage } from './mockup.ts'
 import { createCollection } from './collectionBuilder.ts'
 import { createEdition, type EditionTerms } from './editionBuilder.ts'
 import type { WalletProvider } from './walletProvider.ts'
@@ -48,19 +48,36 @@ export function readMockupBundle(zipBytes: number[]): MockupBundle | null {
 }
 
 /**
- * Map a bundle's recipe → a packed mockup-cover manifest for the product's TX1 output.
- * The design is EMBEDDED (it's the product's own storefront cover), so no design ref. Placement carries over
- * directly: the recipe's normalized centre/size/rot/skew becomes the manifest's x,y,scale,rot,skew. The renderer
- * derives the box height from the design's aspect at render time, so only the width (scale) is stored.
+ * Map a bundle's recipe → the PROP's packed manifest (rides RECORD_MOCKUP on the PROP mint). The prop is the
+ * self-describing atom: it owns the geometry (print box + warp + fabric) and its socket `ratio` (which design
+ * shapes it accepts). A design is a plain image — no geometry — that composites onto any prop of its ratio.
+ * The recipe's normalized centre/size/rot/skew becomes the prop's print box; the renderer derives the box height
+ * from the design's aspect at render time, so only the width (scale) is stored.
  */
-export function bundleToManifest(recipe: MockupRecipe, propTxid: string): number[] {
+export function bundleToPropManifest(recipe: MockupRecipe, ratio: number): PropManifest {
   const p = recipe.place
+  return {
+    version: 1,
+    ratio,
+    fabric: recipe.fabric ?? 0.8,
+    place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY },
+    quad: null,
+    warp: recipe.prop?.warp ?? null,
+    disp: null, mask: null, shade: null,
+    dims: null,
+    name: recipe.prop?.name ?? null,
+  }
+}
+
+/** The PRODUCT's cover manifest = just a POINTER to the prop (design embedded = the product's own preview cover).
+ *  Geometry is inherited from the prop's own manifest — the product carries none. ~35 bytes. */
+export function productCoverPointer(propTxid: string): number[] {
   const cover: MockupCover = {
     version: 1,
     prop: { tx: propTxid, index: null },
-    design: null, // embedded — the storefront cover
-    place: p == null ? null : { x: p.cx, y: p.cy, scale: p.w, rot: p.rot, skewX: p.skewX, skewY: p.skewY, fabric: recipe.fabric ?? 0.8 },
-    warp: recipe.prop?.warp ?? null,
+    design: null, // embedded — the product's storefront preview cover
+    place: null,  // geometry lives on the prop now
+    warp: null,
   }
   return packCover(cover)
 }
@@ -82,9 +99,12 @@ export async function mintMockupProduct(provider: WalletProvider, key: PrivateKe
   cleanDesign: ImagePayload
   previewDesign: ImagePayload
   recipe: MockupRecipe
-  /** Reuse an existing prop by txid; omit to mint the prop from `base`. */
+  /** Reuse an existing prop by txid; omit to mint the prop from `base` (which then carries its own manifest). */
   propTxid?: string
   propName?: string
+  /** Socket ratio id (RATIOS index) for a NEWLY minted prop — the design shape it accepts. Ignored when reusing
+   *  a prop (the prop already carries its own manifest on chain). Caller derives it via ratioOf(design dims). */
+  ratio?: number
   productName: string
   description?: string
   encrypt?: boolean
@@ -106,14 +126,17 @@ export async function mintMockupProduct(provider: WalletProvider, key: PrivateKe
 }> {
   let propTxid = opts.propTxid
   if (propTxid == null) {
+    // Mint the prop as a self-describing atom: the base image + its OWN packed manifest (geometry + socket ratio).
     const prop = await createCollection(provider, key, {
       tokenName: opts.propName ?? opts.recipe.prop?.name ?? 'prop',
       supply: 1, mintCount: 1,
       file: { mimeType: 'image/webp', fileName: 'base.webp', bytes: opts.base },
+      mockupManifest: packProp(bundleToPropManifest(opts.recipe, opts.ratio ?? 0)),
     })
     propTxid = prop.collectionId
   }
-  const manifest = bundleToManifest(opts.recipe, propTxid)
+  // The product carries only a POINTER to the prop; geometry is inherited from the prop's own manifest.
+  const manifest = productCoverPointer(propTxid)
   const supply = opts.supply ?? 1
   const file = { mimeType: opts.cleanDesign.mimeType, fileName: 'design', bytes: opts.cleanDesign.bytes }
   const cover = { mimeType: opts.previewDesign.mimeType, fileName: 'preview', bytes: opts.previewDesign.bytes }

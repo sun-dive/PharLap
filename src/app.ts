@@ -13,6 +13,7 @@ import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, selectFunding, PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, SPEND_CANCELLED } from './collectionBuilder.ts'
 import { readMockupBundle, mintMockupProduct } from './mockupIngest.ts'
+import { ratioOf, RATIOS } from './mockup.ts'
 import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, scanVoucherHashes, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type UnifiedSale } from './editionBuilder.ts'
 import { buildAirgapRequest, buildAirgapPaymentRequest, signAirgapRequest, encodeAirgapRequest, decodeAirgapRequest, type AirgapAction, type AirgapRequest } from './airgap.ts'
 import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress } from './payment.ts'
@@ -905,13 +906,17 @@ async function onMintEdition(): Promise<void> {
       const propTxid = val('edMockupProp').trim() || undefined
       setStatus('Deriving preview…')
       const preview = await downscaleWebp(bundle.design, 'image/webp', 640)
-      setStatus(propTxid ? 'Minting mockup product…' : 'Minting prop, then product…')
+      // The design's own dimensions classify its socket ratio — a new prop is minted to accept exactly this shape.
+      const dbmp = await createImageBitmap(new Blob([new Uint8Array(bundle.design)], { type: 'image/webp' }))
+      const ratio = ratioOf(dbmp.width, dbmp.height); dbmp.close?.()
+      setStatus(propTxid ? 'Minting mockup product…' : `Minting prop (${RATIOS[ratio].name}), then product…`)
       const res = await mintMockupProduct(provider, k, {
         base: bundle.base,
         cleanDesign: { mimeType: 'image/webp', bytes: bundle.design },
         previewDesign: { mimeType: 'image/webp', bytes: preview },
         recipe: bundle.recipe,
         propTxid,
+        ratio,
         productName: name,
         description: description || undefined,
         encrypt,
