@@ -37,15 +37,10 @@ async function canvasLib(): Promise<CanvasLib | null> {
     const g = globalThis as unknown as { document?: unknown }
     if (g.document == null) g.document = { createElement: (t: string) => (t === 'canvas' ? _lib!.createCanvas(1, 1) : {}) }
   } catch (err) {
+    // Canvas unavailable (not installed, or native load failed). Only used for LOCAL rendering — the shared-host
+    // curator never calls this (CURATE_RENDER unset). Log concisely so a local render failure isn't fully silent.
     _lib = null
-    // TEMP DIAGNOSTIC — surface WHY @napi-rs/canvas won't load on the server (module-not-found vs a native
-    // dlopen/glibc failure), instead of silently falling back to the raw preview. Remove once resolved.
-    const e = err as NodeJS.ErrnoException
-    console.error(`  ! @napi-rs/canvas load FAILED — mockups fall back to the raw preview cover.`)
-    console.error(`      code=${e.code ?? '-'}  name=${e.name ?? '-'}`)
-    console.error(`      message: ${e.message ?? String(err)}`)
-    if (e.stack) console.error(`      stack: ${e.stack.split('\n').slice(0, 4).join(' | ')}`)
-    try { console.error(`      node=${process.version} platform=${process.platform}/${process.arch} cwd=${process.cwd()}`) } catch { /* noop */ }
+    console.error(`  ! @napi-rs/canvas unavailable — ${(err as Error).message}`)
   }
   return _lib
 }
