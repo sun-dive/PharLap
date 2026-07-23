@@ -17,6 +17,8 @@ export interface MockupRecipe {
   v?: number
   prop?: { name?: string; roles?: Record<string, string>; warp?: WarpStage[] }
   design?: string
+  /** MIME of the sellable design master (full-res, original format — a PoD-quality PNG/JPEG/WebP). */
+  designMime?: string
   /** Placement in the authoring stage (= base aspect), normalized: centre cx,cy + size w,h + rot° + skew. */
   place?: { cx: number; cy: number; w: number; h: number; rot: number; skewX: number; skewY: number }
   fabric?: number
@@ -25,8 +27,17 @@ export interface MockupRecipe {
 export interface MockupBundle {
   base: number[]
   design: number[]
+  /** MIME of the design master — its original full-res format (image/png keeps lossless + alpha for PoD). */
+  designMime: string
   maps: { mask?: number[]; shade?: number[]; disp?: number[] }
   recipe: MockupRecipe
+}
+
+/** Best-effort MIME from a bundle filename (the design keeps its original format for PoD quality). */
+function mimeFromName(name: string): string {
+  const ext = (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? '').toLowerCase()
+  return ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+    : ext === 'gif' ? 'image/gif' : ext === 'avif' ? 'image/avif' : 'image/webp'
 }
 
 /** Parse a mockup `.bmc` bundle into its images + recipe, or null if it isn't one. */
@@ -37,14 +48,16 @@ export function readMockupBundle(zipBytes: number[]): MockupBundle | null {
   try { recipe = JSON.parse(Utils.toUTF8(files['mockup.json'])) } catch { return null }
   const roles = recipe.prop?.roles ?? {}
   const base = files[roles.base ?? 'base.webp']
-  const design = files[recipe.design ?? 'design.webp']
+  const designName = recipe.design ?? 'design.webp'
+  const design = files[designName]
   if (base == null || design == null) return null
+  const designMime = recipe.designMime ?? mimeFromName(designName)
   const maps: MockupBundle['maps'] = {}
   for (const role of ['mask', 'shade', 'disp'] as const) {
     const file = roles[role]
     if (file != null && files[file] != null) maps[role] = files[file]
   }
-  return { base, design, maps, recipe }
+  return { base, design, designMime, maps, recipe }
 }
 
 /**
@@ -138,8 +151,10 @@ export async function mintMockupProduct(provider: WalletProvider, key: PrivateKe
   // The product carries only a POINTER to the prop; geometry is inherited from the prop's own manifest.
   const manifest = productCoverPointer(propTxid)
   const supply = opts.supply ?? 1
-  const file = { mimeType: opts.cleanDesign.mimeType, fileName: 'design', bytes: opts.cleanDesign.bytes }
-  const cover = { mimeType: opts.previewDesign.mimeType, fileName: 'preview', bytes: opts.previewDesign.bytes }
+  // The buyer's clean file keeps the design's real format + a matching extension (a PoD-ready design.png/.jpg/.webp).
+  const dExt = opts.cleanDesign.mimeType === 'image/png' ? 'png' : opts.cleanDesign.mimeType === 'image/jpeg' ? 'jpg' : opts.cleanDesign.mimeType === 'image/avif' ? 'avif' : 'webp'
+  const file = { mimeType: opts.cleanDesign.mimeType, fileName: `design.${dExt}`, bytes: opts.cleanDesign.bytes }
+  const cover = { mimeType: opts.previewDesign.mimeType, fileName: 'preview.webp', bytes: opts.previewDesign.bytes }
 
   // Covenant tier: the product is a covenant edition (permissionless resale enforced on-chain, publisher/holder
   // fees), carrying the mockup manifest + preview cover in TX1 exactly like a plain product — so the existing

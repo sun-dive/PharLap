@@ -905,14 +905,17 @@ async function onMintEdition(): Promise<void> {
       const supply = publishTier === 'exclusive' ? 1 : count
       const propTxid = val('edMockupProp').trim() || undefined
       setStatus('Deriving preview…')
-      const preview = await downscaleWebp(bundle.design, 'image/webp', 640)
+      // The design master is FULL-RES + original format (PoD quality) — mint it verbatim as the sellable clean
+      // FILE. Derive a display-res preview (1024, WebP) for the public cover; the curator downsamples that again.
+      const dmime = bundle.designMime
+      const preview = await downscaleWebp(bundle.design, dmime, 1024)
       // The design's own dimensions classify its socket ratio — a new prop is minted to accept exactly this shape.
-      const dbmp = await createImageBitmap(new Blob([new Uint8Array(bundle.design)], { type: 'image/webp' }))
+      const dbmp = await createImageBitmap(new Blob([new Uint8Array(bundle.design)], { type: dmime }))
       const ratio = ratioOf(dbmp.width, dbmp.height); dbmp.close?.()
       setStatus(propTxid ? 'Minting mockup product…' : `Minting prop (${RATIOS[ratio].name}), then product…`)
       const res = await mintMockupProduct(provider, k, {
         base: bundle.base,
-        cleanDesign: { mimeType: 'image/webp', bytes: bundle.design },
+        cleanDesign: { mimeType: dmime, bytes: bundle.design },
         previewDesign: { mimeType: 'image/webp', bytes: preview },
         recipe: bundle.recipe,
         propTxid,

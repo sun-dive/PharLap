@@ -22362,6 +22362,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   }
 
   // src/mockupIngest.ts
+  function mimeFromName(name) {
+    const ext = (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? "").toLowerCase();
+    return ext === "png" ? "image/png" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "gif" ? "image/gif" : ext === "avif" ? "image/avif" : "image/webp";
+  }
   function readMockupBundle(zipBytes) {
     const files = readStoreZip(zipBytes);
     if (files == null || files["mockup.json"] == null) return null;
@@ -22373,14 +22377,16 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     const roles = recipe.prop?.roles ?? {};
     const base = files[roles.base ?? "base.webp"];
-    const design = files[recipe.design ?? "design.webp"];
+    const designName = recipe.design ?? "design.webp";
+    const design = files[designName];
     if (base == null || design == null) return null;
+    const designMime = recipe.designMime ?? mimeFromName(designName);
     const maps = {};
     for (const role of ["mask", "shade", "disp"]) {
       const file = roles[role];
       if (file != null && files[file] != null) maps[role] = files[file];
     }
-    return { base, design, maps, recipe };
+    return { base, design, designMime, maps, recipe };
   }
   function bundleToPropManifest(recipe, ratio) {
     const p = recipe.place;
@@ -22424,8 +22430,9 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     }
     const manifest = productCoverPointer(propTxid);
     const supply = opts.supply ?? 1;
-    const file = { mimeType: opts.cleanDesign.mimeType, fileName: "design", bytes: opts.cleanDesign.bytes };
-    const cover = { mimeType: opts.previewDesign.mimeType, fileName: "preview", bytes: opts.previewDesign.bytes };
+    const dExt = opts.cleanDesign.mimeType === "image/png" ? "png" : opts.cleanDesign.mimeType === "image/jpeg" ? "jpg" : opts.cleanDesign.mimeType === "image/avif" ? "avif" : "webp";
+    const file = { mimeType: opts.cleanDesign.mimeType, fileName: `design.${dExt}`, bytes: opts.cleanDesign.bytes };
+    const cover = { mimeType: opts.previewDesign.mimeType, fileName: "preview.webp", bytes: opts.previewDesign.bytes };
     if (opts.covenant) {
       const product2 = await createEdition(provider2, key2, {
         tokenName: opts.productName,
@@ -25843,14 +25850,15 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
         const supply = publishTier === "exclusive" ? 1 : count;
         const propTxid = val("edMockupProp").trim() || void 0;
         setStatus("Deriving preview\u2026");
-        const preview = await downscaleWebp(bundle.design, "image/webp", 640);
-        const dbmp = await createImageBitmap(new Blob([new Uint8Array(bundle.design)], { type: "image/webp" }));
+        const dmime = bundle.designMime;
+        const preview = await downscaleWebp(bundle.design, dmime, 1024);
+        const dbmp = await createImageBitmap(new Blob([new Uint8Array(bundle.design)], { type: dmime }));
         const ratio = ratioOf(dbmp.width, dbmp.height);
         dbmp.close?.();
         setStatus(propTxid ? "Minting mockup product\u2026" : `Minting prop (${RATIOS[ratio].name}), then product\u2026`);
         const res = await mintMockupProduct(provider, k, {
           base: bundle.base,
-          cleanDesign: { mimeType: "image/webp", bytes: bundle.design },
+          cleanDesign: { mimeType: dmime, bytes: bundle.design },
           previewDesign: { mimeType: "image/webp", bytes: preview },
           recipe: bundle.recipe,
           propTxid,
@@ -29902,7 +29910,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"0cf14ff"} \xB7 ${"2026-07-23"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6983547"} \xB7 ${"2026-07-23"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
