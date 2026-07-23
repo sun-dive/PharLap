@@ -10,7 +10,8 @@ import assert from 'node:assert/strict'
 import {
   packCover, parseCover, coverFromJson, coverToJson,
   propFromJson, propToJson, isMockup, MOCKUP_MIME,
-  type MockupCover,
+  packProp, parseProp, isProp, ratioOf, RATIOS, PROP_FIELD,
+  type MockupCover, type PropManifest,
 } from '../src/mockup.ts'
 
 const A = 'a'.repeat(64)
@@ -137,4 +138,76 @@ test('prop descriptor JSON round-trips', () => {
 
 test('propFromJson rejects a bad print quad', () => {
   assert.equal(propFromJson({ v: 1, print: [[0, 0], [1, 1]] }), null)
+})
+
+// ─── canonical socket ratios ─────────────────────────────────────────
+test('ratioOf classifies dimensions to the nearest canonical ratio', () => {
+  assert.equal(RATIOS[ratioOf(1024, 1024)].name, '1:1')
+  assert.equal(RATIOS[ratioOf(1080, 1350)].name, '4:5')   // IG portrait
+  assert.equal(RATIOS[ratioOf(1200, 1800)].name, '2:3')   // 2:3 print
+  assert.equal(RATIOS[ratioOf(1920, 1080)].name, '16:9')  // wide
+  assert.equal(RATIOS[ratioOf(1080, 1920)].name, '9:16')  // phone
+  assert.equal(RATIOS[ratioOf(900, 1200)].name, '4:5')    // 3:4 ≈ nearest 4:5 (log-aspect)
+})
+
+// ─── PROP manifest (TLV, extensible) ─────────────────────────────────
+const DISP = 'c'.repeat(64)
+
+test('prop: full manifest round-trips through packed TLV', () => {
+  const p: PropManifest = {
+    version: 1, ratio: 1, fabric: 0.83,
+    place: { x: 0.5, y: 0.62, scale: 0.4, rot: 0, skewX: 0.1, skewY: -0.05 },
+    quad: null,
+    warp: [{ t: 'persp', kx: 0.2, ky: -0.1 }, { t: 'cyl', curve: 0.3, bow: 0.1, axis: 0 }],
+    disp: { tx: DISP, str: 0.5 }, mask: null, shade: null,
+    dims: { wmm: 300, hmm: 375 }, name: 'Tee — front', ext: [],
+  }
+  const back = parseProp(packProp(p))!
+  assert.ok(back)
+  assert.equal(back.ratio, 1)
+  assert.ok(Math.abs(back.fabric - 0.83) < 0.01)
+  assert.ok(Math.abs(back.place!.x - 0.5) < 0.001)
+  assert.equal(back.warp!.length, 2)
+  assert.equal(back.warp![0].t, 'persp')
+  assert.equal(back.disp!.tx, DISP)
+  assert.ok(Math.abs(back.disp!.str - 0.5) < 0.01)
+  assert.deepEqual(back.dims, { wmm: 300, hmm: 375 })
+  assert.equal(back.name, 'Tee — front')
+})
+
+test('prop: minimal (ratio + fabric only) is tiny and round-trips', () => {
+  const p: PropManifest = { version: 1, ratio: 0, fabric: 0.8, place: null, quad: null, warp: null, disp: null, mask: null, shade: null, dims: null, name: null }
+  const packed = packProp(p)
+  assert.equal(packed.length, 2 + 3 + 3) // TAG+VER + RATIO block(3) + FABRIC block(3)
+  assert.equal(parseProp(packed)!.ratio, 0)
+})
+
+test('prop: a QUAD block round-trips its 4 corners', () => {
+  const p: PropManifest = { version: 1, ratio: 3, fabric: 0.8, place: null, quad: [[0.1, 0.1], [0.9, 0.12], [0.88, 0.9], [0.12, 0.88]], warp: null, disp: null, mask: null, shade: null, dims: null, name: null }
+  const back = parseProp(packProp(p))!
+  assert.equal(back.quad!.length, 4)
+  assert.ok(Math.abs(back.quad![1][0] - 0.9) < 0.001)
+})
+
+test('prop: FORWARD-COMPAT — an unknown block id is skipped, preserved, and known blocks still parse', () => {
+  // Simulate a prop minted by a NEWER version carrying a field this parser doesn't know (id 0x7e, 3 bytes)
+  // sandwiched between RATIO and FABRIC. Old parser must skip it and still read the known fields.
+  const p: PropManifest = { version: 1, ratio: 2, fabric: 0.5, place: null, quad: null, warp: null, disp: null, mask: null, shade: null, dims: null, name: null, ext: [{ id: 0x7e, data: [9, 9, 9] }] }
+  const packed = packProp(p)
+  const back = parseProp(packed)!
+  assert.equal(back.ratio, 2)                       // known field before the unknown still fine
+  assert.ok(Math.abs(back.fabric - 0.5) < 0.01)     // known field after the unknown still fine
+  assert.deepEqual(back.ext, [{ id: 0x7e, data: [9, 9, 9] }]) // unknown preserved verbatim
+  assert.equal(packProp(back).join(','), packed.join(',')) // and re-packs identically (no data loss)
+})
+
+test('prop: isProp / isMockup discriminate prop (0x50) vs cover (0x4D)', () => {
+  const propBytes = packProp({ version: 1, ratio: 0, fabric: 0.8, place: null, quad: null, warp: null, disp: null, mask: null, shade: null, dims: null, name: null })
+  const coverBytes = packCover({ version: 1, prop: { tx: A, index: null }, design: null, place: null, warp: null })
+  assert.equal(isProp(propBytes), true)
+  assert.equal(isProp(coverBytes), false)
+  assert.equal(parseProp(coverBytes), null)   // a cover is not a prop
+  assert.equal(parseCover(propBytes), null)   // a prop is not a cover
+  assert.equal(isMockup(null, propBytes), true) // both are "mockup" records
+  assert.equal(isMockup(null, coverBytes), true)
 })
