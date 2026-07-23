@@ -22130,19 +22130,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       priceSats: ed.priceSats
     };
   }
-  async function scanIncomingEditions(provider2, pubKeyHex2) {
+  async function scanIncomingEditions(provider2, pubKeyHex2, cache) {
     const mine = pubKeyHex2.toLowerCase();
-    const candidateTxIds = /* @__PURE__ */ new Set();
+    const cand = /* @__PURE__ */ new Map();
     try {
-      for (const { txId } of await provider2.getAddressHistory()) candidateTxIds.add(txId);
+      for (const e of await provider2.getAddressHistory()) cand.set(e.txId, e.blockHeight || 0);
     } catch {
     }
     try {
-      for (const u of await provider2.getUtxos()) candidateTxIds.add(u.txId);
+      for (const u of await provider2.getUtxos()) if (!cand.has(u.txId)) cand.set(u.txId, u.height || 0);
     } catch {
     }
-    const scripts = /* @__PURE__ */ new Map();
-    for (const txId of candidateTxIds) {
+    const scripts = new Map(cache?.scripts ?? []);
+    const since = cache?.sinceHeight ?? -1;
+    for (const [txId, h] of cand) {
+      if (since >= 0 && h > 0 && h <= since) continue;
       let tx;
       try {
         tx = await provider2.getSourceTransaction(txId);
@@ -22155,6 +22157,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         scripts.set(utils_exports.toHex(o.lockingScript.toBinary()), ed.tx1RefHex);
       }
     }
+    if (cache) for (const [k, v] of scripts) cache.scripts.set(k, v);
     const found = [];
     const seen = /* @__PURE__ */ new Set();
     for (const [lockHex, tx1RefHex] of scripts) {
@@ -22247,6 +22250,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const me = params.myPubKeyHex.toLowerCase();
     const myHash = params.myHash.toLowerCase();
     const cap = params.maxTxs ?? 500;
+    const since = params.sinceHeight ?? -1;
     const candidates = /* @__PURE__ */ new Map();
     let capped = false;
     try {
@@ -22262,7 +22266,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       for (const u of await provider2.getUtxos()) if (!candidates.has(u.txId)) candidates.set(u.txId, 0);
     } catch {
     }
-    const entries = [...candidates.entries()];
+    const entries = [...candidates.entries()].filter(([, h]) => !(since >= 0 && h > 0 && h <= since));
     const OUT_CAP = 256 * 1024;
     const sales = [];
     let done = 0;
@@ -29910,7 +29914,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6983547"} \xB7 ${"2026-07-23"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"9f4070a"} \xB7 ${"2026-07-23"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

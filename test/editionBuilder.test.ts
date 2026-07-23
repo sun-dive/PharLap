@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { Transaction, P2PKH, PrivateKey, LockingScript, Spend, Hash, Utils } from '@bsv/sdk'
 import {
   buildEditionGenesisTx, buildReplicateTx, buildReplicateV2Tx, buildEditionGenesisV2Tx, buildEditionTransferTx,
-  scanCollectionBuyers, scanMySales, type EditionUtxo, type EditionTerms,
+  scanCollectionBuyers, scanMySales, scanIncomingEditions, type EditionUtxo, type EditionTerms,
 } from '../src/editionBuilder.ts'
 import { buildEditionLockV2, p2pkhScript, parseEditionAny } from '../src/covenant.ts'
 import { readNoteFromTx } from '../src/sellerNote.ts'
@@ -150,6 +150,60 @@ test('scanMySales: creator sees ALL sales of their mint; reseller sees only thei
   assert.equal(b1Sales.asReseller.length, 1)
   assert.equal(b1Sales.asReseller[0].sales, 1)
   assert.equal(b1Sales.asReseller[0].buyers[0].pubKeyHex, b2.toPublicKey().toString())
+})
+
+test('scanMySales: sinceHeight returns only NEW/unconfirmed sales (incremental delta)', async () => {
+  const b1 = PrivateKey.fromRandom(), b2 = PrivateKey.fromRandom()
+  const eu = (tx: Transaction, txId: string, vout: number): EditionUtxo =>
+    ({ txId, outputIndex: vout, satoshis: tx.outputs[vout].satoshis ?? 1, lockBytes: tx.outputs[vout].lockingScript.toBinary(), sourceTx: tx })
+  const genesis = await buildEditionGenesisTx({ key: publisher, funding: [faucet(publisher, 300000)], tx1Ref: TX1REF, terms, ownerPubKey: pub(publisher) })
+  const rep1 = await buildReplicateTx({ edition: eu(genesis.tx, genesis.txId, genesis.editionVouts[0]), terms, buyerKey: b1, funding: [faucet(b1, 300000)] }) // height 100
+  const rep2 = await buildReplicateTx({ edition: eu(rep1.tx, rep1.txId, 1), terms, buyerKey: b2, funding: [faucet(b2, 300000)] })                             // height 200
+  const byId: Record<string, Transaction> = { [genesis.txId]: genesis.tx, [rep1.txId]: rep1.tx, [rep2.txId]: rep2.tx }
+  const provider = {
+    getAddressHistory: async () => [{ txId: rep1.txId, blockHeight: 100 }, { txId: rep2.txId, blockHeight: 200 }],
+    getUtxos: async () => [],
+    getSourceTransaction: async (id: string) => byId[id] ?? (() => { throw new Error(`no tx ${id}`) })(),
+    getOutputScriptHexCapped: async (id: string, index: number) => { const o = byId[id]?.outputs[index]; return o ? o.lockingScript.toHex() : null },
+    getTxConfirmation: async () => ({ blockHeight: 100, time: 0 }),
+  } as unknown as Parameters<typeof scanMySales>[0]
+  const myHash = Utils.toHex(Hash.hash160(pub(publisher)))
+
+  const full = await scanMySales(provider, { myPubKeyHex: publisher.toPublicKey().toString(), myHash })
+  assert.equal(full.asCreator[0].sales, 2) // both sales
+
+  const inc = await scanMySales(provider, { myPubKeyHex: publisher.toPublicKey().toString(), myHash, sinceHeight: 150 })
+  assert.equal(inc.asCreator.length, 1)
+  assert.equal(inc.asCreator[0].sales, 1)   // only rep2 (height 200 > 150); rep1 (100) is below the watermark
+  assert.equal(inc.sales.length, 1)
+  assert.equal(inc.sales[0].collectionId, TX1REF)
+})
+
+test('scanIncomingEditions: incremental cache skips re-discovery but pass 2 still reports live holdings', async () => {
+  const { genesis } = await genesisEdition() // an edition owned by `holder`, confirmed at height 100
+  const vout = genesis.editionVouts[0]
+  const lockHex = Utils.toHex(genesis.tx.outputs[vout].lockingScript.toBinary())
+  let srcFetches = 0
+  const provider = {
+    getAddressHistory: async () => [{ txId: genesis.txId, blockHeight: 100 }],
+    getUtxos: async () => [],
+    getSourceTransaction: async (id: string) => { srcFetches++; if (id === genesis.txId) return genesis.tx; throw new Error(`no tx ${id}`) },
+    getUnspentByScriptHash: async () => [{ txId: genesis.txId, outputIndex: vout, satoshis: 1, script: '', height: 100 }],
+  } as unknown as Parameters<typeof scanIncomingEditions>[0]
+  const mine = holder.toPublicKey().toString()
+
+  const full = await scanIncomingEditions(provider, mine) // full scan discovers the script + reports the holding
+  assert.equal(full.length, 1)
+  assert.equal(full[0].tx1RefHex, TX1REF)
+  const fullFetches = srcFetches
+
+  srcFetches = 0
+  const cache = { scripts: new Map([[lockHex, TX1REF]]), sinceHeight: 100 } // known script + watermark at the candidate height
+  const inc = await scanIncomingEditions(provider, mine, cache)
+  assert.equal(inc.length, 1)              // holding STILL found — pass 2 is authoritative
+  assert.equal(inc[0].tx1RefHex, TX1REF)
+  assert.ok(srcFetches < fullFetches)      // pass-1 re-discovery was skipped (fewer chain fetches)
+  assert.ok(cache.scripts.has(lockHex))    // cache retained across the run
 })
 
 test('replicate with a seller-note echoes a NOTE output to the buyer, covenant still valid', async () => {

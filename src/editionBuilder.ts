@@ -1171,15 +1171,24 @@ export interface IncomingEdition {
  * recover-from-WIF need (the local store is a rebuildable cache; the chain is the source of truth).
  * Terms come from the covenant script itself, and any seller-note that rode in is read from each tx.
  */
-export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: string): Promise<IncomingEdition[]> {
+export async function scanIncomingEditions(
+  provider: WalletProvider, pubKeyHex: string,
+  /** Incremental cache (curator): seed `scripts` from a prior run and skip re-fetching candidates CONFIRMED at or
+   *  below `sinceHeight` (their edition scripts are already known). Unconfirmed (height 0) + anything above the
+   *  watermark are always re-scanned, so a fresh onboard is never missed. `scripts` is mutated with new discoveries
+   *  for the caller to persist. Pass 2 (below) still runs over ALL scripts every time, so live holdings stay exact. */
+  cache?: { scripts: Map<string, string>; sinceHeight: number },
+): Promise<IncomingEdition[]> {
   const mine = pubKeyHex.toLowerCase()
 
   // Pass 1 — discover distinct edition scripts (lockHex) this pubkey holds/held, from address breadcrumbs.
-  const candidateTxIds = new Set<string>()
-  try { for (const { txId } of await provider.getAddressHistory()) candidateTxIds.add(txId) } catch { /* best-effort */ }
-  try { for (const u of await provider.getUtxos()) candidateTxIds.add(u.txId) } catch { /* best-effort */ }
-  const scripts = new Map<string, string>() // lockHex -> tx1RefHex
-  for (const txId of candidateTxIds) {
+  const cand = new Map<string, number>() // txId -> height (0 = unconfirmed/unknown)
+  try { for (const e of await provider.getAddressHistory()) cand.set(e.txId, e.blockHeight || 0) } catch { /* best-effort */ }
+  try { for (const u of await provider.getUtxos()) if (!cand.has(u.txId)) cand.set(u.txId, u.height || 0) } catch { /* best-effort */ }
+  const scripts = new Map<string, string>(cache?.scripts ?? []) // lockHex -> tx1RefHex (seeded from cache)
+  const since = cache?.sinceHeight ?? -1
+  for (const [txId, h] of cand) {
+    if (since >= 0 && h > 0 && h <= since) continue // confirmed at/below the watermark — already discovered
     let tx: Transaction
     try { tx = await provider.getSourceTransaction(txId) } catch { continue }
     for (const o of tx.outputs) {
@@ -1188,6 +1197,7 @@ export async function scanIncomingEditions(provider: WalletProvider, pubKeyHex: 
       scripts.set(Utils.toHex(o.lockingScript.toBinary()), ed.tx1RefHex)
     }
   }
+  if (cache) for (const [k, v] of scripts) cache.scripts.set(k, v) // persist merged discoveries
 
   // Pass 2 — for each distinct script, the current UNSPENT outputs are the live holdings (mempool-aware).
   const found: IncomingEdition[] = []
@@ -1342,11 +1352,14 @@ export interface MySales {
  */
 export async function scanMySales(
   provider: WalletProvider,
-  params: { myPubKeyHex: string; myHash: string; maxTxs?: number; onProgress?: (done: number, total: number) => void },
+  /** `sinceHeight` (curator, incremental): skip candidates CONFIRMED at or below it — return only NEW/unconfirmed
+   *  sales, which the caller accumulates idempotently by txId. Unconfirmed (height 0) are always included. */
+  params: { myPubKeyHex: string; myHash: string; maxTxs?: number; sinceHeight?: number; onProgress?: (done: number, total: number) => void },
 ): Promise<MySales> {
   const me = params.myPubKeyHex.toLowerCase()
   const myHash = params.myHash.toLowerCase()
   const cap = params.maxTxs ?? 500
+  const since = params.sinceHeight ?? -1
   const candidates = new Map<string, number>()
   let capped = false
   try {
@@ -1355,7 +1368,8 @@ export async function scanMySales(
     for (const h of hist) candidates.set(h.txId, h.blockHeight || 0)
   } catch { /* best-effort */ }
   try { for (const u of await provider.getUtxos()) if (!candidates.has(u.txId)) candidates.set(u.txId, 0) } catch { /* best-effort */ }
-  const entries = [...candidates.entries()]
+  // Incremental: drop candidates confirmed at/below the watermark (already counted); keep unconfirmed + newer.
+  const entries = [...candidates.entries()].filter(([, h]) => !(since >= 0 && h > 0 && h <= since))
 
   // ── Pass 1: find sales cheaply. A sale = a replicate tx; the replica is out[1], the source edition is out[0].
   // We only ever fetch those two SMALL outputs (capped) — NEVER the content output [2], which can be tens of MB
