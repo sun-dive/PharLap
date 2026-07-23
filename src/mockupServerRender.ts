@@ -20,6 +20,10 @@ async function inflate(b: number[]): Promise<number[]> {
   return (b.length > 2 && b[0] === 0x1f && b[1] === 0x8b) ? decompress(b) : b
 }
 
+/** WebP quality for the composited cover — photographic, no transparency needed. q85 ≈ 60 KB at 1024² (a PNG of
+ *  the same frame is ~800 KB — far too heavy for a mobile listing). Matches the storefront preview covers, also webp. */
+const MOCKUP_WEBP_QUALITY = 85
+
 interface CanvasLib { createCanvas: (w: number, h: number) => any; loadImage: (b: Buffer) => Promise<any> }
 let _lib: CanvasLib | null = null
 let _tried = false
@@ -37,9 +41,10 @@ async function canvasLib(): Promise<CanvasLib | null> {
 }
 
 /**
- * Composite a mockup cover → PNG bytes, or null if canvas is unavailable (caller falls back to the raw preview).
+ * Composite a mockup cover → WebP bytes, or null if canvas is unavailable (caller falls back to the raw preview).
  * `base` is the prop base image, `cover` the product's preview design (both raw bytes), `manifest` the packed
- * cover record from TX1. Renders at the prop's native resolution. maps omitted for now (base-only props).
+ * cover record from TX1. Renders at the prop's native resolution, encoded as WebP (small + mobile-friendly; a PNG
+ * of the same photographic frame is ~14× larger). maps omitted for now (base-only props).
  */
 export async function renderMockupCover(base: number[], cover: number[], manifest: number[]): Promise<Uint8Array | null> {
   const lib = await canvasLib()
@@ -62,5 +67,5 @@ export async function renderMockupCover(base: number[], cover: number[], manifes
     base: baseImg, design, maps: {}, stageW: W, stageH: H, dpr: 1,
     box, warp: mc.warp ?? [], fabric: p != null ? p.fabric : 0.8,
   })
-  return canvas.toBuffer('image/png')
+  return canvas.toBuffer('image/webp', MOCKUP_WEBP_QUALITY)
 }
