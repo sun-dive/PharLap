@@ -25855,7 +25855,7 @@ Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
         const isCov = publishTier === "unlimited";
         const terms2 = isCov ? ownTerms() : null;
         const supply = publishTier === "exclusive" ? 1 : count;
-        const propTxid = val("edMockupProp").trim() || void 0;
+        const propTxid = val("edMockupProp").trim() || bundle.recipe.propTxid || void 0;
         setStatus("Deriving preview\u2026");
         const dmime = bundle.designMime;
         const preview = await downscaleWebp(bundle.design, dmime, 1024);
@@ -29917,7 +29917,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"539c496"} \xB7 ${"2026-07-24"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6b962b5"} \xB7 ${"2026-07-24"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

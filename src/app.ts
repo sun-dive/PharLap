@@ -903,7 +903,8 @@ async function onMintEdition(): Promise<void> {
       const isCov = publishTier === 'unlimited'
       const terms = isCov ? ownTerms() : null
       const supply = publishTier === 'exclusive' ? 1 : count
-      const propTxid = val('edMockupProp').trim() || undefined
+      // Reuse a prop: the form field wins; otherwise honour a propTxid baked into the bundle (Prop catalogue pick).
+      const propTxid = val('edMockupProp').trim() || bundle.recipe.propTxid || undefined
       setStatus('Deriving preview…')
       // The design master is FULL-RES + original format (PoD quality) — mint it verbatim as the sellable clean
       // FILE. Derive a display-res preview (1024, WebP) for the public cover; the curator downsamples that again.

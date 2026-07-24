@@ -24,6 +24,9 @@ export interface MockupRecipe {
   fabric?: number
   /** Auto fabric-contour strength in px (0/undef = off) — the fold map is derived server-side from the base. */
   contour?: number
+  /** Reuse an already-published prop by txid (from Pole Position's Prop catalogue) — mints the design only, no new
+   *  prop atom. The form's "Reuse a prop" field overrides this if filled. */
+  propTxid?: string
 }
 
 export interface MockupBundle {
