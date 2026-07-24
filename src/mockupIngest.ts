@@ -22,6 +22,8 @@ export interface MockupRecipe {
   /** Placement in the authoring stage (= base aspect), normalized: centre cx,cy + size w,h + rot° + skew. */
   place?: { cx: number; cy: number; w: number; h: number; rot: number; skewX: number; skewY: number }
   fabric?: number
+  /** Auto fabric-contour strength in px (0/undef = off) — the fold map is derived server-side from the base. */
+  contour?: number
 }
 
 export interface MockupBundle {
@@ -79,6 +81,7 @@ export function bundleToPropManifest(recipe: MockupRecipe, ratio: number): PropM
     disp: null, mask: null, shade: null,
     dims: null,
     name: recipe.prop?.name ?? null,
+    contour: recipe.contour && recipe.contour > 0 ? Math.round(recipe.contour) : null,
   }
 }
 

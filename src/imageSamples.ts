@@ -108,6 +108,49 @@ function convertWatermark(be: ImageBackend, src: string, out: string, max: numbe
   return run(cmd, args)
 }
 
+/** Read an image's pixel dimensions via the CLI (`identify`). null if unavailable. */
+function imageDims(be: ImageBackend, path: string): { w: number; h: number } | null {
+  // IM7: `magick identify …` · IM6: `identify …` · GM: `gm identify …`
+  const cmd = be.kind === 'gm' ? 'gm' : be.cmd === 'magick' ? 'magick' : 'identify'
+  const args = (be.kind === 'gm' || be.cmd === 'magick' ? ['identify'] : []).concat(['-format', '%w %h', path])
+  try {
+    const r = spawnSync(cmd, args, { timeout: 10000, encoding: 'utf8' })
+    const m = /(\d+)\s+(\d+)/.exec(r.stdout || '')
+    return m ? { w: +m[1], h: +m[2] } : null
+  } catch { return null }
+}
+
+/**
+ * Derive a fabric-CONTOUR (displacement) map from a source image's print region: crop the region, grayscale, then
+ * high-pass (local fold structure centred on mid-gray = no displacement). The renderer's `disp` warp offsets the
+ * design by this map so it conforms to the fabric. ImageMagick/GraphicsMagick only (needs `-compose mathematics`);
+ * returns false otherwise (the composite then renders flat). `box` = the print region as fractions of the base
+ * (centre cx,cy; width wFrac of base width; the region's `aspect` = design/ratio aspect → box height).
+ */
+export function deriveContourMap(srcBytes: number[], outDir: string, outPath: string, box: { cx: number; cy: number; wFrac: number; aspect: number }): boolean {
+  const be = imageBackend()
+  if (be == null || (be.kind !== 'im' && be.kind !== 'gm')) return false
+  const dir = mkdtempSync(join(tmpdir(), 'mkbc-'))
+  const src = join(dir, 'src')
+  try {
+    writeFileSync(src, Buffer.from(srcBytes))
+    const dims = imageDims(be, src)
+    if (dims == null) return false
+    const cw = Math.max(1, Math.round(box.wFrac * dims.w))
+    const ch = Math.max(1, Math.round(cw / box.aspect))
+    const cx = Math.round(box.cx * dims.w - cw / 2), cy = Math.round(box.cy * dims.h - ch / 2)
+    const sigma = Math.max(4, Math.round(cw * 0.03)) // blur scale ∝ region size → isolates folds, not weave noise
+    const geom = `${cw}x${ch}+${cx}+${cy}`
+    // gray-crop − blur(gray-crop) + 0.5  (via -compose mathematics 0,-1,1,0.5) → local contrast centred on gray.
+    const args = [src, '-crop', geom, '+repage', '-colorspace', 'Gray',
+      '(', '+clone', '-blur', `0x${sigma}`, ')',
+      '-compose', 'mathematics', '-define', 'compose:args=0,-1,1,0.5', '-composite',
+      '-normalize', join(outDir, outPath)]
+    return run(be.cmd, be.kind === 'gm' ? ['convert', ...args] : args)
+  } catch { return false }
+  finally { try { rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ } }
+}
+
 // ─── PHP fallbacks (universal on PHP shared hosts) ───────────────────
 // Both scripts take: <in> <clean-out> <wm-out> <maxDim> <quality> <domain>. Clean is mandatory; the watermark is
 // best-effort (falls back to copying the clean if text rendering isn't available), so a cover always results.

@@ -20683,7 +20683,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     MASK: 7,
     SHADE: 8,
     DIMS: 9,
-    NAME: 10
+    NAME: 10,
+    CONTOUR: 11
   };
   var W = class {
     constructor() {
@@ -20798,6 +20799,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     if (p.shade) putBlock(w, PROP_FIELD.SHADE, hexToBytes2(p.shade));
     if (p.dims) putBlock(w, PROP_FIELD.DIMS, new W().u16(p.dims.wmm).u16(p.dims.hmm).out());
     if (p.name) putBlock(w, PROP_FIELD.NAME, utf8ToBytes3(p.name));
+    if (p.contour) putBlock(w, PROP_FIELD.CONTOUR, [clamp(Math.round(p.contour), 0, 255)]);
     for (const e of p.ext ?? []) putBlock(w, e.id, e.data);
     return w.out();
   }
@@ -22405,7 +22407,8 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
       mask: null,
       shade: null,
       dims: null,
-      name: recipe.prop?.name ?? null
+      name: recipe.prop?.name ?? null,
+      contour: recipe.contour && recipe.contour > 0 ? Math.round(recipe.contour) : null
     };
   }
   function productCoverPointer(propTxid) {
@@ -29914,7 +29917,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"9f4070a"} \xB7 ${"2026-07-23"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"539c496"} \xB7 ${"2026-07-24"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

@@ -109,10 +109,10 @@ export interface MockupCover {
 // later with new params still renders on old code, and old props render on new code. New params = new ids, never
 // a format break. Distinct TAG (0x50 'P') from a cover (0x4D 'M').
 const TAG_PROP = 0x50
-/** Field ids — FROZEN, additive. 0x0B–0xFE reserved for future params (folds, wrinkle, exclusion zones, light…). */
+/** Field ids — FROZEN, additive. 0x0C–0xFE reserved for future params (wrinkle, exclusion zones, light…). */
 export const PROP_FIELD = {
   RATIO: 0x01, FABRIC: 0x02, PLACE: 0x03, WARP: 0x04, QUAD: 0x05,
-  DISP: 0x06, MASK: 0x07, SHADE: 0x08, DIMS: 0x09, NAME: 0x0a,
+  DISP: 0x06, MASK: 0x07, SHADE: 0x08, DIMS: 0x09, NAME: 0x0a, CONTOUR: 0x0b,
 } as const
 
 export interface PropManifest {
@@ -136,6 +136,9 @@ export interface PropManifest {
   /** Physical print size in mm. */
   dims: { wmm: number; hmm: number } | null
   name: string | null
+  /** Auto fabric-contour strength in px (0/absent = off) — the fold map is DERIVED from the prop's own base image
+   *  (server-side, no map atom); the design displaces by this much. Tunable per prop/fabric. Optional (additive). */
+  contour?: number | null
   /** Unknown blocks, preserved verbatim for forward-compatible round-trips. */
   ext?: { id: number; data: number[] }[]
 }
@@ -344,6 +347,7 @@ export function packProp(p: PropManifest): number[] {
   if (p.shade) putBlock(w, PROP_FIELD.SHADE, hexToBytes(p.shade))
   if (p.dims) putBlock(w, PROP_FIELD.DIMS, new W().u16(p.dims.wmm).u16(p.dims.hmm).out())
   if (p.name) putBlock(w, PROP_FIELD.NAME, utf8ToBytes(p.name))
+  if (p.contour) putBlock(w, PROP_FIELD.CONTOUR, [clamp(Math.round(p.contour), 0, 255)])
   for (const e of p.ext ?? []) putBlock(w, e.id, e.data)
   return w.out()
 }
@@ -355,7 +359,7 @@ export function parseProp(bytes: number[]): PropManifest | null {
   r.u8() // TAG
   const p: PropManifest = {
     version: r.u8(), ratio: 0, fabric: 0.8, place: null, quad: null, warp: null,
-    disp: null, mask: null, shade: null, dims: null, name: null, ext: [],
+    disp: null, mask: null, shade: null, dims: null, name: null, contour: null, ext: [],
   }
   try {
     while (r.rem() >= 2) {
@@ -374,6 +378,7 @@ export function parseProp(bytes: number[]): PropManifest | null {
         case PROP_FIELD.SHADE: p.shade = bytesToHex(r.bytes(32)); break
         case PROP_FIELD.DIMS: p.dims = { wmm: r.u16(), hmm: r.u16() }; break
         case PROP_FIELD.NAME: p.name = bytesToUtf8(r.bytes(len)); break
+        case PROP_FIELD.CONTOUR: p.contour = r.u8(); break
         default: p.ext!.push({ id, data: r.bytes(len) }); break
       }
       r.i = start + len // advance EXACTLY len — skip-unknown, and tolerant of a block longer than the known schema

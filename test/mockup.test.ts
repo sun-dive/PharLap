@@ -175,6 +175,15 @@ test('prop: full manifest round-trips through packed TLV', () => {
   assert.equal(back.name, 'Tee — front')
 })
 
+test('prop: CONTOUR strength (auto fabric-contour) round-trips', () => {
+  const p: PropManifest = { version: 1, ratio: 1, fabric: 0.8, place: null, quad: null, warp: null, disp: null, mask: null, shade: null, dims: null, name: null, contour: 6 }
+  const back = parseProp(packProp(p))!
+  assert.equal(back.contour, 6)
+  // absent contour stays null (off)
+  const off = parseProp(packProp({ ...p, contour: null }))!
+  assert.equal(off.contour, null)
+})
+
 test('prop: minimal (ratio + fabric only) is tiny and round-trips', () => {
   const p: PropManifest = { version: 1, ratio: 0, fabric: 0.8, place: null, quad: null, warp: null, disp: null, mask: null, shade: null, dims: null, name: null }
   const packed = packProp(p)
