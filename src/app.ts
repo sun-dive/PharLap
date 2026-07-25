@@ -3457,6 +3457,8 @@ let cvPreviewObjectUrl: string | null = null // audio-preview object URL for the
 let currentCollection: { info: CollectionInfo; holderPubKey: string | null } | null = null
 /** The seller's current note (promo + optional bonus) for the open collection, captured onto a purchase. */
 let cvNote: SellerNote | null = null
+let cvNoteRefreshId: string | null = null // collection to re-fetch on nft.sale after a note publish (the ↻ button)
+const NFTSALE_ORIGIN = 'https://nft.sale' // hard-coded for now — revisit for multiple marketplace sites
 /** Funded voucher WIF from a `&g=` gift link — when set, "Get a copy" claims free (the voucher pays). */
 let cvGiftWif: string | null = null
 
@@ -3874,6 +3876,7 @@ async function loadSellerNote(info: CollectionInfo, sellerPub: string | null): P
   ;($('cvBonusValue') as HTMLInputElement).value = ''
   ;($('cvBonusKind') as HTMLSelectElement).value = 'none'
   $('cvNoteStatus').textContent = ''
+  ;($('cvNoteRefresh') as HTMLButtonElement).style.display = 'none'; cvNoteRefreshId = null // reset the ↻ button per collection
   if (sellerPub == null) return
   let current: SellerNote | null = null
   try {
@@ -3946,10 +3949,28 @@ async function onSaveSellerNote(): Promise<void> {
     cvNote = note
     paintCvNote(note)
     showBonus(note, true)
-    $('cvNoteStatus').textContent = `Published (${short(txId)}). Buyers will see it shortly.`
+    cvNoteRefreshId = currentCollection.info.tx1Ref
+    ;($('cvNoteRefresh') as HTMLButtonElement).style.display = ''
+    $('cvNoteStatus').textContent = `Published (${short(txId)}). Now hit “Refresh nft.sale” to update the listing.`
   } catch (e) {
     $('cvNoteStatus').textContent = `Failed: ${(e as Error).message}`
   }
+}
+
+// After publishing/updating a note, ask nft.sale to re-read it. refresh.php enqueues the collection id; the curator
+// cron re-resolves the live note (title/desc/tags) on its next run — no server login, no full re-scan.
+async function onRefreshNote(): Promise<void> {
+  if (!cvNoteRefreshId) return
+  const btn = $('cvNoteRefresh') as HTMLButtonElement
+  btn.disabled = true
+  $('cvNoteStatus').textContent = 'Asking nft.sale to refresh…'
+  try {
+    const res = await fetch(`${NFTSALE_ORIGIN}/refresh.php?collection-id=${cvNoteRefreshId}`)
+    const first = (await res.text()).trim().split('\n')[0]
+    $('cvNoteStatus').textContent = res.ok ? `✓ ${first || 'queued'} — updates on the next curator run.` : `Refresh failed: ${first || res.status}`
+  } catch (e) {
+    $('cvNoteStatus').textContent = `Refresh request failed (is nft.sale reachable?): ${(e as Error).message}`
+  } finally { btn.disabled = false }
 }
 
 function showFundPrompt(needed: number, have: number): void {
@@ -4849,6 +4870,7 @@ function init(): void {
   }
   $('cvView').onclick = () => { if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name) }
   $('cvNoteSave').onclick = () => void onSaveSellerNote()
+  $('cvNoteRefresh').onclick = () => void onRefreshNote()
   $('cvFundCopy').onclick = () => void navigator.clipboard?.writeText(address)
   $('cvFundDone').onclick = () => void onGetCopy()
   window.addEventListener('hashchange', () => {

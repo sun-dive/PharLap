@@ -28594,6 +28594,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
   var cvPreviewObjectUrl = null;
   var currentCollection = null;
   var cvNote = null;
+  var cvNoteRefreshId = null;
+  var NFTSALE_ORIGIN = "https://nft.sale";
   var cvGiftWif = null;
   function setCvStatus(msg, kind = "info") {
     const el = $("cvStatus");
@@ -29039,6 +29041,8 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
     $("cvBonusValue").value = "";
     $("cvBonusKind").value = "none";
     $("cvNoteStatus").textContent = "";
+    $("cvNoteRefresh").style.display = "none";
+    cvNoteRefreshId = null;
     if (sellerPub == null) return;
     let current = null;
     try {
@@ -29114,9 +29118,26 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       cvNote = note;
       paintCvNote(note);
       showBonus(note, true);
-      $("cvNoteStatus").textContent = `Published (${short(txId)}). Buyers will see it shortly.`;
+      cvNoteRefreshId = currentCollection.info.tx1Ref;
+      $("cvNoteRefresh").style.display = "";
+      $("cvNoteStatus").textContent = `Published (${short(txId)}). Now hit \u201CRefresh nft.sale\u201D to update the listing.`;
     } catch (e) {
       $("cvNoteStatus").textContent = `Failed: ${e.message}`;
+    }
+  }
+  async function onRefreshNote() {
+    if (!cvNoteRefreshId) return;
+    const btn = $("cvNoteRefresh");
+    btn.disabled = true;
+    $("cvNoteStatus").textContent = "Asking nft.sale to refresh\u2026";
+    try {
+      const res = await fetch(`${NFTSALE_ORIGIN}/refresh.php?collection-id=${cvNoteRefreshId}`);
+      const first = (await res.text()).trim().split("\n")[0];
+      $("cvNoteStatus").textContent = res.ok ? `\u2713 ${first || "queued"} \u2014 updates on the next curator run.` : `Refresh failed: ${first || res.status}`;
+    } catch (e) {
+      $("cvNoteStatus").textContent = `Refresh request failed (is nft.sale reachable?): ${e.message}`;
+    } finally {
+      btn.disabled = false;
     }
   }
   function showFundPrompt(needed, have) {
@@ -29917,7 +29938,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"6b962b5"} \xB7 ${"2026-07-24"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"40c28ee"} \xB7 ${"2026-07-25"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -30128,6 +30149,7 @@ Buy ANOTHER copy?`)) void onGetCopy();
       if (currentCollection) void onView(currentCollection.info.tx1Ref, currentCollection.info.name);
     };
     $("cvNoteSave").onclick = () => void onSaveSellerNote();
+    $("cvNoteRefresh").onclick = () => void onRefreshNote();
     $("cvFundCopy").onclick = () => void navigator.clipboard?.writeText(address);
     $("cvFundDone").onclick = () => void onGetCopy();
     window.addEventListener("hashchange", () => {
