@@ -704,16 +704,28 @@ async function isAnimatedImage(f: File): Promise<boolean> {
   return false
 }
 
+/** True for an SVG — vector + often self-animating (SMIL). Running it through the raster crop canvas would
+ *  flatten it to one static frame (or fail to load on a heavy animated SVG), so we keep it as-is instead. */
+function isSvgImage(f: File): boolean {
+  return f.type === 'image/svg+xml' || /\.svg$/i.test(f.name)
+}
+
 /** Crop a chosen image (file or photo) and store the processed cover bytes. Returns false if cancelled.
- *  An animated WebP/GIF is offered as a pass-through (keeps the loop) rather than being flattened by the crop. */
+ *  An animated WebP/GIF — or an SVG — is offered as a pass-through (keeps the animation / vector sharpness)
+ *  rather than being flattened by the raster crop. */
 async function cropAndStoreCover(f: File): Promise<boolean> {
-  if (await isAnimatedImage(f)) {
-    if (confirm(`"${f.name}" is animated (${kb(f.size)}). Keep it animated as the cover?\n\nOK — keep the animation as-is (it rides on-chain, so a larger animated cover costs a little more to mint).\nCancel — crop it to a small, static 800×800 cover instead.`)) {
+  const svg = isSvgImage(f)
+  if (svg || await isAnimatedImage(f)) {
+    const msg = svg
+      ? `"${f.name}" is a scalable, self-animating SVG (${kb(f.size)}). Use it as the cover as-is?\n\nOK — keep the SVG (it rides on-chain, stays razor-sharp at any size, and the listing animates).\nCancel — pick a different image (an SVG can't go through the square crop without losing its animation).`
+      : `"${f.name}" is animated (${kb(f.size)}). Keep it animated as the cover?\n\nOK — keep the animation as-is (it rides on-chain, so a larger animated cover costs a little more to mint).\nCancel — crop it to a small, static 800×800 cover instead.`
+    if (confirm(msg)) {
       const bytes = Array.from(new Uint8Array(await f.arrayBuffer()))
-      croppedCover = { mimeType: f.type || 'image/webp', fileName: f.name || 'cover.webp', bytes }
+      croppedCover = { mimeType: (svg ? 'image/svg+xml' : f.type) || 'image/webp', fileName: f.name || (svg ? 'cover.svg' : 'cover.webp'), bytes }
       paintCoverPreview(new Blob([new Uint8Array(bytes)], { type: croppedCover.mimeType }))
       return true
     }
+    if (svg) return false // never rasterise an SVG through the crop canvas — that's the path that was failing
   }
   const blob = await openCropModal(f)
   if (!blob) return false

@@ -25612,17 +25612,26 @@ Proceed?`
     }
     return false;
   }
+  function isSvgImage(f2) {
+    return f2.type === "image/svg+xml" || /\.svg$/i.test(f2.name);
+  }
   async function cropAndStoreCover(f2) {
-    if (await isAnimatedImage(f2)) {
-      if (confirm(`"${f2.name}" is animated (${kb(f2.size)}). Keep it animated as the cover?
+    const svg = isSvgImage(f2);
+    if (svg || await isAnimatedImage(f2)) {
+      const msg = svg ? `"${f2.name}" is a scalable, self-animating SVG (${kb(f2.size)}). Use it as the cover as-is?
+
+OK \u2014 keep the SVG (it rides on-chain, stays razor-sharp at any size, and the listing animates).
+Cancel \u2014 pick a different image (an SVG can't go through the square crop without losing its animation).` : `"${f2.name}" is animated (${kb(f2.size)}). Keep it animated as the cover?
 
 OK \u2014 keep the animation as-is (it rides on-chain, so a larger animated cover costs a little more to mint).
-Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`)) {
+Cancel \u2014 crop it to a small, static 800\xD7800 cover instead.`;
+      if (confirm(msg)) {
         const bytes2 = Array.from(new Uint8Array(await f2.arrayBuffer()));
-        croppedCover = { mimeType: f2.type || "image/webp", fileName: f2.name || "cover.webp", bytes: bytes2 };
+        croppedCover = { mimeType: (svg ? "image/svg+xml" : f2.type) || "image/webp", fileName: f2.name || (svg ? "cover.svg" : "cover.webp"), bytes: bytes2 };
         paintCoverPreview(new Blob([new Uint8Array(bytes2)], { type: croppedCover.mimeType }));
         return true;
       }
+      if (svg) return false;
     }
     const blob = await openCropModal(f2);
     if (!blob) return false;
@@ -29938,7 +29947,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"40c28ee"} \xB7 ${"2026-07-25"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"beebf70"} \xB7 ${"2026-07-26"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
