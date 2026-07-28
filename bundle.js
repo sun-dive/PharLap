@@ -20321,6 +20321,66 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
 
   // src/compress.ts
   var MIN_COMPRESS = 64;
+  var PRECOMPRESSED_MIME = /* @__PURE__ */ new Set([
+    "font/woff2",
+    "font/woff",
+    "application/font-woff2",
+    "application/font-woff",
+    "application/x-font-woff",
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/webp",
+    "image/gif",
+    "image/avif",
+    "image/heic",
+    "image/heif",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/ogg",
+    "audio/webm",
+    "audio/aac",
+    "audio/flac",
+    "video/mp4",
+    "video/webm",
+    "video/ogg",
+    "video/quicktime",
+    "application/zip",
+    "application/gzip",
+    "application/x-gzip",
+    "application/x-zip-compressed",
+    "application/pdf"
+  ]);
+  var PRECOMPRESSED_EXT = /* @__PURE__ */ new Set([
+    "woff2",
+    "woff",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "gif",
+    "avif",
+    "heic",
+    "heif",
+    "mp3",
+    "m4a",
+    "aac",
+    "ogg",
+    "oga",
+    "flac",
+    "mp4",
+    "webm",
+    "mov",
+    "zip",
+    "gz",
+    "pdf"
+  ]);
+  function isPrecompressed(mimeType, fileName) {
+    const mt = mimeType != null ? mimeType.split(";")[0].trim().toLowerCase() : "";
+    if (mt !== "" && PRECOMPRESSED_MIME.has(mt)) return true;
+    const ext = fileName != null ? /\.([a-z0-9]+)$/i.exec(fileName)?.[1].toLowerCase() ?? "" : "";
+    return ext !== "" && PRECOMPRESSED_EXT.has(ext);
+  }
   async function run(bytes2, stream) {
     const writer = stream.writable.getWriter();
     void writer.write(new Uint8Array(bytes2));
@@ -20328,8 +20388,10 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     const buf = await new Response(stream.readable).arrayBuffer();
     return Array.from(new Uint8Array(buf));
   }
-  async function compressIfSmaller(bytes2) {
-    if (bytes2.length < MIN_COMPRESS || typeof CompressionStream === "undefined") return { bytes: bytes2, compressed: false };
+  async function compressIfSmaller(bytes2, mimeType, fileName) {
+    if (isPrecompressed(mimeType, fileName) || bytes2.length < MIN_COMPRESS || typeof CompressionStream === "undefined") {
+      return { bytes: bytes2, compressed: false };
+    }
     const z = await run(bytes2, new CompressionStream("gzip"));
     return z.length < bytes2.length ? { bytes: z, compressed: true } : { bytes: bytes2, compressed: false };
   }
@@ -21735,7 +21797,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     let wrappedKey;
     let keySalt;
     if (params.file != null) {
-      const z = await compressIfSmaller(params.file.bytes);
+      const z = await compressIfSmaller(params.file.bytes, params.file.mimeType, params.file.fileName);
       storedBytes = z.bytes;
       compressed = z.compressed;
       if (encrypt) {
@@ -29986,7 +30048,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"31067a9"} \xB7 ${"2026-07-28"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"bd47583"} \xB7 ${"2026-07-28"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
