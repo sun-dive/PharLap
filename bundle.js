@@ -25508,7 +25508,7 @@ Proceed?`
       setStatus(`Mint failed: ${e.message}`, "error");
     }
   }
-  var EDITION_BOND_SATS = 2100;
+  var EDITION_BOND_SATS = 1;
   function fmtPrice(sats) {
     const s2 = Math.round(Number(sats) || 0);
     return s2 >= 1e6 ? (s2 / 1e8).toFixed(3).replace(/\.?0+$/, "") + " BSV" : s2.toLocaleString() + " sats";
@@ -29947,7 +29947,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"beebf70"} \xB7 ${"2026-07-26"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"aad4670"} \xB7 ${"2026-07-28"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

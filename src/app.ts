@@ -595,7 +595,7 @@ async function onMint(): Promise<void> {
 
 // ─── editions (experimental covenant) ──────────────────────────────
 /** Default refundable bond (sats) each edition rides on; the publisher overrides it per collection at mint. */
-const EDITION_BOND_SATS = 2100
+const EDITION_BOND_SATS = 1
 
 /** Readable price: large amounts as BSV (0.485 BSV / 1.25 BSV, ≥ 0.01 BSV), small ones as whole sats. */
 function fmtPrice (sats: number): string {

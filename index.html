@@ -715,7 +715,7 @@
       <small class="muted" style="display:block;margin:3px 0 0;font-size:12px">A second storefront image (front + back). Separate from the audio's embedded art — this is the art that sells the NFT.</small>
       <div class="covenant-only">
         <label>Bond per edition (sats) — refundable, reclaimed by burning a copy</label>
-        <input id="edBond" type="number" min="1" value="2100" />
+        <input id="edBond" type="number" min="1" value="1" />
         <p class="muted" style="font-size:12px;margin:2px 0 0">Each edition rides on this many sats; the owner reclaims them by burning. Higher = stronger price floor (and pricier gifts); set low (e.g. 1) for free-content drops.</p>
       </div>
       <!-- Pricing is always v1 fixed-fee on-chain. "Percentage" is a UI calculator: enter a price + publisher
@@ -728,8 +728,8 @@
           <button id="btnFeePct" type="button">Percentage</button>
         </div>
         <div id="feeFixed" class="grid2" style="grid-template-columns:1fr 1fr">
-          <div><label>Publisher fee (sats)</label><input id="edPublisherFee" type="number" min="1" value="5000" /></div>
-          <div><label>Holder fee (sats)</label><input id="edHolderFee" type="number" min="1" value="1000" /></div>
+          <div><label>Publisher fee (sats)</label><input id="edPublisherFee" type="number" min="1" value="1" /></div>
+          <div><label>Holder fee (sats)</label><input id="edHolderFee" type="number" min="1" value="1" /></div>
         </div>
         <div id="feePct" hidden>
           <div class="grid2" style="grid-template-columns:1fr 1fr">
