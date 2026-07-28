@@ -163,12 +163,37 @@ export async function buildEditionGenesisV2Tx(opts: {
 
 // ─── Covenant unlock templates (preimage built from the finalised tx) ───
 
-const REPLICATE_UNLOCK_LEN = 1100 // generous over-estimate (preimage ≈ 930B incl. scriptCode + buyer data)
+// Fallbacks only — used if the source txid isn't resolvable at estimate time. The real estimate is computed
+// EXACTLY below from the covenant preimage + the serialized enforced-slice outputs (see covenantUnlockLen).
+const REPLICATE_UNLOCK_LEN = 1100
 const TRANSFER_UNLOCK_LEN = 1200
 
 /** Other-inputs in the shape TransactionSignature.format expects (ANYONECANPAY ignores them). */
 function otherInputsOf(tx: Transaction, inputIndex: number) {
   return tx.inputs.filter((_, i) => i !== inputIndex)
+}
+
+/** The covenant sighash preimage for this input, exactly as sign() builds it — needed to size the unlock at
+ *  fee() time. Returns null only if the source txid isn't resolvable yet (caller falls back to a constant). */
+function covenantPreimage(
+  tx: Transaction, inputIndex: number,
+  opts: { lockingScript: LockingScript; sourceSatoshis: number }, scope: number,
+): number[] | null {
+  const input = tx.inputs[inputIndex]
+  const sourceTXID = input.sourceTXID ?? input.sourceTransaction?.id('hex')
+  if (sourceTXID == null) return null
+  return TransactionSignature.format({
+    sourceTXID, sourceOutputIndex: input.sourceOutputIndex, sourceSatoshis: opts.sourceSatoshis,
+    transactionVersion: tx.version, otherInputs: otherInputsOf(tx, inputIndex), inputIndex,
+    outputs: tx.outputs, inputSequence: input.sequence ?? 0xffffffff,
+    subscript: opts.lockingScript, lockTime: tx.lockTime, scope,
+  })
+}
+
+/** Serialized byte length of the enforced-slice outputs the unlock must carry (the `buyerChange`/`change`
+ *  push) — all known once outputs are added, before fee() sets the change value (value size is fixed at 8B). */
+function enforcedSliceBytes(tx: Transaction, enforced: number): number[] {
+  return tx.outputs.slice(enforced).flatMap(o => serializeOutput(o.satoshis ?? 0, o.lockingScript.toBinary()))
 }
 
 export function replicateUnlockTemplate(opts: {
@@ -189,11 +214,16 @@ export function replicateUnlockTemplate(opts: {
         subscript: opts.lockingScript, lockTime: tx.lockTime, scope: EDITION_SCOPE,
       })
       const enforced = opts.enforcedOutputCount ?? 4
-      const buyerChange = tx.outputs.slice(enforced)
-        .flatMap(o => serializeOutput(o.satoshis ?? 0, o.lockingScript.toBinary()))
+      const buyerChange = enforcedSliceBytes(tx, enforced)
       return new UnlockingScript(editionReplicateUnlockChunks({ buyerPubKey: opts.buyerPubKey, buyerChange, preimage }))
     },
-    estimateLength: async (): Promise<number> => REPLICATE_UNLOCK_LEN,
+    // Exact: the replicate unlock has NO signature, so building it with the real preimage + real outputs is byte-perfect.
+    estimateLength: async (tx: Transaction, inputIndex: number): Promise<number> => {
+      const preimage = covenantPreimage(tx, inputIndex, opts, EDITION_SCOPE)
+      if (preimage == null) return REPLICATE_UNLOCK_LEN
+      const buyerChange = enforcedSliceBytes(tx, opts.enforcedOutputCount ?? 4)
+      return new UnlockingScript(editionReplicateUnlockChunks({ buyerPubKey: opts.buyerPubKey, buyerChange, preimage })).toBinary().length
+    },
   }
 }
 
@@ -220,13 +250,19 @@ export function transferUnlockTemplate(opts: {
       const raw = opts.ownerKey.sign(Hash.sha256(fmt(ownerScope)))
       const ownerSig = new TransactionSignature(raw.r, raw.s, ownerScope).toChecksigFormat()
       const enforced = opts.enforcedOutputCount ?? 1
-      const change = tx.outputs.slice(enforced)
-        .flatMap(o => serializeOutput(o.satoshis ?? 0, o.lockingScript.toBinary()))
+      const change = enforcedSliceBytes(tx, enforced)
       return new UnlockingScript(editionTransferUnlockChunks({
         newOwnerPubKey: opts.newOwnerPubKey, ownerSig, change, preimage: introspection,
       }))
     },
-    estimateLength: async (): Promise<number> => TRANSFER_UNLOCK_LEN,
+    // Exact size uses a 73-byte max-length sig placeholder (DER + sighash byte) so we never under-estimate.
+    estimateLength: async (tx: Transaction, inputIndex: number): Promise<number> => {
+      const preimage = covenantPreimage(tx, inputIndex, opts, EDITION_SCOPE)
+      if (preimage == null) return TRANSFER_UNLOCK_LEN
+      const change = enforcedSliceBytes(tx, opts.enforcedOutputCount ?? 1)
+      const sigMax = new Array(73).fill(0)
+      return new UnlockingScript(editionTransferUnlockChunks({ newOwnerPubKey: opts.newOwnerPubKey, ownerSig: sigMax, change, preimage })).toBinary().length
+    },
   }
 }
 
@@ -249,7 +285,13 @@ export function burnUnlockTemplate(opts: { ownerKey: PrivateKey; lockingScript: 
       const ownerSig = new TransactionSignature(raw.r, raw.s, ownerScope).toChecksigFormat()
       return new UnlockingScript(editionBurnUnlockChunks({ ownerSig, preimage: introspection }))
     },
-    estimateLength: async (): Promise<number> => TRANSFER_UNLOCK_LEN, // ~transfer minus the new-owner bytes
+    // Exact: burn enforces no outputs, so the unlock is just preimage + selector + a 73-byte max sig placeholder.
+    estimateLength: async (tx: Transaction, inputIndex: number): Promise<number> => {
+      const preimage = covenantPreimage(tx, inputIndex, opts, EDITION_SCOPE)
+      if (preimage == null) return TRANSFER_UNLOCK_LEN
+      const sigMax = new Array(73).fill(0)
+      return new UnlockingScript(editionBurnUnlockChunks({ ownerSig: sigMax, preimage })).toBinary().length
+    },
   }
 }
 

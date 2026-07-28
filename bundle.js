@@ -21455,6 +21455,27 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   function otherInputsOf(tx, inputIndex) {
     return tx.inputs.filter((_, i) => i !== inputIndex);
   }
+  function covenantPreimage(tx, inputIndex, opts, scope) {
+    const input = tx.inputs[inputIndex];
+    const sourceTXID = input.sourceTXID ?? input.sourceTransaction?.id("hex");
+    if (sourceTXID == null) return null;
+    return TransactionSignature.format({
+      sourceTXID,
+      sourceOutputIndex: input.sourceOutputIndex,
+      sourceSatoshis: opts.sourceSatoshis,
+      transactionVersion: tx.version,
+      otherInputs: otherInputsOf(tx, inputIndex),
+      inputIndex,
+      outputs: tx.outputs,
+      inputSequence: input.sequence ?? 4294967295,
+      subscript: opts.lockingScript,
+      lockTime: tx.lockTime,
+      scope
+    });
+  }
+  function enforcedSliceBytes(tx, enforced) {
+    return tx.outputs.slice(enforced).flatMap((o) => serializeOutput(o.satoshis ?? 0, o.lockingScript.toBinary()));
+  }
   function replicateUnlockTemplate(opts) {
     return {
       sign: async (tx, inputIndex) => {
@@ -21475,10 +21496,16 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           scope: EDITION_SCOPE
         });
         const enforced = opts.enforcedOutputCount ?? 4;
-        const buyerChange = tx.outputs.slice(enforced).flatMap((o) => serializeOutput(o.satoshis ?? 0, o.lockingScript.toBinary()));
+        const buyerChange = enforcedSliceBytes(tx, enforced);
         return new UnlockingScript(editionReplicateUnlockChunks({ buyerPubKey: opts.buyerPubKey, buyerChange, preimage }));
       },
-      estimateLength: async () => REPLICATE_UNLOCK_LEN
+      // Exact: the replicate unlock has NO signature, so building it with the real preimage + real outputs is byte-perfect.
+      estimateLength: async (tx, inputIndex) => {
+        const preimage = covenantPreimage(tx, inputIndex, opts, EDITION_SCOPE);
+        if (preimage == null) return REPLICATE_UNLOCK_LEN;
+        const buyerChange = enforcedSliceBytes(tx, opts.enforcedOutputCount ?? 4);
+        return new UnlockingScript(editionReplicateUnlockChunks({ buyerPubKey: opts.buyerPubKey, buyerChange, preimage })).toBinary().length;
+      }
     };
   }
   function transferUnlockTemplate(opts) {
@@ -21505,7 +21532,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const raw = opts.ownerKey.sign(Hash_exports.sha256(fmt(ownerScope)));
         const ownerSig = new TransactionSignature(raw.r, raw.s, ownerScope).toChecksigFormat();
         const enforced = opts.enforcedOutputCount ?? 1;
-        const change = tx.outputs.slice(enforced).flatMap((o) => serializeOutput(o.satoshis ?? 0, o.lockingScript.toBinary()));
+        const change = enforcedSliceBytes(tx, enforced);
         return new UnlockingScript(editionTransferUnlockChunks({
           newOwnerPubKey: opts.newOwnerPubKey,
           ownerSig,
@@ -21513,7 +21540,14 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
           preimage: introspection
         }));
       },
-      estimateLength: async () => TRANSFER_UNLOCK_LEN
+      // Exact size uses a 73-byte max-length sig placeholder (DER + sighash byte) so we never under-estimate.
+      estimateLength: async (tx, inputIndex) => {
+        const preimage = covenantPreimage(tx, inputIndex, opts, EDITION_SCOPE);
+        if (preimage == null) return TRANSFER_UNLOCK_LEN;
+        const change = enforcedSliceBytes(tx, opts.enforcedOutputCount ?? 1);
+        const sigMax = new Array(73).fill(0);
+        return new UnlockingScript(editionTransferUnlockChunks({ newOwnerPubKey: opts.newOwnerPubKey, ownerSig: sigMax, change, preimage })).toBinary().length;
+      }
     };
   }
   function burnUnlockTemplate(opts) {
@@ -21541,8 +21575,13 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
         const ownerSig = new TransactionSignature(raw.r, raw.s, ownerScope).toChecksigFormat();
         return new UnlockingScript(editionBurnUnlockChunks({ ownerSig, preimage: introspection }));
       },
-      estimateLength: async () => TRANSFER_UNLOCK_LEN
-      // ~transfer minus the new-owner bytes
+      // Exact: burn enforces no outputs, so the unlock is just preimage + selector + a 73-byte max sig placeholder.
+      estimateLength: async (tx, inputIndex) => {
+        const preimage = covenantPreimage(tx, inputIndex, opts, EDITION_SCOPE);
+        if (preimage == null) return TRANSFER_UNLOCK_LEN;
+        const sigMax = new Array(73).fill(0);
+        return new UnlockingScript(editionBurnUnlockChunks({ ownerSig: sigMax, preimage })).toBinary().length;
+      }
     };
   }
   async function buildReplicateTx(opts) {
@@ -29947,7 +29986,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"aad4670"} \xB7 ${"2026-07-28"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"31067a9"} \xB7 ${"2026-07-28"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
