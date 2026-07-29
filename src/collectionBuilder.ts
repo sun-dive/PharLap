@@ -289,7 +289,7 @@ export async function createCollection(
   let wrappedKey: number[] | undefined
   let keySalt: number[] | undefined
   if (params.file != null) {
-    const z = await compressIfSmaller(params.file.bytes)
+    const z = await compressIfSmaller(params.file.bytes, params.file.mimeType, params.file.fileName)
     storedBytes = z.bytes
     compressed = z.compressed
     if (encrypt) {

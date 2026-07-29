@@ -20543,7 +20543,7 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     let wrappedKey;
     let keySalt;
     if (params.file != null) {
-      const z = await compressIfSmaller(params.file.bytes);
+      const z = await compressIfSmaller(params.file.bytes, params.file.mimeType, params.file.fileName);
       storedBytes = z.bytes;
       compressed = z.compressed;
       if (encrypt) {
@@ -30048,7 +30048,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"bd47583"} \xB7 ${"2026-07-28"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"17737c7"} \xB7 ${"2026-07-29"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
