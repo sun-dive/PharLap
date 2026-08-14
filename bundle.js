@@ -22744,6 +22744,156 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     return req;
   }
 
+  // src/cosign.ts
+  var SIGNED_P2PKH_INPUT_BYTES = 107;
+  var FEE_PER_KB_POLICY = 100;
+  var FEE_PER_KB_NOTABLE = FEE_PER_KB_POLICY * 2;
+  var FEE_PER_KB_ALARMING = FEE_PER_KB_POLICY * 10;
+  function dataPayload(scriptHex) {
+    const s2 = scriptHex.toLowerCase();
+    const body = s2.startsWith("006a") ? s2.slice(4) : s2.startsWith("6a") ? s2.slice(2) : null;
+    if (body == null) return null;
+    try {
+      const bytes2 = utils_exports.toArray(body, "hex");
+      let i = 0, len = 0;
+      const op3 = bytes2[i++];
+      if (op3 == null) return "";
+      if (op3 <= 75) len = op3;
+      else if (op3 === 76) len = bytes2[i++] ?? 0;
+      else if (op3 === 77) {
+        len = (bytes2[i++] ?? 0) | (bytes2[i++] ?? 0) << 8;
+      } else if (op3 === 78) {
+        len = (bytes2[i++] ?? 0) | (bytes2[i++] ?? 0) << 8 | (bytes2[i++] ?? 0) << 16 | (bytes2[i++] ?? 0) << 24;
+      } else return "";
+      return utils_exports.toUTF8(bytes2.slice(i, i + len));
+    } catch {
+      return "";
+    }
+  }
+  function analyseCosign(rawTx, sources, address2) {
+    const tx = Transaction.fromHex(rawTx);
+    const mineLock = new P2PKH().lock(address2).toHex();
+    const byId = /* @__PURE__ */ new Map();
+    const blockers = [];
+    const warnings = [];
+    for (const s2 of sources) {
+      let parsed;
+      try {
+        parsed = Transaction.fromHex(s2.sourceTxHex);
+      } catch {
+        blockers.push(`a supplied source transaction for ${s2.txId.slice(0, 12)}\u2026 is not valid hex`);
+        continue;
+      }
+      if (parsed.id("hex") !== s2.txId) {
+        blockers.push(`a source transaction does not hash to the txid it claims (${s2.txId.slice(0, 12)}\u2026) \u2014 refusing`);
+        continue;
+      }
+      byId.set(s2.txId, parsed);
+    }
+    const inputs = tx.inputs.map((inp, index) => {
+      const txId = inp.sourceTXID ?? inp.sourceTransaction?.id("hex") ?? "";
+      const outputIndex = inp.sourceOutputIndex;
+      const src = byId.get(txId) ?? inp.sourceTransaction ?? null;
+      const out = src?.outputs[outputIndex] ?? null;
+      const complete = (inp.unlockingScript?.toBinary().length ?? 0) > 0;
+      return {
+        index,
+        txId,
+        outputIndex,
+        satoshis: out?.satoshis ?? null,
+        mine: out != null && out.lockingScript.toHex() === mineLock,
+        complete
+      };
+    });
+    const outputs = tx.outputs.map((o, index) => {
+      const hex = o.lockingScript.toHex();
+      const text = dataPayload(hex);
+      let kind = "script";
+      let addr;
+      if (text != null) kind = "data";
+      else if (hex === mineLock) {
+        kind = "yours";
+        addr = address2;
+      } else {
+        const m = /^76a914([0-9a-f]{40})88ac$/.exec(hex.toLowerCase());
+        if (m != null) {
+          kind = "address";
+          try {
+            addr = utils_exports.toBase58Check(utils_exports.toArray(m[1], "hex"));
+          } catch {
+            addr = void 0;
+          }
+        }
+      }
+      return { index, satoshis: o.satoshis ?? 0, kind, address: addr, text: text ?? void 0, scriptSize: o.lockingScript.toBinary().length };
+    });
+    const missing = inputs.filter((i) => i.satoshis == null);
+    if (missing.length > 0) {
+      blockers.push(
+        `${missing.length} input${missing.length === 1 ? "" : "s"} ha${missing.length === 1 ? "s" : "ve"} no source transaction, so the fee cannot be worked out. Refusing to sign a transaction whose cost is unknown.`
+      );
+    }
+    const totalIn = inputs.reduce((a, i) => a + (i.satoshis ?? 0), 0);
+    const totalOut = outputs.reduce((a, o) => a + o.satoshis, 0);
+    const fee = totalIn - totalOut;
+    const size = rawTx.length / 2;
+    const toSign = inputs.filter((i) => i.mine && !i.complete).map((i) => i.index);
+    const signedSize = size + SIGNED_P2PKH_INPUT_BYTES * toSign.length;
+    const feePerKb = signedSize > 0 ? Math.round(fee * 1e3 / signedSize) : 0;
+    const youSpend = inputs.filter((i) => i.mine).reduce((a, i) => a + (i.satoshis ?? 0), 0);
+    const youReceive = outputs.filter((o) => o.kind === "yours").reduce((a, o) => a + o.satoshis, 0);
+    if (toSign.length === 0) {
+      blockers.push(missing.length > 0 ? "no input could be matched to this wallet (some sources are missing, so this may be why)" : "no input in this transaction pays this wallet \u2014 there is nothing here for it to sign");
+    }
+    for (const i of inputs) {
+      if (i.mine && i.complete) warnings.push(`input #${i.index + 1} already carries a signature and will be left alone`);
+      if (!i.mine && !i.complete) {
+        warnings.push(`input #${i.index + 1} is neither yours nor already signed \u2014 somebody else must sign it before this can be broadcast`);
+      }
+    }
+    if (blockers.length === 0) {
+      if (fee < 0) blockers.push("the outputs are worth more than the inputs \u2014 this transaction can never be valid");
+      else if (feePerKb >= FEE_PER_KB_ALARMING) {
+        warnings.push(`\u26A0 THE FEE IS ${fee.toLocaleString()} SAT \u2014 ${feePerKb.toLocaleString()} sat/KB, over ${Math.round(feePerKb / FEE_PER_KB_POLICY)}\xD7 the standard rate. Outputs are fixed by whoever built this, so any surplus goes to the miner, not back to you. Check the change amount before signing.`);
+      } else if (feePerKb >= FEE_PER_KB_NOTABLE) {
+        warnings.push(`the fee is ${fee.toLocaleString()} sat (${feePerKb.toLocaleString()} sat/KB) against a standard rate of ${FEE_PER_KB_POLICY}`);
+      }
+    }
+    return {
+      size,
+      signedSize,
+      inputs,
+      outputs,
+      totalIn,
+      totalOut,
+      fee,
+      feePerKb,
+      youSpend,
+      youReceive,
+      youPay: youSpend - youReceive,
+      toSign,
+      warnings,
+      blockers
+    };
+  }
+  async function cosignTransaction(rawTx, sources, key2) {
+    const address2 = key2.toAddress();
+    const analysis = analyseCosign(rawTx, sources, address2);
+    if (analysis.blockers.length > 0) throw new Error(analysis.blockers[0]);
+    const tx = Transaction.fromHex(rawTx);
+    const byId = new Map(sources.map((s2) => [s2.txId, Transaction.fromHex(s2.sourceTxHex)]));
+    for (const inp of tx.inputs) {
+      const src = byId.get(inp.sourceTXID ?? "");
+      if (src != null) inp.sourceTransaction = src;
+    }
+    const unlock2 = new P2PKH().unlock(key2);
+    for (const i of analysis.toSign) {
+      tx.inputs[i].unlockingScript = await unlock2.sign(tx, i);
+    }
+    tx.invalidateSerializationCaches();
+    return { txId: tx.id("hex"), rawTx: tx.toHex(), analysis };
+  }
+
   // src/transfer.ts
   async function buildTransferTx(opts) {
     const sats = opts.outputSats ?? PHARLAP_OUTPUT_SATS;
@@ -26473,6 +26623,104 @@ Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or
       setStatus(`Sign failed: ${e.message}`, "error");
     }
   }
+  var cosignRaw = null;
+  var cosignSources = [];
+  var cosignSigned = null;
+  async function onCosignRead() {
+    cosignRaw = null;
+    cosignSigned = null;
+    cosignSources = [];
+    $("btnCsSign").disabled = true;
+    $("btnCsBroadcast").disabled = true;
+    const rep = $("csReport");
+    rep.innerHTML = "";
+    let hex = val("csHex");
+    if (hex.length === 0) hex = (await readFileText($("csFile")) ?? "").trim();
+    if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length < 20) {
+      setStatus("Paste or import an unsigned transaction first.", "error");
+      return;
+    }
+    setStatus("Reading the transaction and fetching its inputs\u2026");
+    try {
+      const tx = Transaction.fromHex(hex);
+      const ids = [...new Set(tx.inputs.map((i) => i.sourceTXID ?? "").filter((s2) => s2.length > 0))];
+      const sources = [];
+      for (const id of ids) {
+        try {
+          sources.push({ txId: id, sourceTxHex: (await provider.getSourceTransaction(id)).toHex() });
+        } catch {
+        }
+      }
+      cosignRaw = hex;
+      cosignSources = sources;
+      const a = analyseCosign(hex, sources, address);
+      renderCosign(a);
+      if (a.blockers.length === 0 && !isWatchOnly()) $("btnCsSign").disabled = false;
+      setStatus(
+        a.blockers.length > 0 ? "This transaction cannot be signed here \u2014 see below." : "Read it. Check the figures below before signing.",
+        a.blockers.length > 0 ? "error" : "ok"
+      );
+    } catch (e) {
+      setStatus(`Could not read that transaction: ${e.message}`, "error");
+    }
+  }
+  function renderCosign(a) {
+    const sat = (n) => `${n.toLocaleString()} sat`;
+    const esc = (s2) => s2.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const rows = [];
+    rows.push(`<div style="margin-bottom:8px"><b>Signing this would cost you ${sat(a.youPay)}</b> <span class="muted">(${sat(a.youSpend)} in, ${sat(a.youReceive)} back)</span></div>`);
+    rows.push(`<div class="muted">fee ${sat(a.fee)} \xB7 ${a.feePerKb.toLocaleString()} sat/KB \xB7 ${a.signedSize.toLocaleString()} bytes signed</div>`);
+    rows.push('<div style="margin-top:8px"><b>Inputs</b></div>');
+    for (const i of a.inputs) {
+      const who = i.mine ? "<b>yours</b>" : i.complete ? "already signed by someone else" : "not yours, not signed";
+      const v = i.satoshis == null ? '<span style="color:var(--err,#f85149)">value unknown</span>' : sat(i.satoshis);
+      rows.push(`<div class="muted">#${i.index + 1} ${v} \u2014 ${who}${a.toSign.includes(i.index) ? " \u2192 <b>will be signed</b>" : ""}</div>`);
+    }
+    rows.push('<div style="margin-top:8px"><b>Outputs</b></div>');
+    for (const o of a.outputs) {
+      let what;
+      if (o.kind === "yours") what = "<b>back to you</b>";
+      else if (o.kind === "address") what = `to ${esc(o.address ?? "?")}`;
+      else if (o.kind === "data") what = `data \xB7 <span style="opacity:.85">${esc(o.text ?? "")}</span>`;
+      else what = `a script this wallet cannot name (${o.scriptSize} bytes)`;
+      rows.push(`<div class="muted">#${o.index + 1} ${sat(o.satoshis)} \u2014 ${what}</div>`);
+    }
+    for (const w of a.warnings) rows.push(`<div style="margin-top:6px;color:#d29922">\u26A0 ${esc(w)}</div>`);
+    for (const b of a.blockers) rows.push(`<div style="margin-top:6px;color:var(--err,#f85149)"><b>Refusing:</b> ${esc(b)}</div>`);
+    $("csReport").innerHTML = rows.join("");
+  }
+  async function onCosignSign() {
+    const k = requireKey();
+    if (k == null) return;
+    if (cosignRaw == null) {
+      setStatus("Read a transaction first.", "error");
+      return;
+    }
+    setStatus("Signing your inputs\u2026");
+    try {
+      const { txId, rawTx } = await cosignTransaction(cosignRaw, cosignSources, k);
+      cosignSigned = rawTx;
+      $("csHex").value = rawTx;
+      $("btnCsBroadcast").disabled = false;
+      downloadText(`cosigned-${txId.slice(0, 8)}.txt`, rawTx);
+      setStatus(`\u2705 Signed (tx ${short(txId)}). Broadcast it here, or send the downloaded file wherever it needs to go.`, "ok");
+    } catch (e) {
+      setStatus(`Sign failed: ${e.message}`, "error");
+    }
+  }
+  async function onCosignBroadcast() {
+    if (cosignSigned == null) {
+      setStatus("Sign the transaction first.", "error");
+      return;
+    }
+    setStatus("Broadcasting\u2026");
+    try {
+      const txId = await provider.broadcast(cosignSigned);
+      setStatus(`\u2705 Broadcast. Tx ${short(txId)}.`, "ok");
+    } catch (e) {
+      setStatus(`Broadcast failed: ${e.message}`, "error");
+    }
+  }
   async function onAirgapBroadcast() {
     let hex = val("agBcHex");
     if (hex.length === 0) hex = (await readFileText($("agBcFile")) ?? "").trim();
@@ -30048,7 +30296,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"17737c7"} \xB7 ${"2026-07-29"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"5deae6a"} \xB7 ${"2026-08-14"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
@@ -30213,6 +30461,9 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
     $("agSignFile").addEventListener("change", () => void onAirgapSignFile());
     $("btnAgSign").onclick = () => void onAirgapSign();
     $("btnAgBroadcast").onclick = () => void onAirgapBroadcast();
+    $("btnCsRead").onclick = () => void onCosignRead();
+    $("btnCsSign").onclick = () => void onCosignSign();
+    $("btnCsBroadcast").onclick = () => void onCosignBroadcast();
     $("btnSeedShow").onclick = () => toggleSeed();
     $("btnSeedCopy").onclick = () => void navigator.clipboard?.writeText($("seedPhrase").value);
     $("btnCopyPub").onclick = () => void navigator.clipboard?.writeText(pubKeyHex);

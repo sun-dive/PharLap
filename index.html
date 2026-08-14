@@ -674,6 +674,27 @@
           <div class="row" style="margin-top:8px"><button id="btnAgBroadcast" class="secondary">Broadcast →</button></div>
         </div>
       </details>
+
+      <details id="advCosign" class="adv-airgap" style="margin-top:16px">
+        <summary>✍ Co-sign a transaction somebody else built</summary>
+        <p class="muted" style="font-size:12px;margin:8px 0 12px">
+          Some transactions are assembled elsewhere and left with a blank where your signature goes — funding a
+          covenant, splitting a bill, any arrangement where more than one wallet has to agree. Paste it here and
+          this wallet will work out <b>exactly what signing it would cost you</b>, from the transaction's own
+          bytes rather than from anybody's description of it, then sign only the inputs that are yours and leave
+          the rest untouched.
+        </p>
+        <label>Paste the unsigned transaction hex</label>
+        <textarea id="csHex" rows="3" autocomplete="off" spellcheck="false" placeholder="0100000002…" style="width:100%;resize:vertical"></textarea>
+        <label style="margin-top:8px">…or import it from a file</label>
+        <input id="csFile" type="file" accept=".txt,.hex,text/plain" />
+        <div class="row" style="margin-top:8px"><button id="btnCsRead" class="secondary">Read it →</button></div>
+        <div id="csReport" style="font-size:12px;margin:10px 0 0"></div>
+        <div class="row" style="margin-top:8px" data-needs-key>
+          <button id="btnCsSign" class="secondary" disabled>Sign my inputs →</button>
+          <button id="btnCsBroadcast" class="secondary" disabled>Broadcast →</button>
+        </div>
+      </details>
     </div>
     </section>
 

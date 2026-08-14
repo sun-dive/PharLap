@@ -8,7 +8,7 @@
  * verification via verifyTokenLineage. Tokens are tracked locally (PharLapStore) since PushDrop
  * outputs are not WoC-address-indexed.
  */
-import { PrivateKey, PublicKey, Utils, Hash, LockingScript, Mnemonic, HD } from '@bsv/sdk'
+import { PrivateKey, PublicKey, Utils, Hash, LockingScript, Mnemonic, HD, Transaction } from '@bsv/sdk'
 import { WalletProvider } from './walletProvider.ts'
 import { PharLapStore } from './pharlapStore.ts'
 import { createCollection, getSafeUtxos, selectFunding, PHARLAP_OUTPUT_SATS, DEFAULT_FEE_PER_KB, SPEND_CANCELLED } from './collectionBuilder.ts'
@@ -16,6 +16,7 @@ import { readMockupBundle, mintMockupProduct } from './mockupIngest.ts'
 import { ratioOf, RATIOS } from './mockup.ts'
 import { createEdition, replicateEdition, transferEdition, burnEdition, toFundingInputs, scanIncomingEditions, resolveHolderEdition, replicateEditionV2, createGiftVouchers, scanGiftVouchers, scanVoucherHashes, sweepGiftVouchers, claimGiftEdition, scanCollectionBuyers, scanMySales, wocScriptHash, type EditionTerms, type EditionUtxo, type BuyerRecord, type MySales, type UnifiedSale } from './editionBuilder.ts'
 import { buildAirgapRequest, buildAirgapPaymentRequest, signAirgapRequest, encodeAirgapRequest, decodeAirgapRequest, type AirgapAction, type AirgapRequest } from './airgap.ts'
+import { analyseCosign, cosignTransaction, type CosignSource, type CosignAnalysis } from './cosign.ts'
 import { sendPayment, gatherPaymentFunding, buildPaymentTx, assertValidAddress } from './payment.ts'
 import { parseEditionAny, parseEditionScriptV2, editionSupportsBurn } from './covenant.ts'
 import { createTransfer, scanIncoming } from './transfer.ts'
@@ -1356,6 +1357,110 @@ async function onAirgapSign(): Promise<void> {
     setStatus(`✅ Signed (tx ${short(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, 'ok')
   } catch (e) {
     setStatus(`Sign failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+// ─── Co-signing (any transaction, not just this app's) ──────────────
+/* Phar Lap's air-gap signer rebuilds what it signs, which is the right rule and stays the rule for the
+   actions it knows. This is the other case: a transaction assembled elsewhere, around a script this
+   wallet has never heard of, with a blank left where its signature goes. It cannot be rebuilt here —
+   but it does not have to be TRUSTED either, because what it costs is derivable from its own bytes.
+   See src/cosign.ts for why that is enough. */
+let cosignRaw: string | null = null
+let cosignSources: CosignSource[] = []
+let cosignSigned: string | null = null
+
+/** Read the pasted/imported transaction, fetch every input's source, and report what signing would do. */
+async function onCosignRead(): Promise<void> {
+  cosignRaw = null; cosignSigned = null; cosignSources = []
+  ;($('btnCsSign') as HTMLButtonElement).disabled = true
+  ;($('btnCsBroadcast') as HTMLButtonElement).disabled = true
+  const rep = $('csReport'); rep.innerHTML = ''
+
+  let hex = val('csHex')
+  if (hex.length === 0) hex = ((await readFileText($('csFile') as HTMLInputElement)) ?? '').trim()
+  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length < 20) { setStatus('Paste or import an unsigned transaction first.', 'error'); return }
+
+  setStatus('Reading the transaction and fetching its inputs…')
+  try {
+    const tx = Transaction.fromHex(hex)
+    // Every input's source is needed to know its VALUE — without which the fee, and therefore the true
+    // cost of signing, cannot be worked out. cosign.ts refuses rather than guess, so gather them first.
+    const ids = [...new Set(tx.inputs.map(i => i.sourceTXID ?? '').filter(s => s.length > 0))]
+    const sources: CosignSource[] = []
+    for (const id of ids) {
+      try { sources.push({ txId: id, sourceTxHex: (await provider.getSourceTransaction(id)).toHex() }) }
+      catch { /* left out deliberately: analyseCosign reports the gap rather than papering over it */ }
+    }
+    cosignRaw = hex; cosignSources = sources
+    const a = analyseCosign(hex, sources, address)
+    renderCosign(a)
+    if (a.blockers.length === 0 && !isWatchOnly()) ($('btnCsSign') as HTMLButtonElement).disabled = false
+    setStatus(a.blockers.length > 0 ? 'This transaction cannot be signed here — see below.' : 'Read it. Check the figures below before signing.',
+      a.blockers.length > 0 ? 'error' : 'ok')
+  } catch (e) {
+    setStatus(`Could not read that transaction: ${(e as Error).message}`, 'error')
+  }
+}
+
+/** Put the DERIVED figures in front of the signer. Nothing here is taken from the sender's description. */
+function renderCosign(a: CosignAnalysis): void {
+  const sat = (n: number): string => `${n.toLocaleString()} sat`
+  const esc = (s: string): string => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string)
+  const rows: string[] = []
+
+  rows.push(`<div style="margin-bottom:8px"><b>Signing this would cost you ${sat(a.youPay)}</b>` +
+    ` <span class="muted">(${sat(a.youSpend)} in, ${sat(a.youReceive)} back)</span></div>`)
+  rows.push(`<div class="muted">fee ${sat(a.fee)} · ${a.feePerKb.toLocaleString()} sat/KB · ${a.signedSize.toLocaleString()} bytes signed</div>`)
+
+  rows.push('<div style="margin-top:8px"><b>Inputs</b></div>')
+  for (const i of a.inputs) {
+    const who = i.mine ? '<b>yours</b>' : i.complete ? 'already signed by someone else' : 'not yours, not signed'
+    const v = i.satoshis == null ? '<span style="color:var(--err,#f85149)">value unknown</span>' : sat(i.satoshis)
+    rows.push(`<div class="muted">#${i.index + 1} ${v} — ${who}${a.toSign.includes(i.index) ? ' → <b>will be signed</b>' : ''}</div>`)
+  }
+
+  rows.push('<div style="margin-top:8px"><b>Outputs</b></div>')
+  for (const o of a.outputs) {
+    let what: string
+    if (o.kind === 'yours') what = '<b>back to you</b>'
+    else if (o.kind === 'address') what = `to ${esc(o.address ?? '?')}`
+    // A stranger's bytes. Escaped and shown as TEXT — never linkified, whatever it looks like.
+    else if (o.kind === 'data') what = `data · <span style="opacity:.85">${esc(o.text ?? '')}</span>`
+    else what = `a script this wallet cannot name (${o.scriptSize} bytes)`
+    rows.push(`<div class="muted">#${o.index + 1} ${sat(o.satoshis)} — ${what}</div>`)
+  }
+
+  for (const w of a.warnings) rows.push(`<div style="margin-top:6px;color:#d29922">⚠ ${esc(w)}</div>`)
+  for (const b of a.blockers) rows.push(`<div style="margin-top:6px;color:var(--err,#f85149)"><b>Refusing:</b> ${esc(b)}</div>`)
+  $('csReport').innerHTML = rows.join('')
+}
+
+/** Sign this wallet's inputs. Everything else in the transaction is left byte-for-byte alone. */
+async function onCosignSign(): Promise<void> {
+  const k = requireKey(); if (k == null) return
+  if (cosignRaw == null) { setStatus('Read a transaction first.', 'error'); return }
+  setStatus('Signing your inputs…')
+  try {
+    const { txId, rawTx } = await cosignTransaction(cosignRaw, cosignSources, k)
+    cosignSigned = rawTx
+    ;($('csHex') as HTMLTextAreaElement).value = rawTx
+    ;($('btnCsBroadcast') as HTMLButtonElement).disabled = false
+    downloadText(`cosigned-${txId.slice(0, 8)}.txt`, rawTx)
+    setStatus(`✅ Signed (tx ${short(txId)}). Broadcast it here, or send the downloaded file wherever it needs to go.`, 'ok')
+  } catch (e) {
+    setStatus(`Sign failed: ${(e as Error).message}`, 'error')
+  }
+}
+
+async function onCosignBroadcast(): Promise<void> {
+  if (cosignSigned == null) { setStatus('Sign the transaction first.', 'error'); return }
+  setStatus('Broadcasting…')
+  try {
+    const txId = await provider.broadcast(cosignSigned)
+    setStatus(`✅ Broadcast. Tx ${short(txId)}.`, 'ok')
+  } catch (e) {
+    setStatus(`Broadcast failed: ${(e as Error).message}`, 'error')
   }
 }
 
@@ -4843,6 +4948,9 @@ function init(): void {
   $('agSignFile').addEventListener('change', () => void onAirgapSignFile())
   $('btnAgSign').onclick = () => void onAirgapSign()
   $('btnAgBroadcast').onclick = () => void onAirgapBroadcast()
+  $('btnCsRead').onclick = () => void onCosignRead()
+  $('btnCsSign').onclick = () => void onCosignSign()
+  $('btnCsBroadcast').onclick = () => void onCosignBroadcast()
   $('btnSeedShow').onclick = () => toggleSeed()
   $('btnSeedCopy').onclick = () => void navigator.clipboard?.writeText((($('seedPhrase') as HTMLTextAreaElement).value))
   $('btnCopyPub').onclick = () => void navigator.clipboard?.writeText(pubKeyHex)
