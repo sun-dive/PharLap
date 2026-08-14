@@ -26618,7 +26618,7 @@ Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or
     try {
       const { txId, rawTx } = await signAirgapRequest(pendingSignReq, k);
       downloadText(`smartnfts-signed-${txId.slice(0, 8)}.txt`, rawTx);
-      setStatus(`\u2705 Signed (tx ${short(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, "ok");
+      setStatusHtml(`\u2705 Signed (tx ${idChip(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, "ok");
     } catch (e) {
       setStatus(`Sign failed: ${e.message}`, "error");
     }
@@ -26703,7 +26703,7 @@ Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or
       $("csHex").value = rawTx;
       $("btnCsBroadcast").disabled = false;
       downloadText(`cosigned-${txId.slice(0, 8)}.txt`, rawTx);
-      setStatus(`\u2705 Signed (tx ${short(txId)}). Broadcast it here, or send the downloaded file wherever it needs to go.`, "ok");
+      setStatusHtml(`\u2705 Signed (tx ${idChip(txId)}). Broadcast it here, or send the downloaded file wherever it needs to go.`, "ok");
     } catch (e) {
       setStatus(`Sign failed: ${e.message}`, "error");
     }
@@ -26716,7 +26716,7 @@ Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or
     setStatus("Broadcasting\u2026");
     try {
       const txId = await provider.broadcast(cosignSigned);
-      setStatus(`\u2705 Broadcast. Tx ${short(txId)}.`, "ok");
+      setStatusHtml(`\u2705 Broadcast. Tx ${idChip(txId)}.`, "ok");
     } catch (e) {
       setStatus(`Broadcast failed: ${e.message}`, "error");
     }
@@ -26732,7 +26732,7 @@ Paste the PUBLIC KEY (66-hex) of the listing wallet \u2014 a curation site's, or
     try {
       const txId = await provider.broadcast(hex);
       $("agBcHex").value = "";
-      setStatus(`\u2705 Broadcast. Tx ${short(txId)}. Refresh balance / check holdings to see it settle.`, "ok");
+      setStatusHtml(`\u2705 Broadcast. Tx ${idChip(txId)}. Refresh balance / check holdings to see it settle.`, "ok");
     } catch (e) {
       setStatus(`Broadcast failed: ${e.message}`, "error");
     }
@@ -26877,7 +26877,7 @@ It's posted to your own address and spends a small network fee. Proceed?`
       }
       ;
       $("profileAvatar").value = "";
-      setStatus(`\u2705 Profile published. Tx ${short(txId)} \u2014 others now resolve your @name + avatar by your key.`, "ok");
+      setStatusHtml(`\u2705 Profile published. Tx ${idChip(txId)} \u2014 others now resolve your @name + avatar by your key.`, "ok");
     } catch (e) {
       setStatus(`Publish profile failed: ${e.message}`, "error");
     }
@@ -28778,7 +28778,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       } catch {
       }
       updateCfgBackupNote();
-      setStatus(`\u2601 Config backed up (encrypted). Tx ${short(txId)}.`, "ok");
+      setStatusHtml(`\u2601 Config backed up (encrypted). Tx ${idChip(txId)}.`, "ok");
     } catch (e) {
       setStatus(`Backup failed: ${e.message}`, "error");
     } finally {
@@ -29478,7 +29478,7 @@ That's ${recipients.length} separate encrypted transactions \u2014 one network f
       showBonus(note, true);
       cvNoteRefreshId = currentCollection.info.tx1Ref;
       $("cvNoteRefresh").style.display = "";
-      $("cvNoteStatus").textContent = `Published (${short(txId)}). Now hit \u201CRefresh nft.sale\u201D to update the listing.`;
+      $("cvNoteStatus").innerHTML = `Published (${idChip(txId)}). Now hit \u201CRefresh nft.sale\u201D to update the listing.`;
     } catch (e) {
       $("cvNoteStatus").textContent = `Failed: ${e.message}`;
     }
@@ -29673,7 +29673,7 @@ Public, one transaction, reaches every current holder. Message:`);
       const txId = await publishBroadcast(provider, k, t.collectionId, trimmed, getMyAlias());
       latestBroadcast.set(t.collectionId, { text: trimmed, txId, height: 0 });
       renderTokens();
-      setStatus(`\u{1F4E3} Announcement published (${short(txId)}). Holders see it when they check Updates.`, "ok");
+      setStatusHtml(`\u{1F4E3} Announcement published (${idChip(txId)}). Holders see it when they check Updates.`, "ok");
     } catch (e) {
       setStatus(`Broadcast failed: ${e.message}`, "error");
     }
@@ -30296,7 +30296,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"2750161"} \xB7 ${"2026-08-14"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"12b43f6"} \xB7 ${"2026-08-14"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {

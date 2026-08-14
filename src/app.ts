@@ -1354,7 +1354,7 @@ async function onAirgapSign(): Promise<void> {
   try {
     const { txId, rawTx } = await signAirgapRequest(pendingSignReq, k)
     downloadText(`smartnfts-signed-${txId.slice(0, 8)}.txt`, rawTx)
-    setStatus(`✅ Signed (tx ${short(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, 'ok')
+    setStatusHtml(`✅ Signed (tx ${idChip(txId)}). Move the signed file to your online machine and broadcast it (step 3).`, 'ok')
   } catch (e) {
     setStatus(`Sign failed: ${(e as Error).message}`, 'error')
   }
@@ -1447,7 +1447,7 @@ async function onCosignSign(): Promise<void> {
     ;($('csHex') as HTMLTextAreaElement).value = rawTx
     ;($('btnCsBroadcast') as HTMLButtonElement).disabled = false
     downloadText(`cosigned-${txId.slice(0, 8)}.txt`, rawTx)
-    setStatus(`✅ Signed (tx ${short(txId)}). Broadcast it here, or send the downloaded file wherever it needs to go.`, 'ok')
+    setStatusHtml(`✅ Signed (tx ${idChip(txId)}). Broadcast it here, or send the downloaded file wherever it needs to go.`, 'ok')
   } catch (e) {
     setStatus(`Sign failed: ${(e as Error).message}`, 'error')
   }
@@ -1458,7 +1458,7 @@ async function onCosignBroadcast(): Promise<void> {
   setStatus('Broadcasting…')
   try {
     const txId = await provider.broadcast(cosignSigned)
-    setStatus(`✅ Broadcast. Tx ${short(txId)}.`, 'ok')
+    setStatusHtml(`✅ Broadcast. Tx ${idChip(txId)}.`, 'ok')
   } catch (e) {
     setStatus(`Broadcast failed: ${(e as Error).message}`, 'error')
   }
@@ -1473,7 +1473,7 @@ async function onAirgapBroadcast(): Promise<void> {
   try {
     const txId = await provider.broadcast(hex)
     ;($('agBcHex') as HTMLTextAreaElement).value = ''
-    setStatus(`✅ Broadcast. Tx ${short(txId)}. Refresh balance / check holdings to see it settle.`, 'ok')
+    setStatusHtml(`✅ Broadcast. Tx ${idChip(txId)}. Refresh balance / check holdings to see it settle.`, 'ok')
   } catch (e) {
     setStatus(`Broadcast failed: ${(e as Error).message}`, 'error')
   }
@@ -1597,7 +1597,7 @@ async function onPublishProfile(): Promise<void> {
     const txId = await publishProfile(provider, k, { alias: alias || undefined, avatar })
     if (avatar != null) { setAvatar(myPubKeyLc(), bytesToDataUrl(avatar.mimeType, avatar.bytes)); renderWallet() }
     ;($('profileAvatar') as HTMLInputElement).value = ''
-    setStatus(`✅ Profile published. Tx ${short(txId)} — others now resolve your @name + avatar by your key.`, 'ok')
+    setStatusHtml(`✅ Profile published. Tx ${idChip(txId)} — others now resolve your @name + avatar by your key.`, 'ok')
   } catch (e) {
     setStatus(`Publish profile failed: ${(e as Error).message}`, 'error')
   }
@@ -3412,7 +3412,7 @@ async function onConfigBackup(): Promise<void> {
       { alias: getMyAlias() || undefined, aliasAt, contacts, contactsAt, prefs }, nowMs())
     try { localStorage.setItem('p:cfgBackupAt', String(nowMs())); localStorage.setItem('p:cfgDirty', '0') } catch { /* fine */ }
     updateCfgBackupNote()
-    setStatus(`☁ Config backed up (encrypted). Tx ${short(txId)}.`, 'ok')
+    setStatusHtml(`☁ Config backed up (encrypted). Tx ${idChip(txId)}.`, 'ok')
   } catch (e) {
     setStatus(`Backup failed: ${(e as Error).message}`, 'error')
   } finally { btn.disabled = false }
@@ -4068,7 +4068,7 @@ async function onSaveSellerNote(): Promise<void> {
     showBonus(note, true)
     cvNoteRefreshId = currentCollection.info.tx1Ref
     ;($('cvNoteRefresh') as HTMLButtonElement).style.display = ''
-    $('cvNoteStatus').textContent = `Published (${short(txId)}). Now hit “Refresh nft.sale” to update the listing.`
+    $('cvNoteStatus').innerHTML = `Published (${idChip(txId)}). Now hit “Refresh nft.sale” to update the listing.`
   } catch (e) {
     $('cvNoteStatus').textContent = `Failed: ${(e as Error).message}`
   }
@@ -4250,7 +4250,7 @@ async function onBroadcast(t: StoredToken): Promise<void> {
     const txId = await publishBroadcast(provider, k, t.collectionId, trimmed, getMyAlias())
     latestBroadcast.set(t.collectionId, { text: trimmed, txId, height: 0 })
     renderTokens()
-    setStatus(`📣 Announcement published (${short(txId)}). Holders see it when they check Updates.`, 'ok')
+    setStatusHtml(`📣 Announcement published (${idChip(txId)}). Holders see it when they check Updates.`, 'ok')
   } catch (e) {
     setStatus(`Broadcast failed: ${(e as Error).message}`, 'error')
   }
