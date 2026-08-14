@@ -20,6 +20,10 @@ docs/diagrams/png/
 art-src/
 
 # BigRed curation tool (private)
+# imageSamples.ts is part of THIS, not of the app: Node-only (spawnSync + ImageMagick), never bundled,
+# imported by nothing but its own test. Its test travels with it or a fresh clone fails `npm test`.
+src/imageSamples.ts
+test/imageSamples.test.ts
 curate-bigred.ts
 curate-publish.sh
 build-curator.sh
