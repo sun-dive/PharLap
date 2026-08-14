@@ -6,6 +6,9 @@ node_modules/
 # Internal design docs — kept local; excluded from the public `publish` branch / origin/main.
 PLAN.md
 docs/DEVIATIONS_FROM_MPT.md
+# The @bsv/sdk serialization-cache report — goes to the SDK developers DIRECTLY, not published here
+# while it is unfixed. sun-dive/PharLap is a public repo.
+docs/SDK_SERIALIZATION_CACHE_BUG.md
 LISTING_SITE_PLAN.md
 
 # build artifacts
