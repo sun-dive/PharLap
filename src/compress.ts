@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 /**
  * Smart gzip for on-chain payloads — applied wherever bytes go on-chain (embedded edition files, message
  * envelopes), gated by "keep ONLY if smaller". Uses the platform-native CompressionStream (browsers + Node

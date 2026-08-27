@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 // Covenant v2 Layer 2: the COMPUTED-fee replicate branch (Addendum G), Spend-validated in isolation before
 // wiring into the full edition lock. Mirrors the L4 harness but with an 8-byte price field after the pubkey
 // and a percentage split (publisher = ⌊P×pBps/10000⌋, reseller = P − publisherCut) instead of fixed fees.

@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 // Validates the storefront READ path the sales page (app.ts loadCollection) relies on: from a
 // collection's TX1 outputs, recover name + description + cover + edition fees + lock state.
 import { test } from 'node:test'

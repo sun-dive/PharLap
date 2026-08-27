@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 /**
  * QR helpers for PHAR LAP: render text to a crisp inline-SVG QR code, and build a BSV payment URI.
  * Thin wrapper over the vendored Nayuki generator (qrcodegen.ts).

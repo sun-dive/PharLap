@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 // De-risk Covenant v2 (Addendum G): the in-script arithmetic the percentage-split + range-check rely on
 // EXECUTES in the @bsv/sdk Spend interpreter (these opcodes were disabled in legacy Bitcoin, re-enabled in
 // BSV). Confirms before touching covenant.ts that ⌊P×c%⌋, the reseller remainder, an 8-byte value encoding,

@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 //
 // Bundle covenant — a quine that self-replicates to a new holder AND forces N fixed creator-fee outputs
 // bound to each component's genesis address. Validated end-to-end by the @bsv/sdk Spend interpreter (the

@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 /**
  * PHAR LAP publisher broadcast ("Updates") — the pull/announcement channel (PLAN.md Addendum E).
  *

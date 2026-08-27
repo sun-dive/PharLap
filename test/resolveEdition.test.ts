@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 // The sales-page tip resolver derives a holder's edition script deterministically from the collection's
 // covenant TEMPLATE (TX1) + holder pubkey, then finds its UTXO by script hash. This proves the
 // reconstruction is byte-for-byte identical to a real edition — the guarantee the script-hash lookup relies on.

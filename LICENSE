@@ -1,68 +1,138 @@
-PHAR LAP
+PHAR LAP — LICENSING
 Copyright © 2026 sun-dive
-Licensed under the Open BSV License Version 6 (full text below).
-Derived from MPT v05.24.
+
+PHAR LAP is licensed under the Business Source License 1.1. Each source file
+carries a one-line header naming it. The full text is below.
+
+  •  Everything  ·  src/, the covenant implementation and the wallet app
+         → Business Source License 1.1
+         Source-available. Non-production and non-competing use is granted now;
+         converts to the Change License on the Change Date.
+
+  ⚠  Third-party code is NOT covered by this licence. What is bundled, who owns
+     it and under what licence is recorded in NOTICE.
+
+===============================================================================
+1)  BUSINESS SOURCE LICENSE 1.1   —   governs: all of PHAR LAP
+===============================================================================
+
+===============================================================================
+
+License text copyright © 2017 MariaDB Corporation Ab, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB Corporation Ab.
 
 -------------------------------------------------------------------------------
 
-© BSV Association
+Parameters
 
-Open BSV License Version 6 – granted by BSV Association, Alpenstrasse 15, 6300
-Zug, Switzerland (CHE-427.008.338) ("Licensor"), to you as a user (henceforth
-"You", "User" or "Licensee").
+Licensor:             sun-dive
 
-For the purposes of this license, the definitions below have the following
-meanings:
+Licensed Work:        PHAR LAP — the covenant implementation and wallet
+                      application. The Licensed Work is © 2026 sun-dive.
 
-"Bitcoin Protocol" means the protocol implementation, cryptographic rules,
-network protocols, and consensus mechanisms in the Bitcoin White Paper as
-described here https://protocol.bsvblockchain.org.
+Additional Use Grant: You may make production use of the Licensed Work,
+                      provided your use does not constitute a Competing Use. A
+                      "Competing Use" means making the Licensed Work (or a
+                      derivative of it) available to third parties, whether for
+                      a fee or free of charge, as, or as part of, a wallet,
+                      minting, or token-issuance product or service that
+                      competes with PHAR LAP or any offering of the Licensor.
+                      Use for personal, educational, research, or
+                      internal-evaluation purposes is always permitted.
 
-"Bitcoin White Paper" means the paper entitled 'Bitcoin: A Peer-to-Peer
-Electronic Cash System' published by 'Satoshi Nakamoto' in October 2008.
+Change Date:          2030-08-02
 
-"BSV Blockchain" means:
+Change License:       MIT License
 
-(a) the Bitcoin blockchain containing block height #556767 with the hash
-"000000000000000001d956714215d96ffc00e0afda4cd0a96c96f8d802b1662b" and that
-contains the longest honest persistent chain of blocks which has been produced
-in a manner which is consistent with the rules set forth in the Network Access
-Rules; and
+Terms
 
-(b) the test blockchains that contain the longest honest persistent chains of
-blocks which has been produced in a manner which is consistent with the rules
-set forth in the Network Access Rules.
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited production
+use.
 
-"Network Access Rules" or "Rules" means the set of rules regulating the
-relationship between BSV Association and the nodes on BSV based on the Bitcoin
-Protocol rules and those set out in the Bitcoin White Paper, and available here
-https://bsvblockchain.org/network-access-rules.
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, whichever comes first, the Licensor hereby grants you the rights under
+the terms of the Change License, and the rights granted in the paragraph above
+terminate.
 
-"Software" means the software the subject of this license, including any/all
-intellectual property rights therein and associated documentation files.
+If your use of the Licensed Work does not comply with the requirements
+currently in effect as described in this License, you must purchase a
+commercial license from the Licensor, its affiliated entities, or authorized
+resellers, or you must refrain from using the Licensed Work.
 
-BSV Association grants permission, free of charge and on a non-exclusive basis
-to any person obtaining a copy of the Software to deal in the Software,
-including without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to permit
-persons to whom the Software is furnished to do so, subject to and conditioned
-upon the following conditions:
+All copies of the original and modified Licensed Work, and derivative works of
+the Licensed Work, are subject to this License. This License applies separately
+for each version of the Licensed Work and the Change Date may vary for each
+version of the Licensed Work released by Licensor.
 
-1 - The text "© BSV Association", and this license shall be included in all
+You must conspicuously display this License on each original or modified copy of
+the Licensed Work. If you receive the Licensed Work in original or modified form
+from a third party, the terms and conditions set forth in this License apply to
+your use of that work.
+
+Any use of the Licensed Work in violation of this License will automatically
+terminate your rights under this License for the current and all other versions
+of the Licensed Work.
+
+This License does not grant you any right in any trademark or logo of Licensor
+or its affiliates (provided that you may use a trademark or logo of Licensor as
+expressly required by this License).
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED ON AN
+"AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS, EXPRESS
+OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND TITLE.
+
+MariaDB hereby grants you permission to use this License's text to license your
+works, and to refer to it using the trademark "Business Source License", as long
+as you comply with the Covenants of Licensor below.
+
+-------------------------------------------------------------------------------
+
+Covenants of Licensor
+
+In consideration of the right to use this License's text and the "Business
+Source License" name and trademark, Licensor covenants to MariaDB, and to all
+other recipients of the licensed work to be provided by Licensor:
+
+1. To specify as the Change License the GPL Version 2.0 or any later version, or
+   a license that is compatible with GPL Version 2.0 or any later version, where
+   "compatible" means that software provided under the Change License can be
+   included in a program with software provided under GPL Version 2.0 or a later
+   version. Licensor may specify additional Change Licenses without limitation.
+
+2. To either: (a) specify an additional grant of rights to use that does not
+   impose any additional restriction on the right granted in this License, as
+   the Additional Use Grant; or (b) insert the text "None" to specify a Change
+   Date.
+
+3. To specify a Change Date.
+
+4. Not to modify this License in any other way.
+
+===============================================================================
+2)  MIT LICENSE   —   the Change License referenced above
+===============================================================================
+
+MIT License
+
+Copyright © 2026 sun-dive
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
-2 - The Software, and any software that is derived from the Software or parts
-thereof, may only be used exclusively on the BSV Blockchain.
-
-For the avoidance of doubt, this license is granted subject to and conditioned
-upon your compliance with these terms only and is limited to uses on the BSV
-Blockchain. Any exercise of rights not compliant with these terms including use
-not for the BSV Blockchain is deemed outside the scope of the license.
-
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES REGARDING ENTITLEMENT,
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
-EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS THEREOF BE LIABLE FOR ANY CLAIM,
-DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

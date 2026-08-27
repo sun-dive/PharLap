@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 // Provenance: for PUBLIC content, fileHash commits to the ORIGINAL plaintext (not the stored, compressed
 // blob), so an on-chain object is a provable "timestamped exact replica" of an off-chain file. A verifier
 // decompresses the on-chain bytes and matches H(plaintext); because DEFLATE decompression is deterministic,

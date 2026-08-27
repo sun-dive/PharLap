@@ -1,4 +1,4 @@
-// © BSV Association — Licensed under the Open BSV License Version 5 (see LICENSE).
+// © 2026 sun-dive — Business Source License 1.1 (see LICENSE).
 // Covenant v2 price field: the 8-byte price sits AFTER the owner pubkey, keeping the owner offset (40)
 // fixed; it round-trips through build → extract → parse. Price is v2-only — the v1 lean layout dropped it
 // (along with stateData), so these exercise buildEditionLockV2 / parseEditionScriptV2.
