@@ -24788,6 +24788,17 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   var PREFIX = "p:thumb:";
   var MAX_EDGE = 256;
   var NONE = "-";
+  var SVG_FIX = "p:thumbfix1";
+  try {
+    if (localStorage.getItem(SVG_FIX) == null) {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k != null && k.startsWith(PREFIX) && localStorage.getItem(k) === NONE) localStorage.removeItem(k);
+      }
+      localStorage.setItem(SVG_FIX, "1");
+    }
+  } catch {
+  }
   function cachedThumb(collectionId) {
     try {
       const v = localStorage.getItem(PREFIX + collectionId);
@@ -24828,24 +24839,53 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
     } catch {
     }
   }
+  async function decodeImage(bytes2, mimeType) {
+    const type = mimeType || "application/octet-stream";
+    const blob = new Blob([new Uint8Array(bytes2)], { type });
+    if (/^image\/svg\+xml\b/i.test(type)) return decodeSvg(blob);
+    const bmp = await createImageBitmap(blob);
+    return { src: bmp, w: bmp.width, h: bmp.height, done: () => bmp.close?.() };
+  }
+  function decodeSvg(blob) {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(blob);
+      const revoke = () => URL.revokeObjectURL(url);
+      const img = new Image();
+      img.onload = () => {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (w < 1 || h < 1) {
+          revoke();
+          resolve(null);
+          return;
+        }
+        resolve({ src: img, w, h, done: revoke });
+      };
+      img.onerror = () => {
+        revoke();
+        resolve(null);
+      };
+      img.src = url;
+    });
+  }
   async function downscaleToAvatar(bytes2, mimeType, maxEdge = 96) {
     if (typeof createImageBitmap === "undefined" || typeof document === "undefined") return null;
     try {
-      const blob = new Blob([new Uint8Array(bytes2)], { type: mimeType || "application/octet-stream" });
-      const bmp = await createImageBitmap(blob);
-      const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
-      const w = Math.max(1, Math.round(bmp.width * scale));
-      const h = Math.max(1, Math.round(bmp.height * scale));
+      const img = await decodeImage(bytes2, mimeType);
+      if (img == null) return null;
+      const scale = Math.min(1, maxEdge / Math.max(img.w, img.h));
+      const w = Math.max(1, Math.round(img.w * scale));
+      const h = Math.max(1, Math.round(img.h * scale));
       const canvas = document.createElement("canvas");
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext("2d");
       if (ctx == null) {
-        bmp.close?.();
+        img.done();
         return null;
       }
-      ctx.drawImage(bmp, 0, 0, w, h);
-      bmp.close?.();
+      ctx.drawImage(img.src, 0, 0, w, h);
+      img.done();
       const out = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.7));
       if (out == null) return null;
       return { mimeType: "image/webp", bytes: Array.from(new Uint8Array(await out.arrayBuffer())) };
@@ -24856,21 +24896,21 @@ ${t.inputTxids.map((it) => `      '${it}'`).join(",\n")}
   async function makeThumb(collectionId, bytes2, mimeType) {
     if (typeof createImageBitmap === "undefined" || typeof document === "undefined") return null;
     try {
-      const blob = new Blob([new Uint8Array(bytes2)], { type: mimeType || "application/octet-stream" });
-      const bmp = await createImageBitmap(blob);
-      const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
-      const w = Math.max(1, Math.round(bmp.width * scale));
-      const h = Math.max(1, Math.round(bmp.height * scale));
+      const img = await decodeImage(bytes2, mimeType);
+      if (img == null) return null;
+      const scale = Math.min(1, MAX_EDGE / Math.max(img.w, img.h));
+      const w = Math.max(1, Math.round(img.w * scale));
+      const h = Math.max(1, Math.round(img.h * scale));
       const canvas = document.createElement("canvas");
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext("2d");
       if (ctx == null) {
-        bmp.close?.();
+        img.done();
         return null;
       }
-      ctx.drawImage(bmp, 0, 0, w, h);
-      bmp.close?.();
+      ctx.drawImage(img.src, 0, 0, w, h);
+      img.done();
       const url = canvas.toDataURL("image/webp", 0.8);
       store(collectionId, url);
       return url;
@@ -30296,7 +30336,7 @@ This INVALIDATES those links and returns their pre-funded sats to your wallet (m
   function init() {
     store2 = new PharLapStore();
     const ver = $("appVersion");
-    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"12b43f6"} \xB7 ${"2026-08-14"}`;
+    if (ver != null) ver.textContent = `Smart NFTs \xB7 v${"0.1"} \xB7 ${"c77944c"} \xB7 ${"2026-08-28"}`;
     loadAliases();
     const watch = localStorage.getItem(WATCH_KEY);
     if (watch != null) {
